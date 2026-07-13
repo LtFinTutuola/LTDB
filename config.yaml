@@ -1,2 +1,27 @@
-input_file_path: "test_files/Fattura Accompagnatoria.pdf" # full path of the input file
+input_file_path: "test_files/DDT_HK1H01_1DZK_2026-01-13_GA01_5300005059.pdf" # full path of the input file
 input_file_format: "PDF" # allowed formats are PDF and Excel
+input_file_brand: "Giorgio Armani"
+
+product_categories:
+  - "Borse"
+  - "Portafogli"
+  - "Piccola pelletteria"
+  - "Cinture"
+  - "Cartelle da lavoro"
+  - "Borselli"
+  - "Zaini"
+  - "Valigie"
+  - "Ombrelli"
+  - "Altro"
+
+sex:
+  - "Uomo"
+  - "Donna"
+  - "Unisex"
+
+materials:
+  - "Pelle"
+  - "Ecopelle"
+  - "Tessuto"
+  - "Plastica"
+  - "Acciaio"

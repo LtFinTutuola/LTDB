@@ -4,8 +4,47 @@ import json
 import pdfplumber
 from google import genai
 from google.genai import types
+from typing import List, Optional
+from pydantic import BaseModel, Field
 
 import yaml
+
+# =====================================================================
+# DEFINIZIONE DELLO SCHEMA DI VALIDAZIONE RIGIDO (PYDANTIC)
+# =====================================================================
+class ProductSheet(BaseModel):
+    product_name: str = Field(
+        description="Official name of the product. DO NOT include the SKU or VendorCode in this string."
+    )
+    product_description: str = Field(
+        description="Concise, technical, and precise description of the product to help an ERP operator identify it. NO commercial or promotional fluff."
+    )
+    category: str = Field(
+        description="Product category. MUST be exactly one of the values provided in the prompt's Allowed Categories list."
+    )
+    sex: str = Field(
+        description="Target gender for the product. MUST be exactly one of the values provided in the prompt's Allowed Sex list."
+    )
+    main_material: str = Field(
+        description="Main material of the product. MUST be exactly one of the values provided in the prompt's Allowed Materials list."
+    )
+    secondary_material: Optional[str] = Field(
+        description="Secondary or complementary material of the product. Leave null if not applicable. MUST be exactly one of the values provided in the prompt's Allowed Materials list.",
+        default=None
+    )
+    primary_color: str = Field(
+        description="The primary color of the product inferred from codes or web images."
+    )
+    secondary_color: Optional[str] = Field(
+        description="Possible secondary color or chromatic details. Leave null if solid color.",
+        default=None
+    )
+    tags: List[str] = Field(
+        description="List of up to 10 descriptive tags related to the article (e.g., color, style, specific material details, usage) to enhance semantic search."
+    )
+    sources: List[str] = Field(
+        description="Strict list of the full URLs of the web pages from which the data was extracted."
+    )
 
 # Configurazione: recupera la chiave API in modo sicuro dalle variabili d'ambiente o api.yaml
 API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -42,32 +81,77 @@ def extract_raw_text_locally(pdf_path):
         print(f"Errore durante l'estrazione locale: {str(e)}")
         return None
 
-def extract_raw_tables_locally(pdf_path):
+
+def stage_3_enrich_product(mapped_item, brand_name, allowed_categories, allowed_sex, allowed_materials):
     """
-    Esegue il pre-processing locale del PDF estraendo le tabelle grezze.
-    Restituisce una lista di righe (che convertiremo in JSON testuale).
+    FASE 3: Web Grounding.
+    Uses Gemini 3.1 Flash Lite with Google Search enabled and Pydantic validation
+    to extract structured data from the web.
     """
-    print(f"Avvio pre-processing locale con pdfplumber sul file '{pdf_path}'...")
-    raw_table_data = []
+    vendor_code = mapped_item.get('VendorCode', '')
+    description = mapped_item.get('Description', '')
+    color = mapped_item.get('Color', '')
+    
+    print(f"  -> Web search in progress for SKU: {vendor_code} ({brand_name})...")
+    
+    config = types.GenerateContentConfig(
+        tools=[{"google_search": {}}],
+        response_mime_type="application/json",
+        response_schema=ProductSheet,
+        system_instruction=(
+            "You are an AI Agent specialized in Product Data Enrichment for a retail ERP system. "
+            "Your goal is to browse the web, find the official technical sheet or e-commerce page "
+            "of the requested product and rigorously fill out the output JSON. "
+            "CRITICAL RULES:\n"
+            "1. Use the Google search tool to find real specifications.\n"
+            "2. Do not invent materials or descriptions. If a data point is not available online, write 'Dato non disponibile'.\n"
+            "3. Always collect the exact URL of the page from which you took the information and insert it in the 'sources' array.\n"
+            "4. Strictly respect the provided JSON schema.\n"
+            "5. IMPORTANT: All output data values (descriptions, tags, categories, colors) MUST be written in Italian.\n"
+            "6. DO NOT include the SKU or VendorCode inside the 'product_name'.\n"
+            "7. 'category', 'sex', 'main_material', and 'secondary_material' MUST be populated using strictly one of the values provided in the Allowed lists.\n"
+            "8. Populate 'tags' with up to 10 semantic keywords describing the item to enhance downstream search."
+        )
+    )
+
+    prompt = (
+        f"Find all technical and commercial specifications for this product.\n\n"
+        f"--- STARTING DATA ---\n"
+        f"Brand: {brand_name}\n"
+        f"SKU / Model: {vendor_code}\n"
+        f"Original Description: {description}\n"
+        f"Color Code: {color}\n\n"
+        f"--- ALLOWED MAPPING VALUES ---\n"
+        f"Allowed Categories: {', '.join(allowed_categories)}\n"
+        f"Allowed Sex: {', '.join(allowed_sex)}\n"
+        f"Allowed Materials: {', '.join(allowed_materials)}\n\n"
+        f"--- SUGGESTED TARGET SEARCH QUERY ---\n"
+        f"\"{brand_name} {vendor_code}\" OR \"{brand_name} {description}\"\n\n"
+        f"Analyze the web results and return the complete product sheet following the JSON schema."
+    )
     
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for i, page in enumerate(pdf.pages):
-                # Estrae le tabelle dalla pagina (restituisce una lista di liste)
-                tables = page.extract_tables()
-                for table in tables:
-                    for row in table:
-                        # Rimuove i valori None e pulisce le stringhe base
-                        cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
-                        # Teniamo solo le righe che non sono completamente vuote
-                        if any(cleaned_row):
-                            raw_table_data.append(cleaned_row)
-                            
-        print(f"Pre-processing completato: estratte {len(raw_table_data)} righe grezze.")
-        return raw_table_data
+        response = client.models.generate_content(
+            model='gemini-3.5-flash',
+            # model='gemini-3.1-flash-lite',
+            contents=prompt,
+            config=config
+        )
+        return json.loads(response.text)
+        
     except Exception as e:
-        print(f"Errore durante l'estrazione locale: {str(e)}")
-        return None
+        print(f"     [Error during enrichment for {vendor_code}]: {str(e)}")
+        return {
+            "product_name": description,
+            "product_description": "Error during web enrichment.",
+            "category": "Uncategorized",
+            "material": "Unknown",
+            "primary_color": color,
+            "secondary_color": None,
+            "sources": []
+        }
+
+
 
 def extract_erp_data_production_ready(pdf_path):
 
@@ -165,17 +249,43 @@ if __name__ == "__main__":
         print(json.dumps(risultato, indent=4))
         
         if isinstance(risultato, list) or "error" not in risultato:
-            # Salva il risultato nella cartella raw_data_extractions
+            brand_name = config.get("input_file_brand", "Unknown Brand")
+            allowed_categories = config.get("product_categories", [])
+            allowed_sex = config.get("sex", [])
+            allowed_materials = config.get("materials", [])
+            
+            # Salva il risultato RAW nella cartella raw_data_extractions
             output_dir = "raw_data_extractions"
             os.makedirs(output_dir, exist_ok=True)
             
             base_name = os.path.splitext(os.path.basename(test_pdf))[0]
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_filename = os.path.join(output_dir, f"{base_name}_{timestamp}.json")
+            raw_filename = os.path.join(output_dir, f"{base_name}_{timestamp}_raw.json")
             
-            with open(output_filename, "w", encoding="utf-8") as out_f:
+            with open(raw_filename, "w", encoding="utf-8") as out_f:
                 json.dump(risultato, out_f, indent=4, ensure_ascii=False)
-            print(f"\nEstrazione salvata con successo in: {output_filename}")
+            print(f"\nEstrazione RAW salvata con successo in: {raw_filename}")
+            
+            # --- FASE 3: Product Web Enrichment ---
+            print("\n=== Avvio Stage 3: Product Web Enrichment ===")
+            enriched_catalog = []
+            
+            for item in risultato:
+                enriched_data = stage_3_enrich_product(item, brand_name, allowed_categories, allowed_sex, allowed_materials)
+                final_item = {
+                    "VendorCode": item.get("VendorCode"),
+                    "Barcode": item.get("Barcode"),
+                    **enriched_data
+                }
+                enriched_catalog.append(final_item)
+                
+            print("\n--- Dati Arricchiti (Stage 3) ---")
+            print(json.dumps(enriched_catalog, indent=4, ensure_ascii=False))
+            
+            enriched_filename = os.path.join(output_dir, f"{base_name}_{timestamp}_enriched.json")
+            with open(enriched_filename, "w", encoding="utf-8") as out_f:
+                json.dump(enriched_catalog, out_f, indent=4, ensure_ascii=False)
+            print(f"\nEstrazione ARRICCHITA salvata con successo in: {enriched_filename}")
             
     else:
         print(f"Errore: Il file '{test_pdf}' non è presente nella cartella corrente.")
