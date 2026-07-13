@@ -1,5 +1,6 @@
 .venv/
 markdown_files/
 test_files/
+raw_data_extractions/
 api.yaml
 .DS_Store
