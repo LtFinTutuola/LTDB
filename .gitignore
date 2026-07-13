@@ -1,0 +1,5 @@
+.venv/
+markdown_files/
+test_files/
+api.yaml
+.DS_Store

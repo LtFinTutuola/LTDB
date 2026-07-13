@@ -1,0 +1,2 @@
+input_file_path: "test_files/Fattura Accompagnatoria.pdf" # full path of the input file
+input_file_format: "PDF" # allowed formats are PDF and Excel
