@@ -7,7 +7,7 @@ from google import genai
 from google.genai import types
 from typing import List, Optional
 from pydantic import BaseModel, Field
-
+import re
 import yaml
 
 # Global list to store LLM usage logs
@@ -16,39 +16,20 @@ LLM_LOGS = []
 # =====================================================================
 # DEFINIZIONE DELLO SCHEMA DI VALIDAZIONE RIGIDO (PYDANTIC)
 # =====================================================================
-class ProductSheet(BaseModel):
-    product_name: str = Field(
-        description="Official name of the product. DO NOT include the SKU or VendorCode in this string."
-    )
-    product_description: str = Field(
-        description="Concise, technical, and precise description of the product to help an ERP operator identify it. NO commercial or promotional fluff."
-    )
-    category: str = Field(
-        description="Product category. MUST be exactly one of the values provided in the prompt's Allowed Categories list."
-    )
-    sex: str = Field(
-        description="Target gender for the product. MUST be exactly one of the values provided in the prompt's Allowed Sex list."
-    )
-    main_material: str = Field(
-        description="Main material of the product. MUST be exactly one of the values provided in the prompt's Allowed Materials list."
-    )
-    secondary_material: Optional[str] = Field(
-        description="Secondary or complementary material of the product. Leave null if not applicable. MUST be exactly one of the values provided in the prompt's Allowed Materials list.",
-        default=None
-    )
-    primary_color: str = Field(
-        description="The primary color of the product inferred from codes or web images."
-    )
-    secondary_color: Optional[str] = Field(
-        description="Possible secondary color or chromatic details. Leave null if solid color.",
-        default=None
-    )
-    tags: List[str] = Field(
-        description="List of up to 10 descriptive tags related to the article (e.g., color, style, specific material details, usage) to enhance semantic search."
-    )
-    sources: List[str] = Field(
-        description="Strict list of the full URLs of the web pages from which the data was extracted."
-    )
+class MappedFieldsSheet(BaseModel):
+    category: str = Field(description="Product category. MUST be exactly one of the values provided in the prompt's Allowed Categories list.")
+    sex: str = Field(description="Target gender for the product. MUST be exactly one of the values provided in the prompt's Allowed Sex list.")
+    main_material: str = Field(description="Main material of the product. MUST be exactly one of the values provided in the prompt's Allowed Materials list.")
+    secondary_material: Optional[str] = Field(description="Secondary or complementary material of the product. Leave null if not applicable. MUST be exactly one of the values provided in the prompt's Allowed Materials list.", default=None)
+    primary_color: str = Field(description="The primary color of the product inferred from codes or web images.")
+    secondary_color: Optional[str] = Field(description="Possible secondary color or chromatic details. Leave null if solid color.", default=None)
+
+class FreeFormFieldsSheet(BaseModel):
+    product_name: str = Field(description="Official name of the product. DO NOT include the SKU or VendorCode in this string.")
+    product_short_description: str = Field(description="Concise, technical, and precise description of the product to help an ERP operator identify it. NO commercial or promotional fluff.")
+    product_extended_description: str = Field(description="Extended and comprehensive description of the product, including all its details; This field is aimed to be used in downstream semantic search, so it must be comprehensive.")
+    tags: List[str] = Field(description="List of up to 10 descriptive tags related to the article (e.g., color, style, specific material details, usage) to enhance semantic search.")
+    sources: List[str] = Field(description="Strict list of the full URLs of the web pages from which the data was extracted.")
 
 # Configurazione: recupera la chiave API in modo sicuro dalle variabili d'ambiente o api.yaml
 API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -86,35 +67,32 @@ def extract_raw_text_locally(pdf_path):
         return None
 
 
-def stage_3_enrich_product(mapped_item, brand_name, allowed_categories, allowed_sex, allowed_materials):
-    """
-    FASE 3: Web Grounding.
-    Uses Gemini 3.1 Flash Lite with Google Search enabled and Pydantic validation
-    to extract structured data from the web.
-    """
+def stage_3a_web_search(mapped_item, brand_name):
     vendor_code = mapped_item.get('VendorCode', '')
     description = mapped_item.get('Description', '')
     color = mapped_item.get('Color', '')
     
-    print(f"  -> Web search in progress for SKU: {vendor_code} ({brand_name})...")
+    print(f"  -> Stage 3a (Web Search) for SKU: {vendor_code}...")
     
     config = types.GenerateContentConfig(
         tools=[{"google_search": {}}],
-        response_mime_type="application/json",
-        response_schema=ProductSheet,
+        response_mime_type="text/plain",
+        max_output_tokens=1024,
         system_instruction=(
             "You are an AI Agent specialized in Product Data Enrichment for a retail ERP system. "
             "Your goal is to browse the web, find the official technical sheet or e-commerce page "
-            "of the requested product and rigorously fill out the output JSON. "
+            "of the requested product and return a comprehensive description of the product, "
+            "including all its details, such as product colors, materials, dimensions and a detailed description.\n"
             "CRITICAL RULES:\n"
             "1. Use the Google search tool to find real specifications.\n"
-            "2. Do not invent materials or descriptions. If a data point is not available online, write 'Dato non disponibile'.\n"
-            "3. Always collect the exact URL of the page from which you took the information and insert it in the 'sources' array.\n"
-            "4. Strictly respect the provided JSON schema.\n"
-            "5. IMPORTANT: All output data values (descriptions, tags, categories, colors) MUST be written in Italian.\n"
-            "6. DO NOT include the SKU or VendorCode inside the 'product_name'.\n"
-            "7. 'category', 'sex', 'main_material', and 'secondary_material' MUST be populated using strictly one of the values provided in the Allowed lists.\n"
-            "8. Populate 'tags' with up to 10 semantic keywords describing the item to enhance downstream search."
+            "2. MUST wrap specific information in exact XML-like tags:\n"
+            "   <COLORS>...</COLORS>\n"
+            "   <MATERIALS>...</MATERIALS>\n"
+            "   <DIMENSIONS>...</DIMENSIONS>\n"
+            "   <DESCRIPTION>...</DESCRIPTION>\n"
+            "   <SOURCES>...</SOURCES>\n"
+            "3. If a data point is not available online, write 'Dato non disponibile' inside its tag.\n"
+            "4. IMPORTANT: Write the output in Italian."
         )
     )
 
@@ -125,13 +103,76 @@ def stage_3_enrich_product(mapped_item, brand_name, allowed_categories, allowed_
         f"SKU / Model: {vendor_code}\n"
         f"Original Description: {description}\n"
         f"Color Code: {color}\n\n"
+        f"--- SUGGESTED TARGET SEARCH QUERY ---\n"
+        f"\"{brand_name} {vendor_code}\" OR \"{brand_name} {description}\"\n\n"
+        f"Analyze the web results and return the detailed description with the required XML tags."
+    )
+    
+    try:
+        response = client.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=prompt,
+            config=config
+        )
+        
+        call_id = str(uuid.uuid4())
+        input_tokens = response.usage_metadata.prompt_token_count if response.usage_metadata else 0
+        output_tokens = response.usage_metadata.candidates_token_count if response.usage_metadata else 0
+        
+        query_usage = 0
+        if response.candidates and response.candidates[0].grounding_metadata and hasattr(response.candidates[0].grounding_metadata, 'web_search_queries') and response.candidates[0].grounding_metadata.web_search_queries:
+            query_usage = len(response.candidates[0].grounding_metadata.web_search_queries)
+        
+        LLM_LOGS.append({
+            "call_id": call_id,
+            "pipeline_stage": "Stage 3a - Web Search",
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "query_usage": query_usage
+        })
+        
+        return {"raw_text": response.text, "call_id_3a": call_id}
+        
+    except Exception as e:
+        print(f"     [Error during Stage 3a for {vendor_code}]: {str(e)}")
+        return {"raw_text": "", "call_id_3a": None}
+
+
+def parse_stage_3a_output(raw_text):
+    colors = re.search(r'<COLORS>(.*?)</COLORS>', raw_text, re.DOTALL)
+    materials = re.search(r'<MATERIALS>(.*?)</MATERIALS>', raw_text, re.DOTALL)
+    
+    extracted_relevant_info = ""
+    if colors:
+        extracted_relevant_info += f"COLORS:\n{colors.group(1).strip()}\n\n"
+    if materials:
+        extracted_relevant_info += f"MATERIALS:\n{materials.group(1).strip()}\n\n"
+        
+    return extracted_relevant_info.strip()
+
+
+def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_sex, allowed_materials):
+    print(f"  -> Stage 3b (Fields Mapping)...")
+    
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=MappedFieldsSheet,
+        system_instruction=(
+            "You are an AI mapping assistant. Read the provided product details and map them strictly to the allowed JSON schema values.\n"
+            "CRITICAL RULES:\n"
+            "1. 'category', 'sex', 'main_material', and 'secondary_material' MUST be populated using strictly one of the values provided in the Allowed lists.\n"
+            "2. All output data values MUST be written in Italian."
+        )
+    )
+
+    context = parsed_text if parsed_text else raw_text
+    prompt = (
+        f"Map the following data to the required JSON schema.\n\n"
+        f"--- PRODUCT DETAILS ---\n{context}\n\n"
         f"--- ALLOWED MAPPING VALUES ---\n"
         f"Allowed Categories: {', '.join(allowed_categories)}\n"
         f"Allowed Sex: {', '.join(allowed_sex)}\n"
-        f"Allowed Materials: {', '.join(allowed_materials)}\n\n"
-        f"--- SUGGESTED TARGET SEARCH QUERY ---\n"
-        f"\"{brand_name} {vendor_code}\" OR \"{brand_name} {description}\"\n\n"
-        f"Analyze the web results and return the complete product sheet following the JSON schema."
+        f"Allowed Materials: {', '.join(allowed_materials)}\n"
     )
     
     try:
@@ -147,27 +188,67 @@ def stage_3_enrich_product(mapped_item, brand_name, allowed_categories, allowed_
         
         LLM_LOGS.append({
             "call_id": call_id,
-            "pipeline_stage": "Stage 3 - Web Enrichment",
+            "pipeline_stage": "Stage 3b - Fields Mapping",
             "input_tokens": input_tokens,
-            "output_tokens": output_tokens
+            "output_tokens": output_tokens,
+            "query_usage": 0
         })
         
         parsed = json.loads(response.text)
-        parsed["call_id"] = call_id
+        parsed["call_id_3b"] = call_id
         return parsed
         
-
     except Exception as e:
-        print(f"     [Error during enrichment for {vendor_code}]: {str(e)}")
-        return {
-            "product_name": description,
-            "product_description": "Error during web enrichment.",
-            "category": "Uncategorized",
-            "material": "Unknown",
-            "primary_color": color,
-            "secondary_color": None,
-            "sources": []
-        }
+        print(f"     [Error during Stage 3b]: {str(e)}")
+        return {}
+
+
+def stage_3c_free_form_completion(raw_text):
+    print(f"  -> Stage 3c (Free-Form Completion)...")
+    
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=FreeFormFieldsSheet,
+        system_instruction=(
+            "You are an AI describing assistant. Read the provided raw web data and generate comprehensive, free-form fields.\n"
+            "CRITICAL RULES:\n"
+            "1. DO NOT include the SKU or VendorCode inside the 'product_name'.\n"
+            "2. Populate 'tags' with up to 10 semantic keywords describing the item to enhance downstream search.\n"
+            "3. All output data values MUST be written in Italian."
+        )
+    )
+
+    prompt = (
+        f"Generate the free-form description fields and tags based on this raw data.\n\n"
+        f"--- RAW WEB DATA ---\n{raw_text}\n"
+    )
+    
+    try:
+        response = client.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=prompt,
+            config=config
+        )
+        
+        call_id = str(uuid.uuid4())
+        input_tokens = response.usage_metadata.prompt_token_count if response.usage_metadata else 0
+        output_tokens = response.usage_metadata.candidates_token_count if response.usage_metadata else 0
+        
+        LLM_LOGS.append({
+            "call_id": call_id,
+            "pipeline_stage": "Stage 3c - Free Form Completion",
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "query_usage": 0
+        })
+        
+        parsed = json.loads(response.text)
+        parsed["call_id_3c"] = call_id
+        return parsed
+        
+    except Exception as e:
+        print(f"     [Error during Stage 3c]: {str(e)}")
+        return {}
 
 
 
@@ -221,7 +302,8 @@ def extract_erp_data_production_ready(pdf_path):
                 "call_id": call_id_1,
                 "pipeline_stage": "Stage 1 - Raw Text Cleanup",
                 "input_tokens": input_tokens_1,
-                "output_tokens": output_tokens_1
+                "output_tokens": output_tokens_1,
+                "query_usage": 0
             })
         except Exception as error:
             return {"error": f"Errore durante la pulizia: {str(error)}"}
@@ -259,7 +341,8 @@ def extract_erp_data_production_ready(pdf_path):
                 "call_id": call_id_2,
                 "pipeline_stage": "Stage 2 - JSON Mapping",
                 "input_tokens": input_tokens_2,
-                "output_tokens": output_tokens_2
+                "output_tokens": output_tokens_2,
+                "query_usage": 0
             })
             
             return json.loads(mapping_response.text)
@@ -312,11 +395,24 @@ if __name__ == "__main__":
             enriched_catalog = []
             
             for item in risultato:
-                enriched_data = stage_3_enrich_product(item, brand_name, allowed_categories, allowed_sex, allowed_materials)
+                # Stage 3a
+                res_3a = stage_3a_web_search(item, brand_name)
+                raw_text = res_3a.get("raw_text", "")
+                
+                # Parsing
+                parsed_text = parse_stage_3a_output(raw_text)
+                
+                # Stage 3b
+                res_3b = stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_sex, allowed_materials)
+                
+                # Stage 3c
+                res_3c = stage_3c_free_form_completion(raw_text)
+                
                 final_item = {
                     "VendorCode": item.get("VendorCode"),
                     "Barcode": item.get("Barcode"),
-                    **enriched_data
+                    **res_3b,
+                    **res_3c
                 }
                 enriched_catalog.append(final_item)
                 
