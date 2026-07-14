@@ -1,6 +1,7 @@
 import time
 import os
 import json
+import uuid
 import pdfplumber
 from google import genai
 from google.genai import types
@@ -8,6 +9,9 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 import yaml
+
+# Global list to store LLM usage logs
+LLM_LOGS = []
 
 # =====================================================================
 # DEFINIZIONE DELLO SCHEMA DI VALIDAZIONE RIGIDO (PYDANTIC)
@@ -132,13 +136,27 @@ def stage_3_enrich_product(mapped_item, brand_name, allowed_categories, allowed_
     
     try:
         response = client.models.generate_content(
-            model='gemini-3.5-flash',
-            # model='gemini-3.1-flash-lite',
+            model='gemini-3.1-flash-lite',
             contents=prompt,
             config=config
         )
-        return json.loads(response.text)
         
+        call_id = str(uuid.uuid4())
+        input_tokens = response.usage_metadata.prompt_token_count if response.usage_metadata else 0
+        output_tokens = response.usage_metadata.candidates_token_count if response.usage_metadata else 0
+        
+        LLM_LOGS.append({
+            "call_id": call_id,
+            "pipeline_stage": "Stage 3 - Web Enrichment",
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens
+        })
+        
+        parsed = json.loads(response.text)
+        parsed["call_id"] = call_id
+        return parsed
+        
+
     except Exception as e:
         print(f"     [Error during enrichment for {vendor_code}]: {str(e)}")
         return {
@@ -194,6 +212,17 @@ def extract_erp_data_production_ready(pdf_path):
                 config=cleanup_config
             )
             cleaned_text = cleanup_response.text
+            
+            call_id_1 = str(uuid.uuid4())
+            input_tokens_1 = cleanup_response.usage_metadata.prompt_token_count if cleanup_response.usage_metadata else 0
+            output_tokens_1 = cleanup_response.usage_metadata.candidates_token_count if cleanup_response.usage_metadata else 0
+            
+            LLM_LOGS.append({
+                "call_id": call_id_1,
+                "pipeline_stage": "Stage 1 - Raw Text Cleanup",
+                "input_tokens": input_tokens_1,
+                "output_tokens": output_tokens_1
+            })
         except Exception as error:
             return {"error": f"Errore durante la pulizia: {str(error)}"}
 
@@ -221,6 +250,18 @@ def extract_erp_data_production_ready(pdf_path):
                 contents=mapping_prompt,
                 config=mapping_config
             )
+            
+            call_id_2 = str(uuid.uuid4())
+            input_tokens_2 = mapping_response.usage_metadata.prompt_token_count if mapping_response.usage_metadata else 0
+            output_tokens_2 = mapping_response.usage_metadata.candidates_token_count if mapping_response.usage_metadata else 0
+            
+            LLM_LOGS.append({
+                "call_id": call_id_2,
+                "pipeline_stage": "Stage 2 - JSON Mapping",
+                "input_tokens": input_tokens_2,
+                "output_tokens": output_tokens_2
+            })
+            
             return json.loads(mapping_response.text)
         except Exception as error:
             return {"error": f"Errore durante la mappatura JSON: {str(error)}"}
@@ -286,6 +327,14 @@ if __name__ == "__main__":
             with open(enriched_filename, "w", encoding="utf-8") as out_f:
                 json.dump(enriched_catalog, out_f, indent=4, ensure_ascii=False)
             print(f"\nEstrazione ARRICCHITA salvata con successo in: {enriched_filename}")
+            
+            # --- SALVATAGGIO LOG LLM ---
+            llm_logs_dir = "llm_usage_logs"
+            os.makedirs(llm_logs_dir, exist_ok=True)
+            llm_log_filename = os.path.join(llm_logs_dir, f"{base_name}_{timestamp}_llm_log.json")
+            with open(llm_log_filename, "w", encoding="utf-8") as log_f:
+                json.dump(LLM_LOGS, log_f, indent=4, ensure_ascii=False)
+            print(f"\nLog di utilizzo LLM salvato con successo in: {llm_log_filename}")
             
     else:
         print(f"Errore: Il file '{test_pdf}' non è presente nella cartella corrente.")
