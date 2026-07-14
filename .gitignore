@@ -3,5 +3,5 @@ markdown_files/
 test_files/
 raw_data_extractions/
 llm_usage_logs/
-api.yaml
+config.yaml
 .DS_Store
