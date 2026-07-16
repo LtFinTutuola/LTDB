@@ -385,6 +385,24 @@ if __name__ == "__main__":
     
     with open("config.yaml", "r") as f:
         config = yaml.safe_load(f)
+
+    whitelist = config.get("logging_files_whitelist", [])
+    today_str = datetime.now().strftime("%Y%m%d")
+    for folder in ["raw_data_extractions", "llm_usage_logs"]:
+        if os.path.exists(folder):
+            for filename in os.listdir(folder):
+                file_path = os.path.join(folder, filename)
+                norm_path = file_path.replace("\\", "/")
+                if norm_path in whitelist:
+                    continue
+                file_date = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y%m%d")
+                if file_date != today_str:
+                    try:
+                        os.remove(file_path)
+                        print(f"Eliminato file obsoleto: {file_path}")
+                    except Exception:
+                        pass
+
     test_pdf = config.get("input_file_path", config.get("test_file_path"))
     
     # Simula un controllo di esistenza del file prima di procedere
@@ -399,17 +417,11 @@ if __name__ == "__main__":
             allowed_sex = config.get("sex", [])
             allowed_materials = config.get("materials", [])
             
-            # Salva il risultato RAW nella cartella raw_data_extractions
             output_dir = "raw_data_extractions"
             os.makedirs(output_dir, exist_ok=True)
             
             base_name = os.path.splitext(os.path.basename(test_pdf))[0]
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            raw_filename = os.path.join(output_dir, f"{base_name}_{timestamp}_raw.json")
-            
-            with open(raw_filename, "w", encoding="utf-8") as out_f:
-                json.dump(risultato, out_f, indent=4, ensure_ascii=False)
-            print(f"\nEstrazione RAW salvata con successo in: {raw_filename}")
             
             # --- FASE 3: Product Web Enrichment ---
             print("\n=== Avvio Stage 3: Product Web Enrichment ===")
