@@ -1,6 +1,6 @@
-input_file_path: "test_files/DDT_HK1H01_1DZK_2026-01-13_GA01_5300005059.pdf" # full path of the input file
+input_file_path: "test_files/P00001833_07-01-2026.pdf" # full path of the input file
 input_file_format: "PDF" # allowed formats are PDF and Excel
-input_file_brand: "Giorgio Armani"
+input_file_brand: "The Bridge"
 
 product_categories:
   - "Borse"
@@ -25,3 +25,7 @@ materials:
   - "Tessuto"
   - "Plastica"
   - "Acciaio"
+
+logging_files_whitelist:
+  - "raw_data_extractions/LA TRIESTINA SRL - 0de502e4-f55a-4bf1-81b6-e71c23555c4329 01 2026_20260716_094529_enriched.json"
+  - "llm_usage_logs/LA TRIESTINA SRL - 0de502e4-f55a-4bf1-81b6-e71c23555c4329 01 2026_20260716_094529_llm_log.json"
