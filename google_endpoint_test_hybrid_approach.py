@@ -11,7 +11,10 @@ import re
 import yaml
 
 # Global list to store LLM usage logs
-LLM_LOGS = []
+LLM_LOGS = {
+    "system_prompts": {},
+    "calls": []
+}
 
 # =====================================================================
 # DEFINIZIONE DELLO SCHEMA DI VALIDAZIONE RIGIDO (PYDANTIC)
@@ -74,26 +77,28 @@ def stage_3a_web_search(mapped_item, brand_name):
     
     print(f"  -> Stage 3a (Web Search) for SKU: {vendor_code}...")
     
+    LLM_LOGS["system_prompts"]["stage_3a"] = (
+        "You are an AI Agent specialized in Product Data Enrichment for a retail ERP system. "
+        "Your goal is to browse the web, find the official technical sheet or e-commerce page "
+        "of the requested product and return a comprehensive description of the product, "
+        "including all its details, such as product colors, materials, dimensions and a detailed description.\n"
+        "CRITICAL RULES:\n"
+        "1. Use the Google search tool to find real specifications.\n"
+        "2. MUST wrap specific information in exact XML-like tags:\n"
+        "   <COLORS>...</COLORS>\n"
+        "   <MATERIALS>...</MATERIALS>\n"
+        "   <DIMENSIONS>...</DIMENSIONS>\n"
+        "   <DESCRIPTION>...</DESCRIPTION>\n"
+        "   <SOURCES>...</SOURCES>\n"
+        "3. If a data point is not available online, write 'Dato non disponibile' inside its tag.\n"
+        "4. IMPORTANT: Write the output in Italian."
+    )
+    
     config = types.GenerateContentConfig(
         tools=[{"google_search": {}}],
         response_mime_type="text/plain",
         max_output_tokens=1024,
-        system_instruction=(
-            "You are an AI Agent specialized in Product Data Enrichment for a retail ERP system. "
-            "Your goal is to browse the web, find the official technical sheet or e-commerce page "
-            "of the requested product and return a comprehensive description of the product, "
-            "including all its details, such as product colors, materials, dimensions and a detailed description.\n"
-            "CRITICAL RULES:\n"
-            "1. Use the Google search tool to find real specifications.\n"
-            "2. MUST wrap specific information in exact XML-like tags:\n"
-            "   <COLORS>...</COLORS>\n"
-            "   <MATERIALS>...</MATERIALS>\n"
-            "   <DIMENSIONS>...</DIMENSIONS>\n"
-            "   <DESCRIPTION>...</DESCRIPTION>\n"
-            "   <SOURCES>...</SOURCES>\n"
-            "3. If a data point is not available online, write 'Dato non disponibile' inside its tag.\n"
-            "4. IMPORTANT: Write the output in Italian."
-        )
+        system_instruction=LLM_LOGS["system_prompts"]["stage_3a"]
     )
 
     prompt = (
@@ -123,12 +128,14 @@ def stage_3a_web_search(mapped_item, brand_name):
         if response.candidates and response.candidates[0].grounding_metadata and hasattr(response.candidates[0].grounding_metadata, 'web_search_queries') and response.candidates[0].grounding_metadata.web_search_queries:
             query_usage = len(response.candidates[0].grounding_metadata.web_search_queries)
         
-        LLM_LOGS.append({
+        LLM_LOGS["calls"].append({
             "call_id": call_id,
             "pipeline_stage": "Stage 3a - Web Search",
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "query_usage": query_usage
+            "query_usage": query_usage,
+            "original_prompt": prompt,
+            "original_output": response.text
         })
         
         return {"raw_text": response.text, "call_id_3a": call_id}
@@ -154,15 +161,17 @@ def parse_stage_3a_output(raw_text):
 def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_sex, allowed_materials):
     print(f"  -> Stage 3b (Fields Mapping)...")
     
+    LLM_LOGS["system_prompts"]["stage_3b"] = (
+        "You are an AI mapping assistant. Read the provided product details and map them strictly to the allowed JSON schema values.\n"
+        "CRITICAL RULES:\n"
+        "1. 'category', 'sex', 'main_material', and 'secondary_material' MUST be populated using strictly one of the values provided in the Allowed lists.\n"
+        "2. All output data values MUST be written in Italian."
+    )
+    
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
         response_schema=MappedFieldsSheet,
-        system_instruction=(
-            "You are an AI mapping assistant. Read the provided product details and map them strictly to the allowed JSON schema values.\n"
-            "CRITICAL RULES:\n"
-            "1. 'category', 'sex', 'main_material', and 'secondary_material' MUST be populated using strictly one of the values provided in the Allowed lists.\n"
-            "2. All output data values MUST be written in Italian."
-        )
+        system_instruction=LLM_LOGS["system_prompts"]["stage_3b"]
     )
 
     context = parsed_text if parsed_text else raw_text
@@ -186,12 +195,14 @@ def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_s
         input_tokens = response.usage_metadata.prompt_token_count if response.usage_metadata else 0
         output_tokens = response.usage_metadata.candidates_token_count if response.usage_metadata else 0
         
-        LLM_LOGS.append({
+        LLM_LOGS["calls"].append({
             "call_id": call_id,
             "pipeline_stage": "Stage 3b - Fields Mapping",
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "query_usage": 0
+            "query_usage": 0,
+            "original_prompt": prompt,
+            "original_output": response.text
         })
         
         parsed = json.loads(response.text)
@@ -206,16 +217,18 @@ def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_s
 def stage_3c_free_form_completion(raw_text):
     print(f"  -> Stage 3c (Free-Form Completion)...")
     
+    LLM_LOGS["system_prompts"]["stage_3c"] = (
+        "You are an AI describing assistant. Read the provided raw web data and generate comprehensive, free-form fields.\n"
+        "CRITICAL RULES:\n"
+        "1. DO NOT include the SKU or VendorCode inside the 'product_name'.\n"
+        "2. Populate 'tags' with up to 10 semantic keywords describing the item to enhance downstream search.\n"
+        "3. All output data values MUST be written in Italian."
+    )
+
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
         response_schema=FreeFormFieldsSheet,
-        system_instruction=(
-            "You are an AI describing assistant. Read the provided raw web data and generate comprehensive, free-form fields.\n"
-            "CRITICAL RULES:\n"
-            "1. DO NOT include the SKU or VendorCode inside the 'product_name'.\n"
-            "2. Populate 'tags' with up to 10 semantic keywords describing the item to enhance downstream search.\n"
-            "3. All output data values MUST be written in Italian."
-        )
+        system_instruction=LLM_LOGS["system_prompts"]["stage_3c"]
     )
 
     prompt = (
@@ -234,12 +247,14 @@ def stage_3c_free_form_completion(raw_text):
         input_tokens = response.usage_metadata.prompt_token_count if response.usage_metadata else 0
         output_tokens = response.usage_metadata.candidates_token_count if response.usage_metadata else 0
         
-        LLM_LOGS.append({
+        LLM_LOGS["calls"].append({
             "call_id": call_id,
             "pipeline_stage": "Stage 3c - Free Form Completion",
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "query_usage": 0
+            "query_usage": 0,
+            "original_prompt": prompt,
+            "original_output": response.text
         })
         
         parsed = json.loads(response.text)
@@ -272,15 +287,16 @@ def extract_erp_data_production_ready(pdf_path):
     try:
         # --- FASE 1: Pulizia del testo grezzo ---
         print("Avvio pulizia del testo tramite LLM...")
+        LLM_LOGS["system_prompts"]["stage_1"] = (
+            "Sei un assistente specializzato nell'estrazione dati. "
+            "Il tuo compito è pulire il testo grezzo di una bolla di spedizione B2B. "
+            "Rimuovi intestazioni, note legali, totali, dati bancari o qualsiasi altro dato "
+            "che non riguardi strettamente gli articoli/prodotti spediti. "
+            "Restituisci SOLO il testo relativo alle righe degli articoli, includendo anche le intestazioni delle colonne, senza alterare i dati in esse contenuti."
+        )
         cleanup_config = types.GenerateContentConfig(
             response_mime_type="text/plain",
-            system_instruction=(
-                "Sei un assistente specializzato nell'estrazione dati. "
-                "Il tuo compito è pulire il testo grezzo di una bolla di spedizione B2B. "
-                "Rimuovi intestazioni, note legali, totali, dati bancari o qualsiasi altro dato "
-                "che non riguardi strettamente gli articoli/prodotti spediti. "
-                "Restituisci SOLO il testo relativo alle righe degli articoli, includendo anche le intestazioni delle colonne, senza alterare i dati in esse contenuti."
-            )
+            system_instruction=LLM_LOGS["system_prompts"]["stage_1"]
         )
         
         cleanup_prompt = f"Pulisci questo testo mantenendo solo le righe degli articoli:\n\n{raw_text}"
@@ -298,12 +314,14 @@ def extract_erp_data_production_ready(pdf_path):
             input_tokens_1 = cleanup_response.usage_metadata.prompt_token_count if cleanup_response.usage_metadata else 0
             output_tokens_1 = cleanup_response.usage_metadata.candidates_token_count if cleanup_response.usage_metadata else 0
             
-            LLM_LOGS.append({
+            LLM_LOGS["calls"].append({
                 "call_id": call_id_1,
                 "pipeline_stage": "Stage 1 - Raw Text Cleanup",
                 "input_tokens": input_tokens_1,
                 "output_tokens": output_tokens_1,
-                "query_usage": 0
+                "query_usage": 0,
+                "original_prompt": cleanup_prompt,
+                "original_output": cleaned_text
             })
         except Exception as error:
             return {"error": f"Errore durante la pulizia: {str(error)}"}
@@ -312,15 +330,16 @@ def extract_erp_data_production_ready(pdf_path):
 
         # --- FASE 2: Mappatura in JSON ---
         print("Avvio mappatura JSON del testo pulito tramite LLM...")
+        LLM_LOGS["system_prompts"]["stage_2"] = (
+            "Sei un Agente di Document Intelligence per un sistema ERP. "
+            "Riceverai in input un testo pulito contenente solo gli articoli di una bolla di spedizione B2B. "
+            "Il tuo compito è analizzare semanticamente questi dati "
+            "e restituire ESCLUSIVAMENTE un array JSON di oggetti normalizzati con le seguenti chiavi: "
+            "VendorCode (es. modello/codice prodotto), Barcode (se presente), Description (descrizione del prodotto), Color (codice/colore)."
+        )
         mapping_config = types.GenerateContentConfig(
             response_mime_type="application/json",
-            system_instruction=(
-                "Sei un Agente di Document Intelligence per un sistema ERP. "
-                "Riceverai in input un testo pulito contenente solo gli articoli di una bolla di spedizione B2B. "
-                "Il tuo compito è analizzare semanticamente questi dati "
-                "e restituire ESCLUSIVAMENTE un array JSON di oggetti normalizzati con le seguenti chiavi: "
-                "VendorCode (es. modello/codice prodotto), Barcode (se presente), Description (descrizione del prodotto), Color (codice/colore)."
-            )
+            system_instruction=LLM_LOGS["system_prompts"]["stage_2"]
         )
 
         mapping_prompt = f"Analizza e mappa questo testo in JSON:\n\n{cleaned_text}"
@@ -337,12 +356,14 @@ def extract_erp_data_production_ready(pdf_path):
             input_tokens_2 = mapping_response.usage_metadata.prompt_token_count if mapping_response.usage_metadata else 0
             output_tokens_2 = mapping_response.usage_metadata.candidates_token_count if mapping_response.usage_metadata else 0
             
-            LLM_LOGS.append({
+            LLM_LOGS["calls"].append({
                 "call_id": call_id_2,
                 "pipeline_stage": "Stage 2 - JSON Mapping",
                 "input_tokens": input_tokens_2,
                 "output_tokens": output_tokens_2,
-                "query_usage": 0
+                "query_usage": 0,
+                "original_prompt": mapping_prompt,
+                "original_output": mapping_response.text
             })
             
             return json.loads(mapping_response.text)
