@@ -5,3 +5,4 @@ raw_data_extractions/
 llm_usage_logs/
 config.yaml
 .DS_Store
+case_limit_files/
