@@ -22,17 +22,14 @@ LLM_LOGS = {
 class MappedFieldsSheet(BaseModel):
     category: str = Field(description="Product category. MUST be exactly one of the values provided in the prompt's Allowed Categories list.")
     sex: str = Field(description="Target gender for the product. MUST be exactly one of the values provided in the prompt's Allowed Sex list.")
-    main_material: str = Field(description="Main material of the product. MUST be exactly one of the values provided in the prompt's Allowed Materials list.")
-    secondary_material: Optional[str] = Field(description="Secondary or complementary material of the product. Leave null if not applicable. MUST be exactly one of the values provided in the prompt's Allowed Materials list.", default=None)
-    primary_color: str = Field(description="The primary color of the product inferred from codes or web images.")
-    secondary_color: Optional[str] = Field(description="Possible secondary color or chromatic details. Leave null if solid color.", default=None)
+    materials: List[str] = Field(description="List of materials of the product. Extract the materials directly from the provided text.")
+    colors: List[str] = Field(description="List of colors of the product inferred from codes or web images.")
 
 class FreeFormFieldsSheet(BaseModel):
     product_name: str = Field(description="Official name of the product. DO NOT include the SKU or VendorCode in this string.")
     product_short_description: str = Field(description="Concise, technical, and precise description of the product to help an ERP operator identify it. NO commercial or promotional fluff.")
     product_extended_description: str = Field(description="Extended and comprehensive description of the product, including all its details; This field is aimed to be used in downstream semantic search, so it must be comprehensive.")
     tags: List[str] = Field(description="List of up to 10 descriptive tags related to the article (e.g., color, style, specific material details, usage) to enhance semantic search.")
-    sources: List[str] = Field(description="Strict list of the full URLs of the web pages from which the data was extracted.")
 
 # Configurazione: recupera la chiave API in modo sicuro dalle variabili d'ambiente o api.yaml
 API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -64,6 +61,7 @@ def extract_raw_text_locally(pdf_path):
                             
         full_text = "\n--- PAGINA ---\n".join(raw_text)
         print(f"Pre-processing completato: estratto il testo di {len(raw_text)} pagine.")
+        print(full_text)
         return full_text
     except Exception as e:
         print(f"Errore durante l'estrazione locale: {str(e)}")
@@ -89,9 +87,8 @@ def stage_3a_web_search(mapped_item, brand_name):
         "   <MATERIALS>...</MATERIALS>\n"
         "   <DIMENSIONS>...</DIMENSIONS>\n"
         "   <DESCRIPTION>...</DESCRIPTION>\n"
-        "   <SOURCES>...</SOURCES>\n"
         "3. If a data point is not available online, write 'Dato non disponibile' inside its tag.\n"
-        "4. IMPORTANT: Write the output in Italian."
+        "4. IMPORTANT: Write the output in Italian. DO NOT cite textual sources or generate a <SOURCES> tag in the output."
     )
     
     config = types.GenerateContentConfig(
@@ -125,8 +122,18 @@ def stage_3a_web_search(mapped_item, brand_name):
         output_tokens = response.usage_metadata.candidates_token_count if response.usage_metadata else 0
         
         query_usage = 0
-        if response.candidates and response.candidates[0].grounding_metadata and hasattr(response.candidates[0].grounding_metadata, 'web_search_queries') and response.candidates[0].grounding_metadata.web_search_queries:
-            query_usage = len(response.candidates[0].grounding_metadata.web_search_queries)
+        extracted_urls = []
+        if response.candidates and response.candidates[0].grounding_metadata:
+            gm = response.candidates[0].grounding_metadata
+            if hasattr(gm, 'web_search_queries') and gm.web_search_queries:
+                query_usage = len(gm.web_search_queries)
+            if hasattr(gm, 'grounding_chunks'):
+                for chunk in gm.grounding_chunks:
+                    if hasattr(chunk, 'web') and chunk.web:
+                        if hasattr(chunk.web, 'uri') and chunk.web.uri:
+                            extracted_urls.append(chunk.web.uri)
+                        elif hasattr(chunk.web, 'title') and chunk.web.title:
+                            extracted_urls.append(chunk.web.title)
         
         LLM_LOGS["calls"].append({
             "call_id": call_id,
@@ -138,11 +145,11 @@ def stage_3a_web_search(mapped_item, brand_name):
             "original_output": response.text
         })
         
-        return {"raw_text": response.text, "call_id_3a": call_id}
+        return {"raw_text": response.text, "call_id_3a": call_id, "urls": extracted_urls}
         
     except Exception as e:
         print(f"     [Error during Stage 3a for {vendor_code}]: {str(e)}")
-        return {"raw_text": "", "call_id_3a": None}
+        return {"raw_text": "", "call_id_3a": None, "urls": []}
 
 
 def parse_stage_3a_output(raw_text):
@@ -158,14 +165,15 @@ def parse_stage_3a_output(raw_text):
     return extracted_relevant_info.strip()
 
 
-def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_sex, allowed_materials):
+def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_sex):
     print(f"  -> Stage 3b (Fields Mapping)...")
     
     LLM_LOGS["system_prompts"]["stage_3b"] = (
         "You are an AI mapping assistant. Read the provided product details and map them strictly to the allowed JSON schema values.\n"
         "CRITICAL RULES:\n"
-        "1. 'category', 'sex', 'main_material', and 'secondary_material' MUST be populated using strictly one of the values provided in the Allowed lists.\n"
-        "2. All output data values MUST be written in Italian."
+        "1. 'category' and 'sex' MUST be populated using strictly one of the values provided in the Allowed lists. Extract 'materials' directly from the text.\n"
+        "2. All output data values MUST be written in Italian.\n"
+        "3. You must return arrays for 'materials' and 'colors' instead of single string values."
     )
     
     config = types.GenerateContentConfig(
@@ -181,7 +189,6 @@ def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_s
         f"--- ALLOWED MAPPING VALUES ---\n"
         f"Allowed Categories: {', '.join(allowed_categories)}\n"
         f"Allowed Sex: {', '.join(allowed_sex)}\n"
-        f"Allowed Materials: {', '.join(allowed_materials)}\n"
     )
     
     try:
@@ -335,7 +342,7 @@ def extract_erp_data_production_ready(pdf_path):
             "Riceverai in input un testo pulito contenente solo gli articoli di una bolla di spedizione B2B. "
             "Il tuo compito è analizzare semanticamente questi dati "
             "e restituire ESCLUSIVAMENTE un array JSON di oggetti normalizzati con le seguenti chiavi: "
-            "VendorCode (es. modello/codice prodotto), Barcode (se presente), Description (descrizione del prodotto), Color (codice/colore)."
+            "VendorCode (es. modello/codice prodotto), Barcode (se presente), Description (descrizione del prodotto), Color (codice/colore), Quantity (leggendo i dati relativi alle quantità o confezioni associate all'articolo)."
         )
         mapping_config = types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -415,7 +422,6 @@ if __name__ == "__main__":
             brand_name = config.get("input_file_brand", "Unknown Brand")
             allowed_categories = config.get("product_categories", [])
             allowed_sex = config.get("sex", [])
-            allowed_materials = config.get("materials", [])
             
             output_dir = "raw_data_extractions"
             os.makedirs(output_dir, exist_ok=True)
@@ -436,7 +442,7 @@ if __name__ == "__main__":
                 parsed_text = parse_stage_3a_output(raw_text)
                 
                 # Stage 3b
-                res_3b = stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_sex, allowed_materials)
+                res_3b = stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_sex)
                 
                 # Stage 3c
                 res_3c = stage_3c_free_form_completion(raw_text)
@@ -444,6 +450,13 @@ if __name__ == "__main__":
                 final_item = {
                     "VendorCode": item.get("VendorCode"),
                     "Barcode": item.get("Barcode"),
+                    "Quantity": item.get("Quantity"),
+                    "llm_calls": {
+                        "stage_3a": res_3a.pop("call_id_3a", None),
+                        "stage_3b": res_3b.pop("call_id_3b", None),
+                        "stage_3c": res_3c.pop("call_id_3c", None),
+                    },
+                    "sources": res_3a.get("urls", []),
                     **res_3b,
                     **res_3c
                 }
