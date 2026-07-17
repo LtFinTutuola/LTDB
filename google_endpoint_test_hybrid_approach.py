@@ -6,7 +6,7 @@ import pdfplumber
 from google import genai
 from google.genai import types
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 import re
 import yaml
 
@@ -20,7 +20,6 @@ LLM_LOGS = {
 # DEFINIZIONE DELLO SCHEMA DI VALIDAZIONE RIGIDO (PYDANTIC)
 # =====================================================================
 class MappedFieldsSheet(BaseModel):
-    category: str = Field(description="Product category. MUST be exactly one of the values provided in the prompt's Allowed Categories list.")
     sex: str = Field(description="Target gender for the product. MUST be exactly one of the values provided in the prompt's Allowed Sex list.")
     materials: List[str] = Field(description="List of materials of the product. Extract the materials directly from the provided text.")
     colors: List[str] = Field(description="List of colors of the product inferred from codes or web images.")
@@ -61,7 +60,6 @@ def extract_raw_text_locally(pdf_path):
                             
         full_text = "\n--- PAGINA ---\n".join(raw_text)
         print(f"Pre-processing completato: estratto il testo di {len(raw_text)} pagine.")
-        print(full_text)
         return full_text
     except Exception as e:
         print(f"Errore durante l'estrazione locale: {str(e)}")
@@ -155,8 +153,14 @@ def stage_3a_web_search(mapped_item, brand_name):
 def parse_stage_3a_output(raw_text):
     colors = re.search(r'<COLORS>(.*?)</COLORS>', raw_text, re.DOTALL)
     materials = re.search(r'<MATERIALS>(.*?)</MATERIALS>', raw_text, re.DOTALL)
+    description = re.search(r'<DESCRIPTION>(.*?)</DESCRIPTION>', raw_text, re.DOTALL)
+    dimensions = re.search(r'<DIMENSIONS>(.*?)</DIMENSIONS>', raw_text, re.DOTALL)
     
     extracted_relevant_info = ""
+    if description:
+        extracted_relevant_info += f"DESCRIPTION:\n{description.group(1).strip()}\n\n"
+    if dimensions:
+        extracted_relevant_info += f"DIMENSIONS:\n{dimensions.group(1).strip()}\n\n"
     if colors:
         extracted_relevant_info += f"COLORS:\n{colors.group(1).strip()}\n\n"
     if materials:
@@ -165,13 +169,153 @@ def parse_stage_3a_output(raw_text):
     return extracted_relevant_info.strip()
 
 
-def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_sex):
-    print(f"  -> Stage 3b (Fields Mapping)...")
+def stage_3b1_macro_category(parsed_text, raw_text, brand_hierarchy):
+    print(f"  -> Stage 3b1 (Macro-Category Mapping)...")
     
-    LLM_LOGS["system_prompts"]["stage_3b"] = (
+    available_macros = list(brand_hierarchy.keys())
+    if len(available_macros) <= 1:
+        chosen_macro = available_macros[0] if available_macros else None
+        print(f"     [Short-Circuit 3b1] Only one or zero macro-categories available: {chosen_macro}")
+        return {"macro_category": chosen_macro, "call_id_3b1": None}
+
+    # Prepare LLM call
+    macro_descriptions = []
+    for m in available_macros:
+        macro_descriptions.append(f"- {m}: {brand_hierarchy[m]['description']}")
+    macro_options_str = "\n".join(macro_descriptions)
+
+    MacroCategorySchema = create_model(
+        'MacroCategorySchema',
+        macro_category=(str, Field(description=f"Select the most appropriate macro-category. Allowed values:\n{macro_options_str}"))
+    )
+
+    LLM_LOGS["system_prompts"]["stage_3b1"] = (
+        "You are an AI mapping assistant. Read the provided product details and select strictly one of the allowed macro-categories."
+    )
+    
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=MacroCategorySchema,
+        system_instruction=LLM_LOGS["system_prompts"]["stage_3b1"]
+    )
+
+    context = parsed_text if parsed_text else raw_text
+    prompt = (
+        f"Select the appropriate macro-category for the following product.\n\n"
+        f"--- PRODUCT DETAILS ---\n{context}\n\n"
+        f"--- ALLOWED MACRO-CATEGORIES ---\n{macro_options_str}\n"
+    )
+    
+    try:
+        response = client.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=prompt,
+            config=config
+        )
+        
+        call_id = str(uuid.uuid4())
+        input_tokens = response.usage_metadata.prompt_token_count if response.usage_metadata else 0
+        output_tokens = response.usage_metadata.candidates_token_count if response.usage_metadata else 0
+        
+        LLM_LOGS["calls"].append({
+            "call_id": call_id,
+            "pipeline_stage": "Stage 3b1 - Macro-Category",
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "query_usage": 0,
+            "original_prompt": prompt,
+            "original_output": response.text
+        })
+        
+        parsed = json.loads(response.text)
+        parsed["call_id_3b1"] = call_id
+        return parsed
+        
+    except Exception as e:
+        print(f"     [Error during Stage 3b1]: {str(e)}")
+        return {"macro_category": None, "call_id_3b1": None}
+
+
+def stage_3b2_sub_category(parsed_text, raw_text, macro_category, brand_hierarchy):
+    print(f"  -> Stage 3b2 (Sub-Category Mapping)...")
+    
+    if not macro_category or macro_category not in brand_hierarchy:
+        print(f"     [Short-Circuit 3b2] Invalid or missing macro-category: {macro_category}")
+        return {"sub_category": None, "call_id_3b2": None}
+
+    available_subs_dict = brand_hierarchy[macro_category].get('sub_categories', {})
+    available_subs = list(available_subs_dict.keys())
+    
+    if len(available_subs) <= 1:
+        chosen_sub = available_subs[0] if available_subs else None
+        print(f"     [Short-Circuit 3b2] Only one or zero sub-categories available: {chosen_sub}")
+        return {"sub_category": chosen_sub, "call_id_3b2": None}
+
+    # Prepare LLM call
+    sub_descriptions = []
+    for s in available_subs:
+        sub_descriptions.append(f"- {s}: {available_subs_dict[s]}")
+    sub_options_str = "\n".join(sub_descriptions)
+
+    SubCategorySchema = create_model(
+        'SubCategorySchema',
+        sub_category=(str, Field(description=f"Select the most appropriate sub-category. Allowed values:\n{sub_options_str}"))
+    )
+
+    LLM_LOGS["system_prompts"]["stage_3b2"] = (
+        "You are an AI mapping assistant. Read the provided product details and select strictly one of the allowed sub-categories."
+    )
+    
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=SubCategorySchema,
+        system_instruction=LLM_LOGS["system_prompts"]["stage_3b2"]
+    )
+
+    context = parsed_text if parsed_text else raw_text
+    prompt = (
+        f"Select the appropriate sub-category for the following product under macro-category '{macro_category}'.\n\n"
+        f"--- PRODUCT DETAILS ---\n{context}\n\n"
+        f"--- ALLOWED SUB-CATEGORIES ---\n{sub_options_str}\n"
+    )
+    
+    try:
+        response = client.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=prompt,
+            config=config
+        )
+        
+        call_id = str(uuid.uuid4())
+        input_tokens = response.usage_metadata.prompt_token_count if response.usage_metadata else 0
+        output_tokens = response.usage_metadata.candidates_token_count if response.usage_metadata else 0
+        
+        LLM_LOGS["calls"].append({
+            "call_id": call_id,
+            "pipeline_stage": "Stage 3b2 - Sub-Category",
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "query_usage": 0,
+            "original_prompt": prompt,
+            "original_output": response.text
+        })
+        
+        parsed = json.loads(response.text)
+        parsed["call_id_3b2"] = call_id
+        return parsed
+        
+    except Exception as e:
+        print(f"     [Error during Stage 3b2]: {str(e)}")
+        return {"sub_category": None, "call_id_3b2": None}
+
+
+def stage_3b3_fixed_fields(parsed_text, raw_text, allowed_sex):
+    print(f"  -> Stage 3b3 (Fixed Fields Mapping)...")
+    
+    LLM_LOGS["system_prompts"]["stage_3b3"] = (
         "You are an AI mapping assistant. Read the provided product details and map them strictly to the allowed JSON schema values.\n"
         "CRITICAL RULES:\n"
-        "1. 'category' and 'sex' MUST be populated using strictly one of the values provided in the Allowed lists. Extract 'materials' directly from the text.\n"
+        "1. 'sex' MUST be populated using strictly one of the values provided in the Allowed lists. Extract 'materials' directly from the text.\n"
         "2. All output data values MUST be written in Italian.\n"
         "3. You must return arrays for 'materials' and 'colors' instead of single string values."
     )
@@ -179,7 +323,7 @@ def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_s
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
         response_schema=MappedFieldsSheet,
-        system_instruction=LLM_LOGS["system_prompts"]["stage_3b"]
+        system_instruction=LLM_LOGS["system_prompts"]["stage_3b3"]
     )
 
     context = parsed_text if parsed_text else raw_text
@@ -187,7 +331,6 @@ def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_s
         f"Map the following data to the required JSON schema.\n\n"
         f"--- PRODUCT DETAILS ---\n{context}\n\n"
         f"--- ALLOWED MAPPING VALUES ---\n"
-        f"Allowed Categories: {', '.join(allowed_categories)}\n"
         f"Allowed Sex: {', '.join(allowed_sex)}\n"
     )
     
@@ -204,7 +347,7 @@ def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_s
         
         LLM_LOGS["calls"].append({
             "call_id": call_id,
-            "pipeline_stage": "Stage 3b - Fields Mapping",
+            "pipeline_stage": "Stage 3b3 - Fixed Fields",
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "query_usage": 0,
@@ -213,11 +356,11 @@ def stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_s
         })
         
         parsed = json.loads(response.text)
-        parsed["call_id_3b"] = call_id
+        parsed["call_id_3b3"] = call_id
         return parsed
         
     except Exception as e:
-        print(f"     [Error during Stage 3b]: {str(e)}")
+        print(f"     [Error during Stage 3b3]: {str(e)}")
         return {}
 
 
@@ -420,9 +563,18 @@ if __name__ == "__main__":
         
         if isinstance(risultato, list) or "error" not in risultato:
             brand_name = config.get("input_file_brand", "Unknown Brand")
-            allowed_categories = config.get("product_categories", [])
             allowed_sex = config.get("sex", [])
             
+            # Build brand hierarchy
+            brand_categories_mapping = config.get("brand_categories_mapping", {})
+            product_categories = config.get("product_categories", {})
+            
+            allowed_macros = brand_categories_mapping.get(brand_name, [])
+            brand_hierarchy = {}
+            for macro in allowed_macros:
+                if macro in product_categories:
+                    brand_hierarchy[macro] = product_categories[macro]
+
             output_dir = "raw_data_extractions"
             os.makedirs(output_dir, exist_ok=True)
             
@@ -441,8 +593,15 @@ if __name__ == "__main__":
                 # Parsing
                 parsed_text = parse_stage_3a_output(raw_text)
                 
-                # Stage 3b
-                res_3b = stage_3b_fields_mapping(parsed_text, raw_text, allowed_categories, allowed_sex)
+                # Stage 3b1
+                res_3b1 = stage_3b1_macro_category(parsed_text, raw_text, brand_hierarchy)
+                macro_cat = res_3b1.get("macro_category")
+                
+                # Stage 3b2
+                res_3b2 = stage_3b2_sub_category(parsed_text, raw_text, macro_cat, brand_hierarchy)
+                
+                # Stage 3b3
+                res_3b3 = stage_3b3_fixed_fields(parsed_text, raw_text, allowed_sex)
                 
                 # Stage 3c
                 res_3c = stage_3c_free_form_completion(raw_text)
@@ -451,13 +610,17 @@ if __name__ == "__main__":
                     "VendorCode": item.get("VendorCode"),
                     "Barcode": item.get("Barcode"),
                     "Quantity": item.get("Quantity"),
+                    "category": res_3b1.get("macro_category"),
+                    "sub_category": res_3b2.get("sub_category"),
                     "llm_calls": {
                         "stage_3a": res_3a.pop("call_id_3a", None),
-                        "stage_3b": res_3b.pop("call_id_3b", None),
+                        "stage_3b1": res_3b1.pop("call_id_3b1", None),
+                        "stage_3b2": res_3b2.pop("call_id_3b2", None),
+                        "stage_3b3": res_3b3.pop("call_id_3b3", None),
                         "stage_3c": res_3c.pop("call_id_3c", None),
                     },
                     "sources": res_3a.get("urls", []),
-                    **res_3b,
+                    **res_3b3,
                     **res_3c
                 }
                 enriched_catalog.append(final_item)
