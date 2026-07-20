@@ -1,18 +1,172 @@
-input_file_path: "test_files/P00001833_07-01-2026.pdf" # full path of the input file
+input_file_path: "test_files/DDT GPC  2026 B-21176 del 10-07-2026.pdf" # full path of the input file
 input_file_format: "PDF" # allowed formats are PDF and Excel
-input_file_brand: "The Bridge"
+input_file_brand: "Guess"
+
+raw_data_extraction_file: "raw_data_extractions/DDT GPC  2026 B-21176 del 10-07-2026_20260719_140546_enriched.json"
+
+brand_categories_mapping:
+  "Samsonite":
+    - "Valigie"
+    - "Cartelle da lavoro"
+    - "Borselli"
+    - "Ombrelli"
+    - "Accessori"    
+  "The Bridge":
+    - "Borse"
+    - "Cartelle da lavoro"
+    - "Portafogli"
+    - "Borselli"
+    - "Cinture"
+    - "Piccola pelletteria"
+    - "Portachiavi"    
+  "Guess":
+    - "Borse"
+    - "Portafogli"
+    - "Cinture"
+    - "Portachiavi"    
+  "Emporio Armani":
+    - "Borse"
+    - "Portafogli"
+    - "Borselli"
+    - "Piccola pelletteria"
+    - "Portachiavi"    
+  "Calvin Klein":
+    - "Borse"
+    - "Portafogli"
+    - "Borselli"
+    - "Cinture"
+    - "Accessori"
+  "Okkia":
+    - "Accessori" # Brand noto principalmente per occhiali    
+  "Piquadro":
+    - "Cartelle da lavoro"
+    - "Valigie"
+    - "Borselli"
+    - "Portafogli"
+    - "Portachiavi"
+    - "Cinture"    
+  "Eastpak":
+    - "Zaini da scuola"
+    - "Borselli"
+    - "Valigie"
+    - "Portafogli"
+    - "Accessori"    
+  "Got Bag":
+    - "Borse"    
+  "Secrid":
+    - "Portafogli"    
+  "Why Not?":
+    - "Borse"
+    - "Portafogli"    
+  "Mandarina Duck":
+    - "Borse"
+    - "Portafogli"    
+  "Tommy Hilfiger":
+    - "Borse"
+    - "Portafogli"
+    - "Borselli"
+    - "Cinture"
+    - "Accessori"    
+  "Alviero Martini":
+    - "Borse"
+    - "Portafogli"    
+  "Roncato":
+    - "Valigie"
+    - "Cartelle da lavoro"
+    - "Borselli"    
+  "Bruno Rossi":
+    - "Borse"
+    - "Portafogli"
+    - "Piccola pelletteria"
+  "H2O":
+    - "Ombrelli"
+
 
 product_categories:
-  - "Borse"
-  - "Portafogli"
-  - "Piccola pelletteria"
-  - "Cinture"
-  - "Cartelle da lavoro"
-  - "Borselli"
-  - "Zaini"
-  - "Valigie"
-  - "Ombrelli"
-  - "Altro"
+  Borse:
+    description: "Borse da donna, di varie dimensioni, progettate per essere portate a spalla, a mano o a tracolla. Non include articoli da lavoro o zaini scolastici."
+    sub_categories:
+      Tote / Shopper: "Borsa capiente e morbida, aperta in alto e dotata di due manici paralleli, ideale per l'uso quotidiano."
+      Pochette / Clutch: "Borsetta elegante di piccole dimensioni, priva di manici o con catenella, progettata per essere portata a mano (es. borse da sera)."
+      Tracolla / Crossbody: "Borsa di dimensioni medie o piccole dotata di una cinghia lunga, progettata per essere indossata diagonalmente sul corpo."
+      Bauletto: "Borsa dalla forma allungata, semi-rigida e arrotondata, dotata di manici corti per essere portata a mano o sull'avambraccio."
+      Hobo: "Borsa a spalla dalla forma a mezzaluna, realizzata in materiali morbidi che tendono a curvarsi quando appoggiati."
+
+  Portafogli:
+    description: "Accessori tascabili o da borsa progettati principalmente per contenere banconote, monete, carte di credito e documenti personali."
+    sub_categories:
+      Continental / Zip-Around: "Portafoglio lungo e rettangolare, tipicamente da donna, spesso con chiusura a zip su tre lati."
+      Bifold / A libro: "Portafoglio classico che si piega a metà, molto comune per gli uomini."
+      Trifold / A tre ante: "Portafoglio che si piega in tre sezioni, offrendo più scomparti per carte."
+      Portamonete: "Piccolo accessorio con chiusura a scatto o zip, dedicato esclusivamente alle monete."
+
+  Portachiavi:
+    description: "Piccoli accessori utilizzati per raggruppare e trasportare le chiavi, spesso decorativi o funzionali."
+    sub_categories:
+      Ad anello / Classico: "Semplice anello in metallo con un elemento decorativo in pelle, metallo o tessuto."
+      A bustina / Astuccio: "Piccolo contenitore in pelle con cerniera o bottoni che racchiude le chiavi al suo interno per non graffiare altri oggetti."
+      Lanyard / Laccetto: "Cordoncino lungo da appendere al collo o al polso."
+
+  Piccola pelletteria:
+    description: "Accessori di dimensioni ridotte, generalmente in pelle o ecopelle, con funzioni organizzative specifiche diverse dal contenere denaro."
+    sub_categories:
+      Portacarte / Portadocumenti: "Accessorio piatto progettato esclusivamente per tessere, biglietti da visita o documenti (senza scomparti per banconote)."
+      Porta passaporto: "Custodia protettiva a libretto per il passaporto."
+      Beauty Case / Trousse: "Piccolo astuccio per cosmetici, trucchi o articoli da toeletta."
+
+  Cinture:
+    description: "Strisce di pelle, tessuto o materiali sintetici da indossare attorno alla vita o ai fianchi."
+    sub_categories:
+      Classica / Formale: "Cintura elegante e liscia, tipicamente in pelle con fibbia in metallo sobria."
+      Casual / Intrecciata: "Cintura più informale, spesso in camoscio, tela o pelle intrecciata."
+      A fascia / Da vita: "Cintura larga pensata per essere indossata sopra abiti o camicie per segnare il punto vita."
+
+  Cartelle da lavoro:
+    description: "Borse strutturate progettate per professionisti, ideali per trasportare documenti, laptop e strumenti di business."
+    sub_categories:
+      Ventiquattrore / Attaccapanni: "Valigetta rigida o semi-rigida tradizionale, con chiusura a scatto e manico superiore."
+      Borsa Porta Computer: "Borsa imbottita, spesso con tracolla, progettata specificamente per proteggere laptop e tablet."
+      Messenger: "Borsa a tracolla con grande patta frontale di chiusura, originariamente usata dai corrieri."
+
+  Borselli:
+    description: "Piccole borse da uomo per il tempo libero, progettate per trasportare oggetti personali essenziali (chiavi, telefono, portafoglio)."
+    sub_categories:
+      Borsello a tracolla: "Piccola borsa quadrata o rettangolare da uomo con lunga tracolla."
+      Pochette da uomo / Da polso: "Borsello morbido dotato di un laccetto per essere portato al polso."
+      Marsupio: "Borsa compatta con cintura integrata, da indossare in vita o a tracolla sul petto."
+
+  Zaini da scuola:
+    description: "Borse a due spallacci progettate specificamente per studenti o per l'uso quotidiano informale."
+    sub_categories:
+      Classico / Basic: "Zaino semplice, spesso in tessuto tecnico o tela, con uno scomparto principale e una tasca frontale."
+      Zaino Trolley: "Zaino scolastico dotato di ruote e manico telescopico estraibile."
+      Zaino Tecnico / Multiscomparto: "Zaino con numerosi scomparti ergonomici, imbottiture per la schiena e cinghie di compressione."
+
+  Valigie:
+    description: "Bagagli strutturati, rigidi o morbidi, progettati esplicitamente per viaggi lunghi o spostamenti."
+    sub_categories:
+      Trolley da Cabina / Bagaglio a mano: "Valigia compatta con ruote che rispetta le dimensioni standard per le cappelliere degli aerei."
+      Valigia da Stiva: "Valigia di medie o grandi dimensioni (oltre i 60 cm), tipicamente rigida in policarbonato o ABS."
+      Borsone da Viaggio / Duffle Bag: "Grande borsa morbida e cilindrica, ideale per viaggi brevi o per la palestra."
+
+  Ombrelli:
+    description: "Dispositivi portatili per ripararsi dalla pioggia, composti da un telaio pieghevole e un tessuto teso."
+    sub_categories:
+      Pieghevole / Mini: "Ombrello telescopico compatto, pensato per essere riposto in borse di piccole dimensioni."
+      Classico / A bastone: "Ombrello lungo con manico curvo o dritto, non ripiegabile."
+      Antivento / Da Golf: "Ombrello di grandi dimensioni con struttura rinforzata per resistere a forti raffiche di vento."
+
+  Accessori:
+    description: "Elementi complementari di vestiario che aggiungono funzionalità o stile, ma non servono per trasportare oggetti."
+    sub_categories:
+      Sciarpe / Foulard: "Pezzi di tessuto da avvolgere intorno al collo o alle spalle."
+      Guanti: "Accessori per coprire e proteggere le mani, in pelle, lana o tessuto."
+      Cappelli / Berretti: "Copricapi di vario genere (da baseball, invernali, a tesa larga)."
+
+  Altro:
+    description: "Categoria residuale. Utilizzare ESCLUSIVAMENTE se il prodotto estratto non si avvicina a nessuna delle macro-categorie fornite."
+    sub_categories:
+      Generico: "Prodotto non identificato chiaramente o appartenente a una categoria merceologica non gestita (es. calzature, abbigliamento, gioielli)."
 
 sex:
   - "Uomo"
