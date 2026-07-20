@@ -34,8 +34,9 @@ class BaseRepository(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         db.refresh(db_obj)
         return db_obj
 
-    def delete(self, db: Session, *, id: str) -> ModelType:
-        obj = db.query(self.model).get(id)
-        db.delete(obj)
-        db.commit()
+    def delete(self, db: Session, *, id: str) -> Optional[ModelType]:
+        obj = db.get(self.model, id)
+        if obj:
+            db.delete(obj)
+            db.commit()
         return obj
