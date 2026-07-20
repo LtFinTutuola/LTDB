@@ -1,6 +1,6 @@
 venv/
 data/
-alembic/
+alembic/versions/
 _working_files/
 __pycache__/
 .DS_Store
