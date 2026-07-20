@@ -4,3 +4,5 @@ test_files/
 raw_data_extractions/
 api.yaml
 .DS_Store
+llm_usage_logs/
+case_limit_files/
