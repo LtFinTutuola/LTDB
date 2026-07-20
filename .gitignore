@@ -1,8 +1,6 @@
-.venv/
-markdown_files/
-test_files/
-raw_data_extractions/
-api.yaml
+venv/
+data/
+alembic/
+_working_files/
+__pycache__/
 .DS_Store
-llm_usage_logs/
-case_limit_files/

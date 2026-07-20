@@ -1,0 +1,2 @@
+db_connection_string: "sqlite:///{BASE_DIR}/data/ltdb_data.db"
+project_name: "LTDB"
