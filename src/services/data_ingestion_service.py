@@ -1,5 +1,7 @@
+import os
 import uuid
 from typing import Dict, Any, Optional
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from src.core.database import SessionLocal
 from src.agents.langgraph_engine import mock_extract_ddt_data
@@ -13,18 +15,20 @@ class InvalidFileFormatException(ValueError):
     """Raised when an unsupported or invalid file format is provided."""
     pass
 
-def validate_pdf_file(file_path: str) -> bool:
-    """Verifies that the target file is a PDF."""
-    return file_path.lower().endswith(".pdf")
-    
-def accept_job(db: Session, file_path: str) -> Optional[str]:
+def accept_job(db: Session, file_path: str) -> str:
     """
-    Checks if a job exists for the given file path in ACCEPTED status.
-    If yes, returns None. Otherwise creates a new job and returns the job_id.
+    Validates file, checks if a job exists for the given file path in ACCEPTED status.
+    If yes, raises HTTPException. Otherwise creates a new job and returns the job_id.
     """
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found on the server filesystem")
+        
+    if not file_path.lower().endswith(".pdf"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file format. Only PDF files (.pdf) are supported.")
+
     existing_job = staging_repo.get_job_by_status_and_path(db, status=JobStatus.ACCEPTED.value, file_path=file_path)
     if existing_job:
-        return None
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A job for this file is already in progress")
         
     job_id = str(uuid.uuid4())
     staging_repo.create_job(db, job_id=job_id, file_path=file_path)
@@ -43,24 +47,38 @@ async def process_and_stage_pdf(job_id: str, file_path: str) -> None:
     with SessionLocal() as db:
         staging_repo.update_job(db, job_id=job_id, status=JobStatus.COMPLETED.value, data=extracted_data)
 
-def get_job(db: Session, job_id: str) -> Optional[Dict[str, Any]]:
+def get_job(db: Session, job_id: str) -> Dict[str, Any]:
     """
     Retrieves the job data from the database.
     """
     job = staging_repo.get_job(db, job_id)
     if not job:
-        return None
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
         
     return {
-        "status": job.status,
+        "status": JobStatus(job.status).name,
         "data": job.data
     }
 
-def confirm_and_persist_staging(db: Session, staging_data: StagingConfirmationRequest) -> bool:
+def check_job_status(db: Session, job_id: str) -> None:
+    """
+    Checks the status of a job.
+    Raises exception if not found or not completed.
+    """
+    job = staging_repo.get_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    if job.status != JobStatus.COMPLETED.value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job is not yet completed")
+
+def confirm_and_persist_staging(db: Session, staging_data: StagingConfirmationRequest) -> None:
     """
     Orchestrates the creation of missing products and registration of warehouse movements.
     """
     try:
+        if not staging_data.items:
+             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No items to confirm")
+             
         for item in staging_data.items:
             # 1. Ensure product exists
             blueprint_id = get_or_create_product(
@@ -81,7 +99,8 @@ def confirm_and_persist_staging(db: Session, staging_data: StagingConfirmationRe
             
         # Commit at the end of the unit of work
         db.commit()
-        return True
-    except Exception as e:
-        db.rollback()
-        raise e
+    finally:
+        try:
+            staging_repo.delete_job(db, staging_data.job_id)
+        except Exception:
+            pass

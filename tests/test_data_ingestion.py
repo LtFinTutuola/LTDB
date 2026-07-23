@@ -33,7 +33,6 @@ def test_extract_endpoint(db_session, tmp_path, monkeypatch):
     )
     assert response.status_code == 202
     data = response.json()
-    assert data.get("status_code") == 202
     assert "job_id" in data
     job_id = data["job_id"]
     
@@ -45,7 +44,7 @@ def test_extract_endpoint(db_session, tmp_path, monkeypatch):
     response = client.get(f"/api/v1/ingestion/extract/{job_id}")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == JobStatus.COMPLETED.value
+    assert data["status"] == JobStatus.COMPLETED.name
     assert "items" in data["data"]
     assert len(data["data"]["items"]) == 2
     
@@ -70,14 +69,20 @@ def test_extract_endpoint_invalid_file_format(tmp_path, db_session):
         json={"file_path": str(dummy_txt)}
     )
     assert response.status_code == 400
-    assert "Invalid file format" in response.json()["message"]
+    assert "Invalid file format" in response.json()["detail"]
     app.dependency_overrides.clear()
 
 def test_confirm_endpoint(db_session, monkeypatch):
     app.dependency_overrides[get_db] = lambda: db_session
     
+    # Pre-create a completed job in the database
+    job_id = "test_job_123"
+    job = StagingArea(id=job_id, file_path="some/file.pdf", status=JobStatus.COMPLETED.value, data={})
+    db_session.add(job)
+    db_session.commit()
+    
     payload = {
-        "job_id": "test_job_123",
+        "job_id": job_id,
         "items": [
             {
                 "supplier_code": "TEST-CODE-001",
@@ -109,5 +114,84 @@ def test_confirm_endpoint(db_session, monkeypatch):
     
     movements = db_session.query(ArticleMovement).all()
     assert len(movements) == 5
+    
+    # Ensure the job was deleted from the staging area
+    deleted_job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
+    assert deleted_job is None
+    
+    app.dependency_overrides.clear()
+
+def test_confirm_endpoint_job_not_found(db_session):
+    app.dependency_overrides[get_db] = lambda: db_session
+    
+    payload = {
+        "job_id": "non_existent_job",
+        "items": []
+    }
+    
+    response = client.post(
+        "/api/v1/ingestion/confirm",
+        json=payload
+    )
+    assert response.status_code == 404
+    assert "Job not found" in response.json()["detail"]
+    app.dependency_overrides.clear()
+
+def test_confirm_endpoint_job_not_completed(db_session):
+    app.dependency_overrides[get_db] = lambda: db_session
+    
+    job_id = "test_job_accepted"
+    job = StagingArea(id=job_id, file_path="some/file.pdf", status=JobStatus.ACCEPTED.value, data={})
+    db_session.add(job)
+    db_session.commit()
+    
+    payload = {
+        "job_id": job_id,
+        "items": []
+    }
+    
+    response = client.post(
+        "/api/v1/ingestion/confirm",
+        json=payload
+    )
+    assert response.status_code == 400
+    assert "Job is not yet completed" in response.json()["detail"]
+    app.dependency_overrides.clear()
+
+def test_confirm_endpoint_persistence_failure(db_session, monkeypatch):
+    app.dependency_overrides[get_db] = lambda: db_session
+    
+    job_id = "test_job_fail"
+    job = StagingArea(id=job_id, file_path="some/file.pdf", status=JobStatus.COMPLETED.value, data={})
+    db_session.add(job)
+    db_session.commit()
+    
+    # Monkeypatch to force an exception during confirm_and_persist_staging
+    def mock_raise(*args, **kwargs):
+        raise Exception("Mock DB Failure")
+    
+    monkeypatch.setattr("src.services.data_ingestion_service.get_or_create_product", mock_raise)
+    
+    payload = {
+        "job_id": job_id,
+        "items": [
+            {
+                "supplier_code": "TEST-CODE-001",
+                "description": "Test Item",
+                "quantity": 5
+            }
+        ]
+    }
+    
+    response = client.post(
+        "/api/v1/ingestion/confirm",
+        json=payload
+    )
+    assert response.status_code == 500
+    assert "Mock DB Failure" in response.json()["detail"]
+    
+    # Ensure the job was still deleted from the staging area in the finally block
+    deleted_job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
+    assert deleted_job is None
     
     app.dependency_overrides.clear()

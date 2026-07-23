@@ -13,9 +13,9 @@ class DdtExtractionResponse(BaseModel):
     items: List[DdtItemSchema]
 
 class JobStatusResponse(BaseModel):
-    status: int
+    status: str
     data: Optional[DdtExtractionResponse] = None
 
 class StagingConfirmationRequest(BaseModel):
     job_id: str
-    items: List[DdtItemSchema]
+    items: Optional[List[DdtItemSchema]] = None
