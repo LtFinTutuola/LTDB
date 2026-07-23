@@ -14,8 +14,15 @@ with open(config_path, "r") as f:
 class Settings(BaseSettings):
     PROJECT_NAME: str = yaml_config.get("project_name", "")
     
+    # Server configuration
+    API_HOST: str = yaml_config.get("api_host", "0.0.0.0")
+    API_PORT: int = int(yaml_config.get("api_port", 8000))
+    
     # Database
     SQLITE_URL: str = yaml_config.get("db_connection_string", "").replace("{BASE_DIR}", str(BASE_DIR))
+    
+    # Staging Storage
+    STAGING_DIRECTORY: str = yaml_config.get("staging_directory", "").replace("{BASE_DIR}", str(BASE_DIR))
     
     class Config:
         env_file = ".env"

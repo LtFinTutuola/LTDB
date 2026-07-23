@@ -21,7 +21,7 @@ class ArticleRepository(BaseRepository[Article, ArticleCreate, ArticleCreate]):
         )
         return result or 0
 
-    def add_movement(self, db: Session, movement_in: StockUpdate) -> ArticleMovement:
+    def add_movement(self, db: Session, movement_in: StockUpdate, commit_changes: bool = True) -> ArticleMovement:
         """
         Adds a new movement to the append-only ledger.
         """
@@ -31,8 +31,11 @@ class ArticleRepository(BaseRepository[Article, ArticleCreate, ArticleCreate]):
             notes=movement_in.notes
         )
         db.add(db_movement)
-        db.commit()
-        db.refresh(db_movement)
+        if commit_changes:
+            db.commit()
+            db.refresh(db_movement)
+        else:
+            db.flush()
         return db_movement
 
 wms_repo = ArticleRepository()

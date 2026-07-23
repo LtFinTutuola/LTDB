@@ -1,2 +1,7 @@
 db_connection_string: "sqlite:///{BASE_DIR}/data/ltdb_data.db"
 project_name: "LTDB"
+
+api_host: "0.0.0.0"
+api_port: 8000
+
+staging_directory: "{BASE_DIR}/data/staging"

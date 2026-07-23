@@ -17,26 +17,38 @@ class BaseRepository(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
     def get_all(self, db: Session, skip: int = 0, limit: int = 100) -> List[ModelType]:
         return db.query(self.model).offset(skip).limit(limit).all()
 
-    def create(self, db: Session, *, obj_in: CreateSchemaType) -> ModelType:
+    def create(self, db: Session, *, obj_in: CreateSchemaType, commit_changes: bool = True) -> ModelType:
         obj_in_data = obj_in.model_dump()
         db_obj = self.model(**obj_in_data)
         db.add(db_obj)
-        db.commit()
-        db.refresh(db_obj)
+        if commit_changes:
+            db.commit()
+            db.refresh(db_obj)
+        else:
+            db.flush()
         return db_obj
 
-    def update(self, db: Session, *, db_obj: ModelType, obj_in: UpdateSchemaType) -> ModelType:
+    def update(self, db: Session, *, db_obj: ModelType, obj_in: UpdateSchemaType, commit_changes: bool = True) -> ModelType:
         obj_data = obj_in.model_dump(exclude_unset=True)
         for field, value in obj_data.items():
             setattr(db_obj, field, value)
         db.add(db_obj)
-        db.commit()
-        db.refresh(db_obj)
+        if commit_changes:
+            db.commit()
+            db.refresh(db_obj)
+        else:
+            db.flush()
         return db_obj
 
-    def delete(self, db: Session, *, id: str) -> Optional[ModelType]:
+    def delete(self, db: Session, *, id: str, commit_changes: bool = True) -> Optional[ModelType]:
         obj = db.get(self.model, id)
         if obj:
             db.delete(obj)
-            db.commit()
+            if commit_changes:
+                db.commit()
+            else:
+                db.flush()
         return obj
+
+    def commit(self, db: Session) -> None:
+        db.commit()
