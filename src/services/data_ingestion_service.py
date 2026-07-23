@@ -1,11 +1,13 @@
 import uuid
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
-from src.infrastructure.file_storage import save_staging_file, read_staging_file
+from src.core.database import SessionLocal
 from src.agents.langgraph_engine import mock_extract_ddt_data
 from src.schemas.data_ingestion import StagingConfirmationRequest
 from src.services.pim_service import get_or_create_product
 from src.services.wms_service import register_inbound_movement
+from src.repositories import staging_repo
+from src.models.staging import JobStatus
 
 class InvalidFileFormatException(ValueError):
     """Raised when an unsupported or invalid file format is provided."""
@@ -15,27 +17,44 @@ def validate_pdf_file(file_path: str) -> bool:
     """Verifies that the target file is a PDF."""
     return file_path.lower().endswith(".pdf")
     
-    
-def process_and_stage_pdf(file_path: str) -> str:
+def accept_job(db: Session, file_path: str) -> Optional[str]:
     """
-    Extracts data using the mock AI agent and saves it to a staging file.
-    Returns the job_id.
+    Checks if a job exists for the given file path in ACCEPTED status.
+    If yes, returns None. Otherwise creates a new job and returns the job_id.
     """
-
+    existing_job = staging_repo.get_job_by_status_and_path(db, status=JobStatus.ACCEPTED.value, file_path=file_path)
+    if existing_job:
+        return None
+        
     job_id = str(uuid.uuid4())
-    extracted_data = mock_extract_ddt_data(file_path)
+    staging_repo.create_job(db, job_id=job_id, file_path=file_path)
+    return job_id
+
+async def process_and_stage_pdf(job_id: str, file_path: str) -> None:
+    """
+    Extracts data using the mock AI agent and updates the staging DB record.
+    Runs asynchronously in the background.
+    """
+    extracted_data = await mock_extract_ddt_data(file_path)
     
     # Add job_id to the data
     extracted_data["job_id"] = job_id
     
-    save_staging_file(job_id, extracted_data)
-    return job_id
+    with SessionLocal() as db:
+        staging_repo.update_job(db, job_id=job_id, status=JobStatus.COMPLETED.value, data=extracted_data)
 
-def retrieve_staged_data(job_id: str) -> Optional[Dict[str, Any]]:
+def get_job(db: Session, job_id: str) -> Optional[Dict[str, Any]]:
     """
-    Reads staging data and deletes the file.
+    Retrieves the job data from the database.
     """
-    return read_staging_file(job_id)
+    job = staging_repo.get_job(db, job_id)
+    if not job:
+        return None
+        
+    return {
+        "status": job.status,
+        "data": job.data
+    }
 
 def confirm_and_persist_staging(db: Session, staging_data: StagingConfirmationRequest) -> bool:
     """

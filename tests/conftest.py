@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.models.base import Base
 # Import all model modules so every table is registered on Base.metadata
-from src.models import pim, wms, sales  # noqa: F401
+from src.models import pim, wms, sales, staging  # noqa: F401
 
 # Register the test logger plugin hooks
 from tests.test_logger_plugin import pytest_runtest_makereport, pytest_sessionfinish  # noqa: F401
@@ -22,9 +22,11 @@ def db_session():
     Yields a clean SQLAlchemy Session backed by an in-memory SQLite database.
     Tables are created before and dropped after every test function.
     """
+    from sqlalchemy.pool import StaticPool
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
 
     # Mirror the production PRAGMAs

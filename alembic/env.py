@@ -26,7 +26,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from src.core.config import settings
 from src.models.base import Base
 # Import all models so they are registered with Base.metadata
-from src.models import pim, wms, sales
+from src.models import pim, wms, sales, staging
 
 config.set_main_option("sqlalchemy.url", settings.SQLITE_URL)
 target_metadata = Base.metadata

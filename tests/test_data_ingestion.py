@@ -1,13 +1,28 @@
 import pytest
 import os
+import asyncio
 from fastapi.testclient import TestClient
 from src.main import app
-from src.core.config import settings
+from src.core.database import get_db
+from src.models.staging import StagingArea, JobStatus
 
 client = TestClient(app)
 
+class MockSessionLocal:
+    def __init__(self, session):
+        self.session = session
+    def __enter__(self):
+        return self.session
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+async def mock_sleep(seconds):
+    pass
+
 def test_extract_endpoint(db_session, tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "STAGING_DIRECTORY", str(tmp_path / "staging"))
+    app.dependency_overrides[get_db] = lambda: db_session
+    monkeypatch.setattr("src.services.data_ingestion_service.SessionLocal", lambda: MockSessionLocal(db_session))
+    monkeypatch.setattr("asyncio.sleep", mock_sleep)
     
     dummy_pdf = tmp_path / "test_doc.pdf"
     dummy_pdf.write_text("dummy content")
@@ -22,25 +37,31 @@ def test_extract_endpoint(db_session, tmp_path, monkeypatch):
     assert "job_id" in data
     job_id = data["job_id"]
     
-    staging_file = tmp_path / "staging" / f"{job_id}.json"
-    assert staging_file.exists()
+    # Verify staging area has job
+    job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
+    assert job is not None
+    assert job.status == JobStatus.COMPLETED.value
     
     response = client.get(f"/api/v1/ingestion/extract/{job_id}")
     assert response.status_code == 200
     data = response.json()
-    assert "items" in data
-    assert len(data["items"]) == 2
+    assert data["status"] == JobStatus.COMPLETED.value
+    assert "items" in data["data"]
+    assert len(data["data"]["items"]) == 2
     
-    assert not staging_file.exists()
+    app.dependency_overrides.clear()
 
-def test_extract_endpoint_file_not_found():
+def test_extract_endpoint_file_not_found(db_session):
+    app.dependency_overrides[get_db] = lambda: db_session
     response = client.post(
         "/api/v1/ingestion/extract",
         json={"file_path": "/nonexistent/path/doc.pdf"}
     )
     assert response.status_code == 404
+    app.dependency_overrides.clear()
 
-def test_extract_endpoint_invalid_file_format(tmp_path):
+def test_extract_endpoint_invalid_file_format(tmp_path, db_session):
+    app.dependency_overrides[get_db] = lambda: db_session
     dummy_txt = tmp_path / "test_doc.txt"
     dummy_txt.write_text("invalid format content")
     
@@ -50,8 +71,11 @@ def test_extract_endpoint_invalid_file_format(tmp_path):
     )
     assert response.status_code == 400
     assert "Invalid file format" in response.json()["message"]
+    app.dependency_overrides.clear()
 
-def test_confirm_endpoint(db_session):
+def test_confirm_endpoint(db_session, monkeypatch):
+    app.dependency_overrides[get_db] = lambda: db_session
+    
     payload = {
         "job_id": "test_job_123",
         "items": [
@@ -63,19 +87,10 @@ def test_confirm_endpoint(db_session):
         ]
     }
     
-    from src.core.database import get_db
-    app.dependency_overrides[get_db] = lambda: db_session
-    
-    from sqlalchemy import text
-    tables = db_session.execute(text("SELECT name FROM sqlite_master WHERE type='table';")).fetchall()
-    print("TABLES:", tables)
-    
     response = client.post(
         "/api/v1/ingestion/confirm",
         json=payload
     )
-    if response.status_code != 200:
-        print(response.json())
     assert response.status_code == 200
     assert response.json()["status"] == "success"
     
