@@ -6,4 +6,4 @@ __pycache__/
 .DS_Store
 .agents/
 test_logs/
-src/gemini.yaml
+src/agents/gemini.yaml

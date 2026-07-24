@@ -17,16 +17,16 @@ from google import genai
 from google.genai import types
 
 
-# Path to credentials — sibling of this file's parent package
-_GEMINI_YAML_PATH = Path(__file__).resolve().parent.parent / "gemini.yaml"
+# Path to credentials — in the same directory as this file
+_GEMINI_YAML_PATH = Path(__file__).resolve().parent / "gemini.yaml"
 
 
 def _load_gemini_config() -> dict:
-    """Load api_key and endpoint_url from src/gemini.yaml."""
+    """Load api_key and endpoint_url from src/agents/gemini.yaml."""
     if not _GEMINI_YAML_PATH.exists():
         raise FileNotFoundError(
             f"Gemini config file not found at '{_GEMINI_YAML_PATH}'. "
-            "Please create src/gemini.yaml with 'api_key' and 'endpoint_url' fields."
+            "Please create src/agents/gemini.yaml with 'api_key' and 'endpoint_url' fields."
         )
     with open(_GEMINI_YAML_PATH, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
