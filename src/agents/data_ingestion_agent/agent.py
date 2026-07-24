@@ -51,6 +51,55 @@ from src.agents.data_ingestion_agent.edges.short_circuits import (
 def _build_graph() -> StateGraph:
     """Construct and compile the LangGraph state machine."""
     # ------------------------------------------------------------------ #
+    # Item enrichment sub-graph (ItemState)                               #
+    # ------------------------------------------------------------------ #
+    item_graph = StateGraph(ItemState)
+    item_graph.add_node("web_search_node", web_search_node)
+    item_graph.add_node("macro_category_node", macro_category_node)
+    item_graph.add_node("sub_category_node", sub_category_node)
+    item_graph.add_node("fixed_fields_node", fixed_fields_node)
+    item_graph.add_node("free_form_node", free_form_node)
+    item_graph.add_node("item_merge_node", item_merge_node)
+
+    item_graph.add_edge(START, "web_search_node")
+    item_graph.add_conditional_edges(
+        "web_search_node",
+        should_run_macro_category,
+        {
+            "macro_category_node": "macro_category_node",
+            "sub_category_node": "sub_category_node",
+        },
+    )
+    item_graph.add_conditional_edges(
+        "macro_category_node",
+        should_run_sub_category,
+        {
+            "sub_category_node": "sub_category_node",
+            "fixed_fields_node": "fixed_fields_node",
+        },
+    )
+    item_graph.add_edge("sub_category_node", "fixed_fields_node")
+    item_graph.add_edge("fixed_fields_node", "free_form_node")
+    item_graph.add_edge("free_form_node", "item_merge_node")
+    item_graph.add_edge("item_merge_node", END)
+    
+    item_subgraph = item_graph.compile()
+
+    async def run_item_subgraph(payload: dict) -> dict:
+        """Wrapper to invoke the item subgraph and filter the output.
+        This prevents the subgraph from trying to concurrently update non-reducer
+        keys (like 'brand') in the parent GraphState.
+        """
+        result = await item_subgraph.ainvoke(payload)
+        # Debug why enriched_items might be empty
+        enriched = result.get("enriched_items", [])
+        print(f"[run_item_subgraph] Got {len(enriched)} enriched items. Result keys: {list(result.keys())}")
+        return {
+            "enriched_items": enriched,
+            "warnings": result.get("warnings", []),
+        }
+
+    # ------------------------------------------------------------------ #
     # Main pipeline graph (GraphState)                                     #
     # ------------------------------------------------------------------ #
     main_graph = StateGraph(GraphState)
@@ -58,20 +107,9 @@ def _build_graph() -> StateGraph:
     main_graph.add_node("ingestion_node", ingestion_node)
     main_graph.add_node("cleanup_node", cleanup_node)
     main_graph.add_node("extraction_node", extraction_node)
-
-    # ------------------------------------------------------------------ #
-    # Item enrichment sub-graph (ItemState — one instance per Send())     #
-    # ------------------------------------------------------------------ #
-    # LangGraph's Send() API instantiates parallel executions of a        #
-    # separate sub-graph. We register each per-item node directly on the  #
-    # main graph — they run in their own forked state branches.           #
-    # ------------------------------------------------------------------ #
-    main_graph.add_node("web_search_node", web_search_node)
-    main_graph.add_node("macro_category_node", macro_category_node)
-    main_graph.add_node("sub_category_node", sub_category_node)
-    main_graph.add_node("fixed_fields_node", fixed_fields_node)
-    main_graph.add_node("free_form_node", free_form_node)
-    main_graph.add_node("item_merge_node", item_merge_node)
+    
+    # Add the wrapper node in the main graph
+    main_graph.add_node("run_item_subgraph", run_item_subgraph)
 
     # ------------------------------------------------------------------ #
     # Edges — main pipeline                                               #
@@ -80,40 +118,13 @@ def _build_graph() -> StateGraph:
     main_graph.add_edge("ingestion_node", "cleanup_node")
     main_graph.add_edge("cleanup_node", "extraction_node")
 
-    # Fan-out: one Send() per base_item → launches parallel item branches
-    main_graph.add_conditional_edges("extraction_node", fan_out_router, ["web_search_node"])
-
-    # ------------------------------------------------------------------ #
-    # Edges — per-item sub-graph                                          #
-    # ------------------------------------------------------------------ #
-    # Short-circuit after web search: skip macro if only 1 option exists
-    main_graph.add_conditional_edges(
-        "web_search_node",
-        should_run_macro_category,
-        {
-            "macro_category_node": "macro_category_node",
-            "sub_category_node": "sub_category_node",
-        },
-    )
-
-    # Short-circuit after macro: skip sub if only 1 option exists
-    main_graph.add_conditional_edges(
-        "macro_category_node",
-        should_run_sub_category,
-        {
-            "sub_category_node": "sub_category_node",
-            "fixed_fields_node": "fixed_fields_node",
-        },
-    )
-
-    main_graph.add_edge("sub_category_node", "fixed_fields_node")
-    main_graph.add_edge("fixed_fields_node", "free_form_node")
-    main_graph.add_edge("free_form_node", "item_merge_node")
-
-    # Fan-in: item_merge_node writes {"enriched_items": [item]} — the
-    # operator.add reducer on GraphState.enriched_items accumulates all
-    # parallel results. After all Send() branches finish, the graph ends.
-    main_graph.add_edge("item_merge_node", END)
+    # Fan-out: one Send() per base_item → launches run_item_subgraph
+    main_graph.add_conditional_edges("extraction_node", fan_out_router, ["run_item_subgraph"])
+    
+    # Fan-in automatically occurs as the output of each run_item_subgraph
+    # updates the GraphState. Since run_item_subgraph returns
+    # `enriched_items` (a list of 1), GraphState's operator.add reducer accumulates them.
+    main_graph.add_edge("run_item_subgraph", END)
 
     return main_graph.compile()
 
@@ -170,7 +181,10 @@ class DataIngestionAgent(BaseAgent):
                 output=None,
             ) from exc
 
+        print(f"DEBUG FINAL STATE KEYS: {final_state.keys()}")
+        print(f"DEBUG ENRICHED ITEMS: {final_state.get('enriched_items')}")
+
         return {
-            "items": final_state.enriched_items,
-            "warnings": final_state.warnings,
+            "items": final_state.get("enriched_items", []),
+            "warnings": final_state.get("warnings", []),
         }

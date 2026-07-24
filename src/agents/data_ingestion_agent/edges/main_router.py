@@ -28,11 +28,11 @@ def fan_out_router(state: GraphState) -> List[Send]:
     """
     sends: List[Send] = []
     for item in state.base_items:
-        item_state = ItemState(
-            item=item,
-            brand=state.brand,
-            categories=state.categories,
-            allowed_sex=state.allowed_sex,
-        )
-        sends.append(Send("web_search_node", item_state))
+        payload = {
+            "item": item,
+            "brand": state.brand,
+            "categories": state.categories,
+            "allowed_sex": state.allowed_sex,
+        }
+        sends.append(Send("run_item_subgraph", payload))
     return sends

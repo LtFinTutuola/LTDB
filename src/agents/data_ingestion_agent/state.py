@@ -59,7 +59,9 @@ class GraphState(BaseModel):
     enriched_items: Annotated[List[dict], operator.add] = Field(
         default_factory=list, description="Final enriched items after Stage 3 processing."
     )
-    warnings: List[str] = Field(default_factory=list, description="Non-fatal per-item warnings.")
+    warnings: Annotated[List[str], operator.add] = Field(
+        default_factory=list, description="Non-fatal per-item warnings."
+    )
 
 
 class ItemState(BaseModel):
@@ -98,3 +100,9 @@ class ItemState(BaseModel):
 
     # --- Non-fatal warnings accumulated during this item's processing ---
     warnings: List[str] = Field(default_factory=list, description="Non-fatal warnings for this item.")
+
+    # --- Output to parent graph ---
+    enriched_items: List[dict] = Field(
+        default_factory=list, 
+        description="The final merged item wrapped in a list, so it can be accumulated by the parent GraphState."
+    )
