@@ -236,14 +236,15 @@ class TestArticleBlueprintCrud:
         assert found.supplier_code == "UNIQUE-CODE"
 
     def test_blueprint_nullable_fields(self, db_session):
-        """ean, category_id, colors, materials are all nullable."""
-        brand, _ = self._make_brand_and_category(db_session)
+        """ean, colors, materials are all nullable."""
+        brand, cat = self._make_brand_and_category(db_session)
         repo = BaseRepository(ArticleBlueprint)
 
         bp = repo.create(
             db_session,
             obj_in=ArticleBlueprintCreate(
                 brand_id=brand.id,
+                category_id=cat.id,
                 supplier_code="SUP-003",
                 description="Minimal",
                 extended_description="Minimal desc",
@@ -251,6 +252,6 @@ class TestArticleBlueprintCrud:
             ),
         )
         assert bp.ean is None
-        assert bp.category_id is None
+        assert bp.category_id is not None
         assert bp.colors is None
         assert bp.materials is None

@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Body
 from sqlalchemy.orm import Session
 from src.core.database import get_db
 from src.schemas.data_ingestion import ExtractionRequest, JobStatusResponse, StagingConfirmationRequest
@@ -17,7 +18,7 @@ def extract_data(request: ExtractionRequest, background_tasks: BackgroundTasks, 
             data_ingestion_service.process_and_stage_pdf,
             job_id,
             request.file_path,
-            request.brand,
+            request.brand_id,
         )
         return {
             "job_id": job_id,
@@ -48,14 +49,18 @@ def get_extracted_data(job_id: str, db: Session = Depends(get_db)):
             detail=str(e) if str(e).strip() else "unknown server error"
         )
 
-@router.post("/confirm", status_code=status.HTTP_200_OK)
-def confirm_extraction(request: StagingConfirmationRequest, db: Session = Depends(get_db)):
+@router.post("/confirm/{job_id}", status_code=status.HTTP_200_OK)
+def confirm_extraction(
+    job_id: str,
+    request: Optional[StagingConfirmationRequest] = Body(None),
+    db: Session = Depends(get_db)
+):
     """
     Confirms the extraction and persists to database (PIM and WMS).
     """
     try:
-        data_ingestion_service.check_job_status(db, request.job_id)
-        data_ingestion_service.confirm_and_persist_staging(db, request)
+        data_ingestion_service.check_job_status(db, job_id)
+        data_ingestion_service.confirm_and_persist_staging(db, job_id, request)
         return {"status": "success", "message": "Data successfully ingested"}
     except HTTPException as e:
         raise e

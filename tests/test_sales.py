@@ -26,12 +26,17 @@ def _create_article(db) -> Article:
     """Creates the full chain: Brand → Blueprint, Supplier → Batch → Article."""
     uid = _uuid.uuid4().hex[:8]
 
+    from src.models.pim import Category
     brand = Brand(name=f"SaleBrand-{uid}")
     db.add(brand)
+    
+    category = Category(name=f"SaleCat-{uid}", description="Sale category")
+    db.add(category)
     db.flush()
 
     bp = ArticleBlueprint(
         brand_id=brand.id,
+        category_id=category.id,
         supplier_code=f"SALE-TEST-{uid}",
         description="Sale Item",
         extended_description="For sales tests",

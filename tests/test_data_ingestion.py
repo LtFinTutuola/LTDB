@@ -79,12 +79,19 @@ def test_extract_endpoint(db_session, tmp_path, monkeypatch):
         },
     )
 
+    # Seed a brand for the test
+    from src.models.pim import Brand
+    test_brand = Brand(name="Samsonite")
+    db_session.add(test_brand)
+    db_session.commit()
+    brand_id_str = str(test_brand.id)
+
     dummy_pdf = tmp_path / "test_doc.pdf"
     dummy_pdf.write_text("dummy content")
 
     response = client.post(
         "/api/v1/ingestion/extract",
-        json={"file_path": str(dummy_pdf), "brand": "Samsonite"},
+        json={"file_path": str(dummy_pdf), "brand_id": brand_id_str},
     )
     assert response.status_code == 202
     data = response.json()
@@ -110,7 +117,7 @@ def test_extract_endpoint_file_not_found(db_session):
     app.dependency_overrides[get_db] = lambda: db_session
     response = client.post(
         "/api/v1/ingestion/extract",
-        json={"file_path": "/nonexistent/path/doc.pdf", "brand": "Samsonite"},
+        json={"file_path": "/nonexistent/path/doc.pdf", "brand_id": "00000000-0000-0000-0000-000000000000"},
     )
     assert response.status_code == 404
     app.dependency_overrides.clear()
@@ -123,7 +130,7 @@ def test_extract_endpoint_invalid_file_format(tmp_path, db_session):
 
     response = client.post(
         "/api/v1/ingestion/extract",
-        json={"file_path": str(dummy_txt), "brand": "Samsonite"},
+        json={"file_path": str(dummy_txt), "brand_id": "00000000-0000-0000-0000-000000000000"},
     )
     assert response.status_code == 400
     assert "Invalid file format" in response.json()["detail"]
@@ -131,14 +138,14 @@ def test_extract_endpoint_invalid_file_format(tmp_path, db_session):
 
 
 def test_extract_endpoint_missing_brand(tmp_path, db_session):
-    """Omitting the brand field should return a 422 Unprocessable Entity."""
+    """Omitting the brand_id field should return a 422 Unprocessable Entity."""
     app.dependency_overrides[get_db] = lambda: db_session
     dummy_pdf = tmp_path / "test_doc.pdf"
     dummy_pdf.write_text("dummy content")
 
     response = client.post(
         "/api/v1/ingestion/extract",
-        json={"file_path": str(dummy_pdf)},  # missing brand
+        json={"file_path": str(dummy_pdf)},  # missing brand_id
     )
     assert response.status_code == 422
     app.dependency_overrides.clear()
@@ -147,27 +154,40 @@ def test_extract_endpoint_missing_brand(tmp_path, db_session):
 def test_confirm_endpoint(db_session, monkeypatch):
     app.dependency_overrides[get_db] = lambda: db_session
 
-    # Pre-create a completed job in the database
+    from src.models.pim import Brand, Category
+    dummy_brand = Brand(name="DUMMY_BRAND")
+    db_session.add(dummy_brand)
+    
+    dummy_category = Category(name="Borse", description="Borse da donna")
+    db_session.add(dummy_category)
+    db_session.commit()
+
+    # Pre-create a completed job in the database with brand_id in job.data
     job_id = "test_job_123"
-    job = StagingArea(id=job_id, file_path="some/file.pdf", status=JobStatus.COMPLETED.value, data={})
+    job = StagingArea(
+        id=job_id,
+        file_path="some/file.pdf",
+        status=JobStatus.COMPLETED.value,
+        data={
+            "brand_id": str(dummy_brand.id),
+            "items": [
+                {
+                    "VendorCode": "TEST-CODE-001",
+                    "product_short_description": "Test Item",
+                    "Quantity": 5,
+                    "category": {
+                        "id": str(dummy_category.id),
+                        "description": dummy_category.name
+                    }
+                }
+            ]
+        }
+    )
     db_session.add(job)
     db_session.commit()
 
-    payload = {
-        "job_id": job_id,
-        "items": [
-            {
-                "supplier_code": "TEST-CODE-001",
-                "description": "Test Item",
-                "quantity": 5
-            }
-        ]
-    }
-
-    response = client.post(
-        "/api/v1/ingestion/confirm",
-        json=payload
-    )
+    # Confirm with empty payload (defaults to saved job data)
+    response = client.post(f"/api/v1/ingestion/confirm/{job_id}")
     assert response.status_code == 200
     assert response.json()["status"] == "success"
 
@@ -197,15 +217,7 @@ def test_confirm_endpoint(db_session, monkeypatch):
 def test_confirm_endpoint_job_not_found(db_session):
     app.dependency_overrides[get_db] = lambda: db_session
 
-    payload = {
-        "job_id": "non_existent_job",
-        "items": []
-    }
-
-    response = client.post(
-        "/api/v1/ingestion/confirm",
-        json=payload
-    )
+    response = client.post("/api/v1/ingestion/confirm/non_existent_job")
     assert response.status_code == 404
     assert "Job not found" in response.json()["detail"]
     app.dependency_overrides.clear()
@@ -219,15 +231,7 @@ def test_confirm_endpoint_job_not_completed(db_session):
     db_session.add(job)
     db_session.commit()
 
-    payload = {
-        "job_id": job_id,
-        "items": []
-    }
-
-    response = client.post(
-        "/api/v1/ingestion/confirm",
-        json=payload
-    )
+    response = client.post(f"/api/v1/ingestion/confirm/{job_id}")
     assert response.status_code == 400
     assert "Job is not yet completed" in response.json()["detail"]
     app.dependency_overrides.clear()
@@ -236,8 +240,34 @@ def test_confirm_endpoint_job_not_completed(db_session):
 def test_confirm_endpoint_persistence_failure(db_session, monkeypatch):
     app.dependency_overrides[get_db] = lambda: db_session
 
+    from src.models.pim import Brand, Category
+    dummy_brand = Brand(name="DUMMY_BRAND")
+    db_session.add(dummy_brand)
+    
+    dummy_category = Category(name="Borse", description="Borse da donna")
+    db_session.add(dummy_category)
+    db_session.commit()
+
     job_id = "test_job_fail"
-    job = StagingArea(id=job_id, file_path="some/file.pdf", status=JobStatus.COMPLETED.value, data={})
+    job = StagingArea(
+        id=job_id,
+        file_path="some/file.pdf",
+        status=JobStatus.COMPLETED.value,
+        data={
+            "brand_id": str(dummy_brand.id),
+            "items": [
+                {
+                    "VendorCode": "TEST-CODE-001",
+                    "product_short_description": "Test Item",
+                    "Quantity": 5,
+                    "category": {
+                        "id": str(dummy_category.id),
+                        "description": dummy_category.name
+                    }
+                }
+            ]
+        }
+    )
     db_session.add(job)
     db_session.commit()
 
@@ -247,22 +277,15 @@ def test_confirm_endpoint_persistence_failure(db_session, monkeypatch):
 
     monkeypatch.setattr("src.services.data_ingestion_service.get_or_create_product", mock_raise)
 
-    payload = {
-        "job_id": job_id,
-        "items": [
-            {
-                "supplier_code": "TEST-CODE-001",
-                "description": "Test Item",
-                "quantity": 5
-            }
-        ]
-    }
-
-    response = client.post(
-        "/api/v1/ingestion/confirm",
-        json=payload
-    )
+    response = client.post(f"/api/v1/ingestion/confirm/{job_id}")
     assert response.status_code == 500
+    assert "Mock DB Failure" in response.json()["detail"]
+
+    # Ensure the job was still deleted from the staging area in the finally block
+    deleted_job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
+    assert deleted_job is None
+
+    app.dependency_overrides.clear()
     assert "Mock DB Failure" in response.json()["detail"]
 
     # Ensure the job was still deleted from the staging area in the finally block

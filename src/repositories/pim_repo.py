@@ -31,13 +31,13 @@ class CategoryRepository:
         }
     """
 
-    def get_brand_hierarchy(self, db: Session, brand_name: str) -> dict:
+    def get_brand_hierarchy(self, db: Session, brand_id: str) -> dict:
         """
         Build the complete category hierarchy for a given brand.
 
         Args:
             db:         SQLAlchemy session.
-            brand_name: The brand name string from the extraction request.
+            brand_id:   The brand ID string from the extraction request.
 
         Returns:
             Nested dict mapping macro-category names → CategoryNode-compatible dicts.
@@ -50,14 +50,14 @@ class CategoryRepository:
             .options(
                 joinedload(Brand.categories).joinedload(Category.subcategories)
             )
-            .filter(Brand.name == brand_name)
+            .filter(Brand.id == brand_id)
             .first()
         )
         if not brand:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Brand '{brand_name}' not found in the database. "
-                       "Please ensure the brand hierarchy has been seeded.",
+                detail=f"Brand ID '{brand_id}' not found in the database. "
+                       "Please ensure the brand hierarchy has been seeded."
             )
 
         hierarchy: dict = {}

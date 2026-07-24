@@ -3,20 +3,24 @@ from typing import List, Optional
 
 class ExtractionRequest(BaseModel):
     file_path: str = Field(..., description="Absolute path to the PDF file on the server filesystem")
-    brand: str = Field(..., description="Brand name for the shipment document (must exist in the database)")
+    brand_id: str = Field(..., description="Brand ID for the shipment document (must exist in the database)")
 
 class DdtItemSchema(BaseModel):
     supplier_code: str
     description: str
     quantity: int
 
+class CategoryRefSchema(BaseModel):
+    id: str
+    description: str
+
 class EnrichedItemSchema(BaseModel):
     """Full enriched item schema returned by the DataIngestionAgent."""
-    VendorCode: Optional[str] = None
-    Barcode: Optional[str] = None
-    Quantity: Optional[int] = None
-    category: Optional[str] = None
-    sub_category: Optional[str] = None
+    vendor_code: Optional[str] = Field(None, alias="VendorCode")
+    barcode: Optional[str] = Field(None, alias="Barcode")
+    quantity: Optional[int] = Field(None, alias="Quantity")
+    category: Optional[CategoryRefSchema] = None
+    sub_category: Optional[CategoryRefSchema] = None
     sex: Optional[str] = None
     materials: Optional[List[str]] = None
     colors: Optional[List[str]] = None
@@ -35,5 +39,4 @@ class JobStatusResponse(BaseModel):
     data: Optional[dict] = None
 
 class StagingConfirmationRequest(BaseModel):
-    job_id: str
-    items: Optional[List[DdtItemSchema]] = None
+    items: Optional[List[EnrichedItemSchema]] = None

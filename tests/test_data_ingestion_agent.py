@@ -436,7 +436,7 @@ class TestCategoryRepository:
         db_session.commit()
 
         repo = CategoryRepository()
-        hierarchy = repo.get_brand_hierarchy(db_session, "TestBrand")
+        hierarchy = repo.get_brand_hierarchy(db_session, str(brand.id))
 
         assert "Borse" in hierarchy
         assert hierarchy["Borse"]["description"] == "Borse da donna"
@@ -448,10 +448,10 @@ class TestCategoryRepository:
 
         repo = CategoryRepository()
         with pytest.raises(HTTPException) as exc_info:
-            repo.get_brand_hierarchy(db_session, "NonExistentBrand")
+            repo.get_brand_hierarchy(db_session, "00000000-0000-0000-0000-000000000000")
 
         assert exc_info.value.status_code == 404
-        assert "NonExistentBrand" in exc_info.value.detail
+        assert "00000000-0000-0000-0000-000000000000" in exc_info.value.detail
 
 
 # ---------------------------------------------------------------------------

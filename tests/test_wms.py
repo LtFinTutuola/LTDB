@@ -29,12 +29,17 @@ from src.repositories.base import BaseRepository
 # Helpers – create prerequisite records
 # ---------------------------------------------------------------------------
 def _create_blueprint(db) -> ArticleBlueprint:
+    from src.models.pim import Category
     brand = Brand(name="TestBrand")
     db.add(brand)
+    
+    category = Category(name="TestCategory", description="Test Category")
+    db.add(category)
     db.flush()
 
     bp = ArticleBlueprint(
         brand_id=brand.id,
+        category_id=category.id,
         supplier_code="WMS-TEST",
         description="Test Article",
         extended_description="For WMS tests",
