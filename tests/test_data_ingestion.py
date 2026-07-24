@@ -16,71 +16,143 @@ class MockSessionLocal:
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
 
-async def mock_sleep(seconds):
-    pass
+
+def _mock_agent_result():
+    """Return a realistic enriched items payload matching the new agent output."""
+    return {
+        "items": [
+            {
+                "VendorCode": "SUP-001",
+                "Barcode": None,
+                "Quantity": 100,
+                "category": "Borse",
+                "sub_category": "Tote / Shopper",
+                "sex": "Donna",
+                "materials": ["pelle"],
+                "colors": ["nero"],
+                "product_name": "Borsa Shopper",
+                "product_short_description": "Borsa tote in pelle nera.",
+                "product_extended_description": "Borsa tote capiente in pelle nera di alta qualità.",
+                "tags": ["borsa", "pelle", "nero", "donna"],
+                "sources": [],
+                "warnings": [],
+            },
+            {
+                "VendorCode": "SUP-002",
+                "Barcode": None,
+                "Quantity": 50,
+                "category": "Borse",
+                "sub_category": "Tracolla / Crossbody",
+                "sex": "Donna",
+                "materials": ["tessuto"],
+                "colors": ["marrone"],
+                "product_name": "Borsa Tracolla",
+                "product_short_description": "Tracolla in tessuto marrone.",
+                "product_extended_description": "Borsa a tracolla leggera in tessuto marrone.",
+                "tags": ["tracolla", "tessuto", "marrone", "donna"],
+                "sources": [],
+                "warnings": [],
+            },
+        ],
+        "warnings": [],
+    }
+
 
 def test_extract_endpoint(db_session, tmp_path, monkeypatch):
     app.dependency_overrides[get_db] = lambda: db_session
     monkeypatch.setattr("src.services.data_ingestion_service.SessionLocal", lambda: MockSessionLocal(db_session))
-    monkeypatch.setattr("asyncio.sleep", mock_sleep)
-    
+
+    # Mock the agent's aexecute so no real LLM calls are made
+    async def mock_aexecute(self, input_data):
+        return _mock_agent_result()
+
+    monkeypatch.setattr(
+        "src.agents.data_ingestion_agent.agent.DataIngestionAgent.aexecute",
+        mock_aexecute,
+    )
+
+    # Mock the category repo to avoid needing a seeded DB
+    monkeypatch.setattr(
+        "src.services.data_ingestion_service.category_repo.get_brand_hierarchy",
+        lambda db, brand: {
+            "Borse": {"description": "Borse da donna", "sub_categories": {"Tote / Shopper": "Borsa grande"}}
+        },
+    )
+
     dummy_pdf = tmp_path / "test_doc.pdf"
     dummy_pdf.write_text("dummy content")
-    
+
     response = client.post(
         "/api/v1/ingestion/extract",
-        json={"file_path": str(dummy_pdf)}
+        json={"file_path": str(dummy_pdf), "brand": "Samsonite"},
     )
     assert response.status_code == 202
     data = response.json()
     assert "job_id" in data
     job_id = data["job_id"]
-    
+
     # Verify staging area has job
     job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
     assert job is not None
     assert job.status == JobStatus.COMPLETED.value
-    
+
     response = client.get(f"/api/v1/ingestion/extract/{job_id}")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == JobStatus.COMPLETED.name
     assert "items" in data["data"]
     assert len(data["data"]["items"]) == 2
-    
+
     app.dependency_overrides.clear()
+
 
 def test_extract_endpoint_file_not_found(db_session):
     app.dependency_overrides[get_db] = lambda: db_session
     response = client.post(
         "/api/v1/ingestion/extract",
-        json={"file_path": "/nonexistent/path/doc.pdf"}
+        json={"file_path": "/nonexistent/path/doc.pdf", "brand": "Samsonite"},
     )
     assert response.status_code == 404
     app.dependency_overrides.clear()
+
 
 def test_extract_endpoint_invalid_file_format(tmp_path, db_session):
     app.dependency_overrides[get_db] = lambda: db_session
     dummy_txt = tmp_path / "test_doc.txt"
     dummy_txt.write_text("invalid format content")
-    
+
     response = client.post(
         "/api/v1/ingestion/extract",
-        json={"file_path": str(dummy_txt)}
+        json={"file_path": str(dummy_txt), "brand": "Samsonite"},
     )
     assert response.status_code == 400
     assert "Invalid file format" in response.json()["detail"]
     app.dependency_overrides.clear()
 
+
+def test_extract_endpoint_missing_brand(tmp_path, db_session):
+    """Omitting the brand field should return a 422 Unprocessable Entity."""
+    app.dependency_overrides[get_db] = lambda: db_session
+    dummy_pdf = tmp_path / "test_doc.pdf"
+    dummy_pdf.write_text("dummy content")
+
+    response = client.post(
+        "/api/v1/ingestion/extract",
+        json={"file_path": str(dummy_pdf)},  # missing brand
+    )
+    assert response.status_code == 422
+    app.dependency_overrides.clear()
+
+
 def test_confirm_endpoint(db_session, monkeypatch):
     app.dependency_overrides[get_db] = lambda: db_session
-    
+
     # Pre-create a completed job in the database
     job_id = "test_job_123"
     job = StagingArea(id=job_id, file_path="some/file.pdf", status=JobStatus.COMPLETED.value, data={})
     db_session.add(job)
     db_session.commit()
-    
+
     payload = {
         "job_id": job_id,
         "items": [
@@ -91,44 +163,45 @@ def test_confirm_endpoint(db_session, monkeypatch):
             }
         ]
     }
-    
+
     response = client.post(
         "/api/v1/ingestion/confirm",
         json=payload
     )
     assert response.status_code == 200
     assert response.json()["status"] == "success"
-    
+
     from src.models.pim import ArticleBlueprint, Brand
     from src.models.wms import Article, ArticleMovement
-    
+
     blueprint = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.supplier_code == "TEST-CODE-001").first()
     assert blueprint is not None
     assert blueprint.description == "Test Item"
-    
+
     brand = db_session.query(Brand).filter(Brand.id == blueprint.brand_id).first()
     assert brand.name == "DUMMY_BRAND"
-    
+
     articles = db_session.query(Article).filter(Article.article_blueprint_id == str(blueprint.id)).all()
     assert len(articles) == 5
-    
+
     movements = db_session.query(ArticleMovement).all()
     assert len(movements) == 5
-    
+
     # Ensure the job was deleted from the staging area
     deleted_job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
     assert deleted_job is None
-    
+
     app.dependency_overrides.clear()
+
 
 def test_confirm_endpoint_job_not_found(db_session):
     app.dependency_overrides[get_db] = lambda: db_session
-    
+
     payload = {
         "job_id": "non_existent_job",
         "items": []
     }
-    
+
     response = client.post(
         "/api/v1/ingestion/confirm",
         json=payload
@@ -137,19 +210,20 @@ def test_confirm_endpoint_job_not_found(db_session):
     assert "Job not found" in response.json()["detail"]
     app.dependency_overrides.clear()
 
+
 def test_confirm_endpoint_job_not_completed(db_session):
     app.dependency_overrides[get_db] = lambda: db_session
-    
+
     job_id = "test_job_accepted"
     job = StagingArea(id=job_id, file_path="some/file.pdf", status=JobStatus.ACCEPTED.value, data={})
     db_session.add(job)
     db_session.commit()
-    
+
     payload = {
         "job_id": job_id,
         "items": []
     }
-    
+
     response = client.post(
         "/api/v1/ingestion/confirm",
         json=payload
@@ -158,20 +232,21 @@ def test_confirm_endpoint_job_not_completed(db_session):
     assert "Job is not yet completed" in response.json()["detail"]
     app.dependency_overrides.clear()
 
+
 def test_confirm_endpoint_persistence_failure(db_session, monkeypatch):
     app.dependency_overrides[get_db] = lambda: db_session
-    
+
     job_id = "test_job_fail"
     job = StagingArea(id=job_id, file_path="some/file.pdf", status=JobStatus.COMPLETED.value, data={})
     db_session.add(job)
     db_session.commit()
-    
+
     # Monkeypatch to force an exception during confirm_and_persist_staging
     def mock_raise(*args, **kwargs):
         raise Exception("Mock DB Failure")
-    
+
     monkeypatch.setattr("src.services.data_ingestion_service.get_or_create_product", mock_raise)
-    
+
     payload = {
         "job_id": job_id,
         "items": [
@@ -182,16 +257,16 @@ def test_confirm_endpoint_persistence_failure(db_session, monkeypatch):
             }
         ]
     }
-    
+
     response = client.post(
         "/api/v1/ingestion/confirm",
         json=payload
     )
     assert response.status_code == 500
     assert "Mock DB Failure" in response.json()["detail"]
-    
+
     # Ensure the job was still deleted from the staging area in the finally block
     deleted_job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
     assert deleted_job is None
-    
+
     app.dependency_overrides.clear()

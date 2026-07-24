@@ -4,7 +4,9 @@ from typing import Dict, Any, Optional
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from src.core.database import SessionLocal
-from src.agents.langgraph_engine import mock_extract_ddt_data
+from src.agents.base import AgentException
+from src.agents.data_ingestion_agent import DataIngestionAgent
+from src.repositories.pim_repo import category_repo
 from src.schemas.data_ingestion import StagingConfirmationRequest
 from src.services.pim_service import get_or_create_product
 from src.services.wms_service import register_inbound_movement
@@ -34,18 +36,45 @@ def accept_job(db: Session, file_path: str) -> str:
     staging_repo.create_job(db, job_id=job_id, file_path=file_path)
     return job_id
 
-async def process_and_stage_pdf(job_id: str, file_path: str) -> None:
+async def process_and_stage_pdf(job_id: str, file_path: str, brand: str) -> None:
     """
-    Extracts data using the mock AI agent and updates the staging DB record.
-    Runs asynchronously in the background.
+    Fetches the brand hierarchy from the DB, runs the DataIngestionAgent,
+    and persists the result to the staging area.
+
+    On AgentException: updates the job to ERROR status with the error payload,
+    then re-raises so the FastAPI background worker logs the full stack trace.
     """
-    extracted_data = await mock_extract_ddt_data(file_path)
-    
-    # Add job_id to the data
-    extracted_data["job_id"] = job_id
-    
     with SessionLocal() as db:
-        staging_repo.update_job(db, job_id=job_id, status=JobStatus.COMPLETED.value, data=extracted_data)
+        try:
+            # 1. Fetch brand hierarchy
+            categories = category_repo.get_brand_hierarchy(db, brand)
+
+            # 2. Build input payload for the agent
+            input_data = {
+                "file_path": file_path,
+                "brand": brand,
+                "categories": categories,
+                "allowed_sex": ["Uomo", "Donna", "Unisex"],
+            }
+
+            # 3. Run the agent
+            agent = DataIngestionAgent()
+            result = await agent.aexecute(input_data)
+
+            # 4. Attach job_id and persist as COMPLETED
+            result["job_id"] = job_id
+            staging_repo.update_job(db, job_id=job_id, status=JobStatus.COMPLETED.value, data=result)
+
+        except AgentException as exc:
+            # Update DB to ERROR so polling clients can observe the failure,
+            # then re-raise for the background worker to log the stack trace.
+            staging_repo.update_job(
+                db,
+                job_id=job_id,
+                status=JobStatus.ERROR.value,
+                data={"error": str(exc), "output": exc.output},
+            )
+            raise
 
 def get_job(db: Session, job_id: str) -> Dict[str, Any]:
     """

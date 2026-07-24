@@ -13,7 +13,12 @@ def extract_data(request: ExtractionRequest, background_tasks: BackgroundTasks, 
     """
     try:
         job_id = data_ingestion_service.accept_job(db, request.file_path)
-        background_tasks.add_task(data_ingestion_service.process_and_stage_pdf, job_id, request.file_path)
+        background_tasks.add_task(
+            data_ingestion_service.process_and_stage_pdf,
+            job_id,
+            request.file_path,
+            request.brand,
+        )
         return {
             "job_id": job_id,
             "message": "Starting to process the file"
