@@ -40,7 +40,6 @@ def _create_blueprint(db) -> ArticleBlueprint:
     bp = ArticleBlueprint(
         brand_id=brand.id,
         category_id=category.id,
-        supplier_code="WMS-TEST",
         description="Test Article",
         extended_description="For WMS tests",
         tags=["test"],
@@ -73,6 +72,9 @@ def _create_full_article(db):
     article = Article(
         article_blueprint_id=bp.id,
         batch_id=batch.id,
+        supplier_code="WMS-TEST",
+        ean="1234567890123",
+        colors=["Red"],
         status=ArticleStatus.AVAILABLE,
     )
     db.add(article)
@@ -118,10 +120,18 @@ class TestSupplierCrud:
 # ---------------------------------------------------------------------------
 class TestBatchCrud:
     def test_create_batch(self, db_session):
-        sup, batch = _create_supplier_and_batch(db_session)
+        sup, _ = _create_supplier_and_batch(db_session)
+        repo = BaseRepository(Batch)
+        batch = repo.create(
+            db_session,
+            obj_in=BatchCreate(
+                supplier_id=sup.id,
+                delivery_note_number="DDT-002",
+                document_date=date(2025, 7, 1),
+            ),
+        )
+        assert batch.delivery_note_number == "DDT-002"
         assert batch.supplier_id == sup.id
-        assert batch.delivery_note_number == "DDT-001"
-        assert batch.document_date == date(2025, 6, 15)
 
     def test_batch_supplier_relationship(self, db_session):
         sup, batch = _create_supplier_and_batch(db_session)
@@ -138,6 +148,9 @@ class TestArticleCrud:
         assert article.status == ArticleStatus.AVAILABLE
         assert article.article_blueprint_id == bp.id
         assert article.batch_id == batch.id
+        assert article.supplier_code == "WMS-TEST"
+        assert article.ean == "1234567890123"
+        assert article.colors == ["Red"]
 
     def test_update_article_status(self, db_session):
         article, *_ = _create_full_article(db_session)
@@ -154,6 +167,28 @@ class TestArticleCrud:
 
         assert article in bp.articles
         assert article in batch.articles
+
+    def test_lookup_by_ean(self, db_session):
+        article, *_ = _create_full_article(db_session)
+        from src.repositories.wms_repo import wms_repo
+
+        found = wms_repo.get_by_ean(db_session, "1234567890123")
+        assert len(found) >= 1
+        assert found[0].ean == "1234567890123"
+
+        not_found = wms_repo.get_by_ean(db_session, "0000000000000")
+        assert len(not_found) == 0
+
+    def test_lookup_by_supplier_code(self, db_session):
+        article, *_ = _create_full_article(db_session)
+        from src.repositories.wms_repo import wms_repo
+
+        found = wms_repo.get_by_supplier_code(db_session, "WMS-TEST")
+        assert len(found) >= 1
+        assert found[0].supplier_code == "WMS-TEST"
+
+        not_found = wms_repo.get_by_supplier_code(db_session, "NON-EXISTENT")
+        assert len(not_found) == 0
 
 
 # ---------------------------------------------------------------------------

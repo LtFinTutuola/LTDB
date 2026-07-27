@@ -36,7 +36,7 @@ async def item_merge_node(state: ItemState) -> dict:
         "colors": state.colors,
 
         # --- Stage 3c: Free-form fields ---
-        "product_name": state.product_name,
+        "article_name": state.article_name,
         "product_short_description": state.product_short_description,
         "product_extended_description": state.product_extended_description,
         "tags": state.tags,

@@ -37,7 +37,7 @@ def _create_article(db) -> Article:
     bp = ArticleBlueprint(
         brand_id=brand.id,
         category_id=category.id,
-        supplier_code=f"SALE-TEST-{uid}",
+        article_name="Sale Item Name",
         description="Sale Item",
         extended_description="For sales tests",
         tags=["test"],
@@ -60,6 +60,7 @@ def _create_article(db) -> Article:
     article = Article(
         article_blueprint_id=bp.id,
         batch_id=batch.id,
+        supplier_code=f"SALE-TEST-{uid}",
         status=ArticleStatus.AVAILABLE,
     )
     db.add(article)

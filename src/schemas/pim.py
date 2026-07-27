@@ -21,21 +21,17 @@ class CategoryResponse(BaseSchemaWithAudit):
 class ArticleBlueprintCreate(BaseModel):
     brand_id: str
     category_id: Optional[str] = None
-    supplier_code: str
-    ean: Optional[str] = None
+    article_name: str = "Unknown"
     description: str
     extended_description: str
     tags: List[str]
-    colors: Optional[List[str]] = None
     materials: Optional[List[str]] = None
 
 class ArticleBlueprintResponse(BaseSchemaWithAudit):
     brand_id: str
     category_id: Optional[str]
-    supplier_code: str
-    ean: Optional[str]
+    article_name: str
     description: str
     extended_description: str
     tags: List[str]
-    colors: Optional[List[str]]
     materials: Optional[List[str]]

@@ -72,6 +72,7 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             from src.models.pim import Category
             if "items" in result:
                 for item in result["items"]:
+                    item["id"] = str(uuid.uuid4())
                     for field in ["category", "sub_category"]:
                         if item.get(field):
                             cat_name = item[field]
@@ -129,69 +130,69 @@ def confirm_and_persist_staging(
     """
     Orchestrates the creation of missing products and registration of warehouse movements.
     """
-    try:
-        job = staging_repo.get_job(db, job_id)
-        if not job:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    job = staging_repo.get_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-        # Determine items list: use request items if present, otherwise fallback to stored job data
-        items = None
-        if staging_data and staging_data.items is not None:
-            items = staging_data.items
-        elif job.data and "items" in job.data:
-            raw_items = job.data.get("items") or []
-            items = [EnrichedItemSchema.model_validate(item) for item in raw_items]
+    # Determine items list: use request items if present, otherwise fallback to stored job data
+    items = None
+    if staging_data and staging_data.items is not None:
+        items = staging_data.items
+    elif job.data and "items" in job.data:
+        raw_items = job.data.get("items") or []
+        items = [EnrichedItemSchema.model_validate(item) for item in raw_items]
 
-        if not items:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No items to confirm")
+    if not items:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No items to confirm")
 
-        brand_id = job.data.get("brand_id") if job.data else None
-        if not brand_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Staged job data is missing brand_id")
+    brand_id = job.data.get("brand_id") if job.data else None
+    if not brand_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Staged job data is missing brand_id")
 
-        for item in items:
-            # Resolve category_id based on sub_category or category objects
-            category_id = None
-            if item.sub_category and item.sub_category.id:
-                category_id = item.sub_category.id
-            elif item.category and item.category.id:
-                category_id = item.category.id
+    for item in items:
+        # Resolve category_id based on sub_category or category objects
+        category_id = None
+        if item.sub_category and item.sub_category.id:
+            category_id = item.sub_category.id
+        elif item.category and item.category.id:
+            category_id = item.category.id
 
-            if not category_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Item is missing a valid category. Confirmation failed."
-                )
+        if not category_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Item is missing a valid category. Confirmation failed."
+            )
 
-            # 1. Ensure product exists
-            blueprint_id = get_or_create_product(
+        # 1. Ensure product exists
+        blueprint_id = get_or_create_product(
+            db=db,
+            brand_id=brand_id,
+            description=item.product_short_description or "Unknown Product",
+            article_name=item.article_name or item.product_short_description or "Unknown Product",
+            extended_description=item.product_extended_description or "",
+            tags=item.tags,
+            materials=item.materials,
+            category_id=category_id,
+            commit_changes=False
+        )
+        
+        # 2. Register warehouse movement
+        if item.quantity and item.quantity > 0:
+            register_inbound_movement(
                 db=db,
-                brand_id=brand_id,
-                supplier_code=item.vendor_code or "UNKNOWN",
-                description=item.product_short_description or "Unknown Product",
-                extended_description=item.product_extended_description or "",
-                tags=item.tags,
-                colors=item.colors,
-                materials=item.materials,
-                category_id=category_id,
+                job_id=job_id,
+                blueprint_id=blueprint_id,
+                quantity=item.quantity,
+                supplier_code=item.vendor_code,
                 ean=item.barcode,
+                colors=item.colors,
                 commit_changes=False
             )
-            
-            # 2. Register warehouse movement
-            if item.quantity and item.quantity > 0:
-                register_inbound_movement(
-                    db=db,
-                    job_id=job_id,
-                    blueprint_id=blueprint_id,
-                    quantity=item.quantity,
-                    commit_changes=False
-                )
-            
-        # Commit at the end of the unit of work
-        db.commit()
-    finally:
-        try:
-            staging_repo.delete_job(db, job_id)
-        except Exception:
-            pass
+        
+    # Delete job from staging area only upon successful processing
+    try:
+        staging_repo.delete_job(db, job_id)
+    except Exception:
+        pass
+    # Ensure changes are committed if delete_job didn't commit
+    db.commit()

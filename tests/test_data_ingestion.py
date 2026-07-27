@@ -30,7 +30,7 @@ def _mock_agent_result():
                 "sex": "Donna",
                 "materials": ["pelle"],
                 "colors": ["nero"],
-                "product_name": "Borsa Shopper",
+                "article_name": "Borsa Shopper",
                 "product_short_description": "Borsa tote in pelle nera.",
                 "product_extended_description": "Borsa tote capiente in pelle nera di alta qualità.",
                 "tags": ["borsa", "pelle", "nero", "donna"],
@@ -46,7 +46,7 @@ def _mock_agent_result():
                 "sex": "Donna",
                 "materials": ["tessuto"],
                 "colors": ["marrone"],
-                "product_name": "Borsa Tracolla",
+                "article_name": "Borsa Tracolla",
                 "product_short_description": "Tracolla in tessuto marrone.",
                 "product_extended_description": "Borsa a tracolla leggera in tessuto marrone.",
                 "tags": ["tracolla", "tessuto", "marrone", "donna"],
@@ -173,7 +173,10 @@ def test_confirm_endpoint(db_session, monkeypatch):
             "items": [
                 {
                     "VendorCode": "TEST-CODE-001",
+                    "article_name": "Official Item Name",
                     "product_short_description": "Test Item",
+                    "Barcode": "8888888888888",
+                    "colors": ["Blue"],
                     "Quantity": 5,
                     "category": {
                         "id": str(dummy_category.id),
@@ -194,15 +197,19 @@ def test_confirm_endpoint(db_session, monkeypatch):
     from src.models.pim import ArticleBlueprint, Brand
     from src.models.wms import Article, ArticleMovement
 
-    blueprint = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.supplier_code == "TEST-CODE-001").first()
+    blueprint = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.article_name == "Official Item Name").first()
     assert blueprint is not None
     assert blueprint.description == "Test Item"
+    assert blueprint.article_name == "Official Item Name"
 
     brand = db_session.query(Brand).filter(Brand.id == blueprint.brand_id).first()
     assert brand.name == "DUMMY_BRAND"
 
     articles = db_session.query(Article).filter(Article.article_blueprint_id == str(blueprint.id)).all()
     assert len(articles) == 5
+    assert articles[0].supplier_code == "TEST-CODE-001"
+    assert articles[0].ean == "8888888888888"
+    assert articles[0].colors == ["Blue"]
 
     movements = db_session.query(ArticleMovement).all()
     assert len(movements) == 5
@@ -281,15 +288,8 @@ def test_confirm_endpoint_persistence_failure(db_session, monkeypatch):
     assert response.status_code == 500
     assert "Mock DB Failure" in response.json()["detail"]
 
-    # Ensure the job was still deleted from the staging area in the finally block
-    deleted_job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
-    assert deleted_job is None
-
-    app.dependency_overrides.clear()
-    assert "Mock DB Failure" in response.json()["detail"]
-
-    # Ensure the job was still deleted from the staging area in the finally block
-    deleted_job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
-    assert deleted_job is None
+    # Ensure the job is NOT deleted from the staging area when confirmation fails
+    remaining_job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
+    assert remaining_job is not None
 
     app.dependency_overrides.clear()

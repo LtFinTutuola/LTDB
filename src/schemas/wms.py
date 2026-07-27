@@ -25,13 +25,17 @@ class BatchResponse(BaseSchemaWithAudit):
 class ArticleCreate(BaseModel):
     article_blueprint_id: str
     batch_id: str
-    sku: Optional[str] = None
+    supplier_code: Optional[str] = None
+    ean: Optional[str] = None
+    colors: Optional[List[str]] = None
     status: ArticleStatus = ArticleStatus.AVAILABLE
 
 class ArticleResponse(BaseSchemaWithAudit):
     article_blueprint_id: str
     batch_id: str
-    sku: Optional[str]
+    supplier_code: Optional[str]
+    ean: Optional[str]
+    colors: Optional[List[str]]
     status: ArticleStatus
 
 class StockUpdate(BaseModel):

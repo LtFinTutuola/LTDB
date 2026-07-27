@@ -18,7 +18,7 @@ _SYSTEM_PROMPT = (
     "You are an AI describing assistant. Read the provided raw web data and generate "
     "comprehensive, free-form fields.\n"
     "CRITICAL RULES:\n"
-    "1. DO NOT include the SKU or VendorCode inside the 'product_name'.\n"
+    "1. DO NOT include the SKU or VendorCode inside the 'article_name'.\n"
     "2. Populate 'tags' with up to 10 semantic keywords describing the item to enhance downstream search.\n"
     "3. All output data values MUST be written in Italian."
 )
@@ -27,8 +27,8 @@ _MODEL = "gemini-3.1-flash-lite"
 
 
 class FreeFormFieldsSheet(BaseModel):
-    product_name: str = Field(
-        description="Official name of the product. DO NOT include the SKU or VendorCode in this string."
+    article_name: str = Field(
+        description="Official name of the article/product. DO NOT include the SKU or VendorCode in this string."
     )
     product_short_description: str = Field(
         description="Concise, technical, and precise description to help an ERP operator identify the product. NO commercial fluff."
@@ -46,7 +46,7 @@ async def free_form_node(state: ItemState) -> dict:
     Generate free-form descriptions and SEO tags for a single product.
 
     Returns:
-        Partial ItemState update with product_name, product_short_description,
+        Partial ItemState update with article_name, product_short_description,
         product_extended_description, and tags.
         On failure, returns empty strings/lists with a warning.
     """
@@ -69,9 +69,9 @@ async def free_form_node(state: ItemState) -> dict:
             response_schema=FreeFormFieldsSheet,
         )
         parsed = json.loads(raw_response)
-        print(f"[free_form_node] Generated name: '{parsed.get('product_name')}'.")
+        print(f"[free_form_node] Generated name: '{parsed.get('article_name')}'.")
         return {
-            "product_name": parsed.get("product_name", ""),
+            "article_name": parsed.get("article_name", ""),
             "product_short_description": parsed.get("product_short_description", ""),
             "product_extended_description": parsed.get("product_extended_description", ""),
             "tags": parsed.get("tags", []),
@@ -80,7 +80,7 @@ async def free_form_node(state: ItemState) -> dict:
         warning = f"[free_form_node] Free-form completion failed ({exc})."
         print(warning)
         return {
-            "product_name": "",
+            "article_name": "",
             "product_short_description": "",
             "product_extended_description": "",
             "tags": [],

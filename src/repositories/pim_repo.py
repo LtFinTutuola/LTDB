@@ -10,12 +10,6 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
     def __init__(self):
         super().__init__(ArticleBlueprint)
 
-    def get_by_ean(self, db: Session, ean: str) -> Optional[ArticleBlueprint]:
-        return db.query(self.model).filter(self.model.ean == ean).first()
-
-    def get_by_supplier_code(self, db: Session, supplier_code: str) -> Optional[ArticleBlueprint]:
-        return db.query(self.model).filter(self.model.supplier_code == supplier_code).first()
-
 
 class CategoryRepository:
     """

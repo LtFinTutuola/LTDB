@@ -24,7 +24,7 @@ class EnrichedItemSchema(BaseModel):
     sex: Optional[str] = None
     materials: Optional[List[str]] = None
     colors: Optional[List[str]] = None
-    product_name: Optional[str] = None
+    article_name: Optional[str] = None
     product_short_description: Optional[str] = None
     product_extended_description: Optional[str] = None
     tags: Optional[List[str]] = None

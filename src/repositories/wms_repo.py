@@ -9,6 +9,12 @@ class ArticleRepository(BaseRepository[Article, ArticleCreate, ArticleCreate]):
     def __init__(self):
         super().__init__(Article)
 
+    def get_by_ean(self, db: Session, ean: str) -> List[Article]:
+        return db.query(self.model).filter(self.model.ean == ean).all()
+
+    def get_by_supplier_code(self, db: Session, supplier_code: str) -> List[Article]:
+        return db.query(self.model).filter(self.model.supplier_code == supplier_code).all()
+
     def get_current_stock(self, db: Session, article_id: str) -> int:
         """
         Calculates the aggregated physical stock by reading the append-only ledger.

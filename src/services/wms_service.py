@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from datetime import date
 from sqlalchemy.orm import Session
 from src.repositories.base import BaseRepository
@@ -14,6 +14,9 @@ def register_inbound_movement(
     job_id: str, 
     blueprint_id: str, 
     quantity: int, 
+    supplier_code: Optional[str] = None,
+    ean: Optional[str] = None,
+    colors: Optional[list[str]] = None,
     commit_changes: bool = True
 ) -> List[str]:
     """
@@ -59,6 +62,9 @@ def register_inbound_movement(
         article_in = ArticleCreate(
             article_blueprint_id=blueprint_id,
             batch_id=batch_id,
+            supplier_code=supplier_code,
+            ean=ean,
+            colors=colors,
             status=ArticleStatus.AVAILABLE
         )
         new_article = wms_repo.create(db, obj_in=article_in, commit_changes=False)

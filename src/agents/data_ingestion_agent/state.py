@@ -93,7 +93,7 @@ class ItemState(BaseModel):
     colors: List[str] = Field(default_factory=list, description="Extracted/inferred colors list.")
 
     # --- Stage 3c: Free-Form ---
-    product_name: str = Field(default="", description="Official product name (no SKU).")
+    article_name: str = Field(default="", description="Official product name (no SKU).")
     product_short_description: str = Field(default="", description="Concise ERP-friendly description.")
     product_extended_description: str = Field(default="", description="Comprehensive description for semantic search.")
     tags: List[str] = Field(default_factory=list, description="Up to 10 semantic search tags.")

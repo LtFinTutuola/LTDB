@@ -152,10 +152,10 @@ class TestBrandCategoryBridge:
 
 
 # ---------------------------------------------------------------------------
-# ArticleBlueprint CRUD + JSON columns + lookup by EAN
+# ArticleBlueprint CRUD + JSON columns + lookup by supplier_code
 # ---------------------------------------------------------------------------
 class TestArticleBlueprintCrud:
-    """CRUD for ArticleBlueprint including JSON fields and EAN lookup."""
+    """CRUD for ArticleBlueprint including JSON fields."""
 
     def _make_brand_and_category(self, db_session):
         brand = Brand(name="TestBrand")
@@ -176,67 +176,19 @@ class TestArticleBlueprintCrud:
             obj_in=ArticleBlueprintCreate(
                 brand_id=brand.id,
                 category_id=cat.id,
-                supplier_code="SUP-001",
-                ean="1234567890123",
+                article_name="Leather Bag",
                 description="Leather Bag",
                 extended_description="Premium Italian leather bag",
                 tags=["bag", "leather", "premium"],
-                colors=["Red", "Black"],
                 materials=["Leather"],
             ),
         )
+        assert bp.article_name == "Leather Bag"
         assert bp.tags == ["bag", "leather", "premium"]
-        assert bp.colors == ["Red", "Black"]
         assert bp.materials == ["Leather"]
 
-    def test_lookup_by_ean(self, db_session):
-        brand, cat = self._make_brand_and_category(db_session)
-        from src.repositories.pim_repo import ArticleBlueprintRepository
-
-        repo = ArticleBlueprintRepository()
-        repo.create(
-            db_session,
-            obj_in=ArticleBlueprintCreate(
-                brand_id=brand.id,
-                category_id=cat.id,
-                supplier_code="SUP-002",
-                ean="9999999999999",
-                description="Canvas Tote",
-                extended_description="Lightweight canvas tote",
-                tags=["tote"],
-            ),
-        )
-
-        found = repo.get_by_ean(db_session, "9999999999999")
-        assert found is not None
-        assert found.ean == "9999999999999"
-
-        not_found = repo.get_by_ean(db_session, "0000000000000")
-        assert not_found is None
-
-    def test_lookup_by_supplier_code(self, db_session):
-        brand, cat = self._make_brand_and_category(db_session)
-        from src.repositories.pim_repo import ArticleBlueprintRepository
-
-        repo = ArticleBlueprintRepository()
-        repo.create(
-            db_session,
-            obj_in=ArticleBlueprintCreate(
-                brand_id=brand.id,
-                category_id=cat.id,
-                supplier_code="UNIQUE-CODE",
-                description="Wallet",
-                extended_description="Slim wallet",
-                tags=["wallet"],
-            ),
-        )
-
-        found = repo.get_by_supplier_code(db_session, "UNIQUE-CODE")
-        assert found is not None
-        assert found.supplier_code == "UNIQUE-CODE"
-
     def test_blueprint_nullable_fields(self, db_session):
-        """ean, colors, materials are all nullable."""
+        """materials is nullable."""
         brand, cat = self._make_brand_and_category(db_session)
         repo = BaseRepository(ArticleBlueprint)
 
@@ -245,13 +197,11 @@ class TestArticleBlueprintCrud:
             obj_in=ArticleBlueprintCreate(
                 brand_id=brand.id,
                 category_id=cat.id,
-                supplier_code="SUP-003",
+                article_name="Minimal",
                 description="Minimal",
                 extended_description="Minimal desc",
                 tags=["minimal"],
             ),
         )
-        assert bp.ean is None
         assert bp.category_id is not None
-        assert bp.colors is None
         assert bp.materials is None

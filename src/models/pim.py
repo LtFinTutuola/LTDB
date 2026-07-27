@@ -45,17 +45,15 @@ class ArticleBlueprint(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "article_blueprints"
 
     brand_id: Mapped[str] = mapped_column(String(36), ForeignKey("brands.id"), nullable=False)
-    category_id: Mapped[str] = mapped_column(String(36), ForeignKey("categories.id"), nullable=False)
+    category_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("categories.id"), nullable=True)
     
-    supplier_code: Mapped[str] = mapped_column(String, index=True, nullable=False)
-    ean: Mapped[Optional[str]] = mapped_column(String, unique=True, index=True, nullable=True)
+    article_name: Mapped[str] = mapped_column(String, nullable=False, default="Unknown")
     
     description: Mapped[str] = mapped_column(String, nullable=False)
     extended_description: Mapped[str] = mapped_column(String, nullable=False)
     
     # JSON arrays for SQLite (using JSON1 extension via SQLAlchemy JSON)
     tags: Mapped[list] = mapped_column(JSON, nullable=False)
-    colors: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     materials: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     # Relationships

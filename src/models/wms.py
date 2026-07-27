@@ -2,7 +2,7 @@ from datetime import date
 from typing import List, Optional
 import enum
 
-from sqlalchemy import String, ForeignKey, Date, Enum, Numeric, Integer
+from sqlalchemy import String, ForeignKey, Date, Enum, Numeric, Integer, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, UUIDMixin, TimestampMixin
@@ -41,7 +41,9 @@ class Article(Base, UUIDMixin, TimestampMixin):
 
     article_blueprint_id: Mapped[str] = mapped_column(String(36), ForeignKey("article_blueprints.id"), nullable=False)
     batch_id: Mapped[str] = mapped_column(String(36), ForeignKey("batches.id"), nullable=False)
-    sku: Mapped[Optional[str]] = mapped_column(String, unique=True, index=True, nullable=True)
+    supplier_code: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
+    ean: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
+    colors: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     status: Mapped[ArticleStatus] = mapped_column(Enum(ArticleStatus), nullable=False, default=ArticleStatus.AVAILABLE)
 
     # Relationships

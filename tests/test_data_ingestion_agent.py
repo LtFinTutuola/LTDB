@@ -390,7 +390,7 @@ class TestItemMergeNode:
             "sex": "Donna",
             "materials": ["Pelle"],
             "colors": ["Nero"],
-            "product_name": "Borsa Tote",
+            "article_name": "Borsa Tote",
             "product_short_description": "Borsa capiente",
             "product_extended_description": "Borsa molto capiente in pelle",
             "tags": ["borsa", "pelle"],
@@ -405,7 +405,7 @@ class TestItemMergeNode:
         assert merged["category"] == "Borse"
         assert merged["sub_category"] == "Tote / Shopper"
         assert merged["sex"] == "Donna"
-        assert merged["product_name"] == "Borsa Tote"
+        assert merged["article_name"] == "Borsa Tote"
 
 
 # ---------------------------------------------------------------------------
