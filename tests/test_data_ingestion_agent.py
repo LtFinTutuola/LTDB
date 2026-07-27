@@ -492,3 +492,57 @@ class TestAgentExceptionPropagation:
                 # Missing file_path and brand
                 "categories": sample_categories,
             })
+
+
+# ---------------------------------------------------------------------------
+# blueprint_grouping_node Tests
+# ---------------------------------------------------------------------------
+
+class TestBlueprintGroupingNode:
+    @pytest.mark.asyncio
+    async def test_blueprint_grouping_assigns_ids_and_embeddings(self, base_graph_state):
+        from src.agents.data_ingestion_agent.nodes.blueprint_grouping_node import blueprint_grouping_node
+
+        items = [
+            {
+                "article_name": "Wash Bag Cloudrider",
+                "product_short_description": "Beauty case in poliestere",
+                "category": "Valigie",
+                "VendorCode": "MJ4*01001",
+            },
+            {
+                "article_name": "Wash Bag Cloudrider",
+                "product_short_description": "Beauty case in poliestere blu",
+                "category": "Valigie",
+                "VendorCode": "MJ4*01002",
+            },
+            {
+                "article_name": "Zaino Take2Cabin",
+                "product_short_description": "Zaino da viaggio in tessuto riciclato",
+                "category": "Valigie",
+                "VendorCode": "91G*01005",
+            },
+        ]
+        state = base_graph_state.model_copy(update={"enriched_items": items})
+
+        # Mock embeddings: first two identical/similar vectors, third distinct
+        async def mock_gen_emb(text, model_name="gemini-embedding-001"):
+            if "Wash Bag" in text:
+                return [1.0, 0.0, 0.0]
+            return [0.0, 1.0, 0.0]
+
+        with patch("src.agents.data_ingestion_agent.nodes.blueprint_grouping_node.LLMClient") as MockLLMClient:
+            mock_instance = MockLLMClient.return_value
+            mock_instance.generate_embedding = AsyncMock(side_effect=mock_gen_emb)
+
+            await blueprint_grouping_node(state)
+
+        for item in state.enriched_items:
+            assert item.get("embedding") is None
+            assert item.get("blueprint_group_id") is not None
+
+        # The two wash bags should share the same blueprint_group_id
+        assert state.enriched_items[0]["blueprint_group_id"] == state.enriched_items[1]["blueprint_group_id"]
+        # The backpack should have a different blueprint_group_id
+        assert state.enriched_items[0]["blueprint_group_id"] != state.enriched_items[2]["blueprint_group_id"]
+

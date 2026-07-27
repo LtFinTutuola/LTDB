@@ -21,8 +21,14 @@ Per-item sub-graph (parallel, one per base_item via Send):
     → [should_run_sub_category conditional edge]
     → sub_category_node   (or skip)
     → fixed_fields_node
-    → free_form_node
+    → core_identity_node
     → item_merge_node     (returns enriched_items: [merged_item])
+
+  (Main Graph resumes at fan-in)
+    → run_item_subgraph   (collects enriched_items)
+    → blueprint_grouping_node
+    → marketing_copy_node
+    → END
 """
 from langgraph.graph import StateGraph, START, END
 
@@ -37,8 +43,10 @@ from src.agents.data_ingestion_agent.nodes.web_search_node import web_search_nod
 from src.agents.data_ingestion_agent.nodes.macro_category_node import macro_category_node
 from src.agents.data_ingestion_agent.nodes.sub_category_node import sub_category_node
 from src.agents.data_ingestion_agent.nodes.fixed_fields_node import fixed_fields_node
-from src.agents.data_ingestion_agent.nodes.free_form_node import free_form_node
+from src.agents.data_ingestion_agent.nodes.core_identity_node import core_identity_node
 from src.agents.data_ingestion_agent.nodes.item_merge_node import item_merge_node
+from src.agents.data_ingestion_agent.nodes.blueprint_grouping_node import blueprint_grouping_node
+from src.agents.data_ingestion_agent.nodes.marketing_copy_node import marketing_copy_node
 
 # --- Edges ---
 from src.agents.data_ingestion_agent.edges.main_router import fan_out_router
@@ -58,7 +66,7 @@ def _build_graph() -> StateGraph:
     item_graph.add_node("macro_category_node", macro_category_node)
     item_graph.add_node("sub_category_node", sub_category_node)
     item_graph.add_node("fixed_fields_node", fixed_fields_node)
-    item_graph.add_node("free_form_node", free_form_node)
+    item_graph.add_node("core_identity_node", core_identity_node)
     item_graph.add_node("item_merge_node", item_merge_node)
 
     item_graph.add_edge(START, "web_search_node")
@@ -79,8 +87,8 @@ def _build_graph() -> StateGraph:
         },
     )
     item_graph.add_edge("sub_category_node", "fixed_fields_node")
-    item_graph.add_edge("fixed_fields_node", "free_form_node")
-    item_graph.add_edge("free_form_node", "item_merge_node")
+    item_graph.add_edge("fixed_fields_node", "core_identity_node")
+    item_graph.add_edge("core_identity_node", "item_merge_node")
     item_graph.add_edge("item_merge_node", END)
     
     item_subgraph = item_graph.compile()
@@ -110,6 +118,8 @@ def _build_graph() -> StateGraph:
     
     # Add the wrapper node in the main graph
     main_graph.add_node("run_item_subgraph", run_item_subgraph)
+    main_graph.add_node("blueprint_grouping_node", blueprint_grouping_node)
+    main_graph.add_node("marketing_copy_node", marketing_copy_node)
 
     # ------------------------------------------------------------------ #
     # Edges — main pipeline                                               #
@@ -124,7 +134,9 @@ def _build_graph() -> StateGraph:
     # Fan-in automatically occurs as the output of each run_item_subgraph
     # updates the GraphState. Since run_item_subgraph returns
     # `enriched_items` (a list of 1), GraphState's operator.add reducer accumulates them.
-    main_graph.add_edge("run_item_subgraph", END)
+    main_graph.add_edge("run_item_subgraph", "blueprint_grouping_node")
+    main_graph.add_edge("blueprint_grouping_node", "marketing_copy_node")
+    main_graph.add_edge("marketing_copy_node", END)
 
     return main_graph.compile()
 

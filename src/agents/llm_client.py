@@ -102,6 +102,7 @@ class LLMClient:
         response_schema: Optional[Any] = None,
         response_mime_type: str = "text/plain",
         max_output_tokens: int = 8192,
+        temperature: Optional[float] = None,
     ) -> str:
         """
         Execute an async LLM call and return the raw text response.
@@ -115,6 +116,7 @@ class LLMClient:
             response_schema:    Optional Pydantic model for structured JSON output.
             response_mime_type: MIME type for the response ('application/json' or 'text/plain').
             max_output_tokens:  Token cap for the response.
+            temperature:        Optional temperature setting for the model.
 
         Returns:
             The raw text of the model's response.
@@ -128,6 +130,8 @@ class LLMClient:
             "response_mime_type": response_mime_type,
             "max_output_tokens": max_output_tokens,
         }
+        if temperature is not None:
+            config_kwargs["temperature"] = temperature
         if tools:
             config_kwargs["tools"] = tools
         if response_schema is not None:
@@ -174,6 +178,7 @@ class LLMClient:
         prompt: str,
         pipeline_stage: str = "unknown",
         max_output_tokens: int = 1024,
+        temperature: Optional[float] = None,
     ) -> tuple[str, list[str]]:
         """
         Variant of `call` that also returns the grounding source URLs.
@@ -182,12 +187,16 @@ class LLMClient:
         Returns:
             Tuple of (response_text, list_of_urls).
         """
-        gen_config = types.GenerateContentConfig(
-            tools=[{"google_search": {}}],
-            response_mime_type="text/plain",
-            max_output_tokens=max_output_tokens,
-            system_instruction=system_prompt,
-        )
+        config_kwargs = {
+            "tools": [{"google_search": {}}],
+            "response_mime_type": "text/plain",
+            "max_output_tokens": max_output_tokens,
+            "system_instruction": system_prompt,
+        }
+        if temperature is not None:
+            config_kwargs["temperature"] = temperature
+            
+        gen_config = types.GenerateContentConfig(**config_kwargs)
 
         response = await self._client.aio.models.generate_content(
             model=model_name,
@@ -233,3 +242,20 @@ class LLMClient:
     def get_logs(self) -> list[dict]:
         """Return all recorded LLM call telemetry as a list of dicts."""
         return [r.to_dict() for r in self._logs]
+
+    async def generate_embedding(self, text: str, model_name: str = "gemini-embedding-001") -> list[float]:
+        """
+        Generate an embedding vector for a given text.
+        
+        Args:
+            text: The text to embed.
+            model_name: The embedding model to use.
+            
+        Returns:
+            A list of floats representing the embedding vector.
+        """
+        response = await self._client.aio.models.embed_content(
+            model=model_name,
+            contents=text,
+        )
+        return response.embeddings[0].values

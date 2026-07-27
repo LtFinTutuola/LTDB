@@ -30,6 +30,7 @@ class EnrichedItemSchema(BaseModel):
     tags: Optional[List[str]] = None
     sources: Optional[List[str]] = None
     warnings: Optional[List[str]] = None
+    blueprint_group_id: Optional[str] = None
 
 class DdtExtractionResponse(BaseModel):
     items: List[DdtItemSchema]

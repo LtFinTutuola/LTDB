@@ -21,6 +21,20 @@ from typing import Annotated, List, Optional
 from pydantic import BaseModel, Field
 
 
+def reduce_enriched_items(left: List[dict], right: List[dict]) -> List[dict]:
+    """
+    Reducer for enriched_items.
+    If any item in right has '_overwrite' set to True, right is treated as a full
+    replacement of the list (used by Stage 4 and Stage 5).
+    Otherwise, right is appended to left (used by Stage 3 fan-in).
+    """
+    if right and isinstance(right, list) and len(right) > 0 and right[0].get("_overwrite"):
+        for item in right:
+            item.pop("_overwrite", None)
+        return right
+    return left + right
+
+
 class CategoryNode(BaseModel):
     """Represents a single macro-category with its description and sub-categories."""
     description: str
@@ -56,7 +70,7 @@ class GraphState(BaseModel):
     # Annotated with operator.add so LangGraph accumulates results from all parallel
     # item branches instead of overwriting. Each item_merge_node call returns a
     # single-element list; they are concatenated at fan-in.
-    enriched_items: Annotated[List[dict], operator.add] = Field(
+    enriched_items: Annotated[List[dict], reduce_enriched_items] = Field(
         default_factory=list, description="Final enriched items after Stage 3 processing."
     )
     warnings: Annotated[List[str], operator.add] = Field(
@@ -100,6 +114,10 @@ class ItemState(BaseModel):
 
     # --- Non-fatal warnings accumulated during this item's processing ---
     warnings: List[str] = Field(default_factory=list, description="Non-fatal warnings for this item.")
+
+    # --- Stage 4: Semantic Grouping (assigned in main graph) ---
+    blueprint_group_id: Optional[str] = Field(default=None, description="Shared ID for identical products.")
+    embedding: Optional[List[float]] = Field(default=None, description="Semantic embedding of core identity.")
 
     # --- Output to parent graph ---
     enriched_items: List[dict] = Field(
