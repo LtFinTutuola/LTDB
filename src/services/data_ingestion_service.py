@@ -159,20 +159,54 @@ def confirm_and_persist_staging(
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    # Determine items list: use request items if present, otherwise fallback to stored job data
-    items = None
-    if staging_data and staging_data.items is not None:
-        items = staging_data.items
+    # Determine items and blueprints: use request if present, otherwise fallback to stored job data
+    raw_items = None
+    raw_blueprints = []
+
+    if staging_data and (staging_data.items is not None or staging_data.blueprints is not None):
+        raw_items = [item.model_dump(by_alias=True) if hasattr(item, "model_dump") else item for item in (staging_data.items or [])]
+        if staging_data.blueprints is not None:
+            raw_blueprints = [bp.model_dump() if hasattr(bp, "model_dump") else bp for bp in staging_data.blueprints]
     elif job.data and "items" in job.data:
         raw_items = job.data.get("items") or []
-        items = [EnrichedItemSchema.model_validate(item) for item in raw_items]
+        raw_blueprints = job.data.get("blueprints") or []
 
-    if not items:
+    if not raw_items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No items to confirm")
+
+    # Bipartite merging: if blueprints are present, join each item with its blueprint definition
+    if raw_blueprints:
+        bp_map = {}
+        for bp in raw_blueprints:
+            bp_dict = bp.model_dump() if hasattr(bp, "model_dump") else dict(bp)
+            bp_id = str(bp_dict.get("id", ""))
+            if bp_id:
+                bp_map[bp_id] = bp_dict
+
+        merged_items = []
+        for raw_it in raw_items:
+            it_dict = raw_it.model_dump(by_alias=True) if hasattr(raw_it, "model_dump") else dict(raw_it)
+            bp_id = str(it_dict.get("article_blueprint_id") or it_dict.get("blueprint_group_id") or "")
+            if bp_id in bp_map:
+                bp = bp_map[bp_id]
+                it_dict["category"] = it_dict.get("category") or bp.get("category")
+                it_dict["sub_category"] = it_dict.get("sub_category") or bp.get("sub_category")
+                it_dict["article_name"] = it_dict.get("article_name") or bp.get("article_name")
+                it_dict["product_short_description"] = it_dict.get("product_short_description") or bp.get("description")
+                it_dict["product_extended_description"] = it_dict.get("product_extended_description") or bp.get("extended_description")
+                it_dict["tags"] = it_dict.get("tags") or bp.get("tags")
+                it_dict["materials"] = it_dict.get("materials") or bp.get("materials")
+                it_dict["blueprint_group_id"] = bp_id
+            merged_items.append(it_dict)
+        items = [EnrichedItemSchema.model_validate(item) for item in merged_items]
+    else:
+        items = [EnrichedItemSchema.model_validate(item) for item in raw_items]
 
     brand_id = job.data.get("brand_id") if job.data else None
     if not brand_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Staged job data is missing brand_id")
+
+    resolved_blueprints: Dict[str, str] = {}
 
     for item in items:
         # Resolve category_id based on sub_category or category objects
@@ -189,18 +223,35 @@ def confirm_and_persist_staging(
             )
 
         # 1. Ensure product exists
-        blueprint_id = get_or_create_product(
-            db=db,
-            brand_id=brand_id,
-            description=item.product_short_description or "Unknown Product",
-            article_name=item.article_name or item.product_short_description or "Unknown Product",
-            extended_description=item.product_extended_description or "",
-            tags=item.tags,
-            materials=item.materials,
-            category_id=category_id,
-            commit_changes=False
-        )
-        
+        bp_group_key = item.blueprint_group_id or f"{item.article_name}|{item.product_short_description}"
+        if bp_group_key in resolved_blueprints:
+            blueprint_id = resolved_blueprints[bp_group_key]
+        else:
+            blueprint_id = get_or_create_product(
+                db=db,
+                brand_id=brand_id,
+                description=item.product_short_description or "Unknown Product",
+                article_name=item.article_name or item.product_short_description or "Unknown Product",
+                extended_description=item.product_extended_description or "",
+                tags=item.tags,
+                materials=item.materials,
+                category_id=category_id,
+                commit_changes=False
+            )
+            resolved_blueprints[bp_group_key] = blueprint_id
+
+            # Check if newly created blueprint lacks an embedding; if so, generate and save synchronously
+            bp_obj = pim_repo.get(db, blueprint_id)
+            if bp_obj and bp_obj.embedding is None:
+                text_to_embed = f"{item.article_name or ''} {item.product_short_description or ''}".strip()
+                if text_to_embed:
+                    try:
+                        from src.agents.llm_client import LLMClient
+                        emb = LLMClient().generate_embedding_sync(text_to_embed)
+                        pim_repo.save_embedding(db, blueprint_id, emb, commit_changes=False)
+                    except Exception as exc:
+                        print(f"[confirm_and_persist_staging] Warning: Failed to generate embedding for blueprint {blueprint_id}: {exc}")
+
         # 2. Register warehouse movement
         if item.quantity and item.quantity > 0:
             register_inbound_movement(
@@ -213,11 +264,12 @@ def confirm_and_persist_staging(
                 colors=item.colors,
                 commit_changes=False
             )
-        
-    # Delete job from staging area only upon successful processing
+
+    # Ensure all ingestion changes (blueprints, articles, movements) are committed FIRST
+    db.commit()
+
+    # Delete job from staging area in a separate, isolated transaction
     try:
         staging_repo.delete_job(db, job_id)
-    except Exception:
-        pass
-    # Ensure changes are committed if delete_job didn't commit
-    db.commit()
+    except Exception as exc:
+        print(f"[confirm_and_persist_staging] Warning: Failed to clean up staging job {job_id}: {exc}")

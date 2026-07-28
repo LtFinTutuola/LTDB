@@ -16,9 +16,9 @@ class CategoryRefSchema(BaseModel):
 
 class EnrichedItemSchema(BaseModel):
     """Full enriched item schema returned by the DataIngestionAgent."""
-    vendor_code: Optional[str] = Field(None, alias="VendorCode")
-    barcode: Optional[str] = Field(None, alias="Barcode")
-    quantity: Optional[int] = Field(None, alias="Quantity")
+    vendor_code: Optional[str] = None
+    barcode: Optional[str] = None
+    quantity: Optional[int] = None
     category: Optional[CategoryRefSchema] = None
     sub_category: Optional[CategoryRefSchema] = None
     sex: Optional[str] = None
@@ -39,28 +39,6 @@ class JobStatusResponse(BaseModel):
     status: str
     data: Optional[dict] = None
 
-class StagingConfirmationRequest(BaseModel):
-    items: Optional[List[EnrichedItemSchema]] = None
-
-class ExtractedItemSchema(BaseModel):
-    """Item schema returned by DataExtractionAgent."""
-    item_id: str
-    vendor_code: Optional[str] = Field(None, alias="VendorCode")
-    barcode: Optional[str] = Field(None, alias="Barcode")
-    quantity: Optional[int] = Field(None, alias="Quantity")
-    colors: Optional[List[str]] = None
-    description: Optional[str] = None
-    article_name: Optional[str] = None
-    article_description: Optional[str] = None
-
-class BlueprintItemSchema(BaseModel):
-    """Item schema returned by ArticleBlueprintsAgent linking to a blueprint."""
-    item_id: str
-    vendor_code: Optional[str] = Field(None, alias="VendorCode")
-    quantity: Optional[int] = Field(None, alias="Quantity")
-    colors: Optional[List[str]] = None
-    article_blueprint_id: str
-
 class BlueprintDefinitionSchema(BaseModel):
     """Blueprint definition returned by ArticleBlueprintsAgent."""
     id: str
@@ -72,6 +50,30 @@ class BlueprintDefinitionSchema(BaseModel):
     extended_description: Optional[str] = None
     tags: Optional[List[str]] = None
     materials: Optional[List[str]] = None
+
+class StagingConfirmationRequest(BaseModel):
+    items: Optional[List[EnrichedItemSchema]] = None
+    blueprints: Optional[List[BlueprintDefinitionSchema]] = None
+
+class ExtractedItemSchema(BaseModel):
+    """Item schema returned by DataExtractionAgent."""
+    item_id: str
+    vendor_code: Optional[str] = None
+    barcode: Optional[str] = None
+    quantity: Optional[int] = None
+    colors: Optional[List[str]] = None
+    description: Optional[str] = None
+    article_name: Optional[str] = None
+    article_description: Optional[str] = None
+
+class BlueprintItemSchema(BaseModel):
+    """Item schema returned by ArticleBlueprintsAgent linking to a blueprint."""
+    item_id: str
+    vendor_code: Optional[str] = None
+    barcode: Optional[str] = None
+    quantity: Optional[int] = None
+    colors: Optional[List[str]] = None
+    article_blueprint_id: str
 
 class BipartiteIngestionResponse(BaseModel):
     items: List[BlueprintItemSchema]

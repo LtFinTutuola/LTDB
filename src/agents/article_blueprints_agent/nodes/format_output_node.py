@@ -10,10 +10,16 @@ def _clean_item(item: dict) -> dict:
     else:
         colors = []
 
+    try:
+        qty = int(item.get("quantity") or item.get("Quantity") or 0)
+    except (ValueError, TypeError):
+        qty = 0
+
     return {
         "item_id": item.get("item_id", ""),
         "vendor_code": item.get("vendor_code") or item.get("VendorCode") or "",
-        "quantity": item.get("quantity") or item.get("Quantity") or 0,
+        "barcode": item.get("barcode") or item.get("Barcode") or "",
+        "quantity": qty,
         "colors": colors,
         "article_blueprint_id": item.get("article_blueprint_id", ""),
     }

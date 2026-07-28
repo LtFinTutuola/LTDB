@@ -55,6 +55,13 @@ async def extraction_node(state: ExtractionGraphState) -> dict:
 
     for item in parsed:
         item["item_id"] = str(uuid.uuid4())
+        item["vendor_code"] = item.get("vendor_code") or item.get("VendorCode") or ""
+        item["barcode"] = item.get("barcode") or item.get("Barcode") or ""
+        try:
+            item["quantity"] = int(item.get("quantity") or item.get("Quantity") or 0)
+        except (ValueError, TypeError):
+            item["quantity"] = 0
+
         c = item.get("Color") or item.get("colors") or []
         if isinstance(c, str):
             item["colors"] = [c] if c.strip() else []
@@ -62,8 +69,7 @@ async def extraction_node(state: ExtractionGraphState) -> dict:
             item["colors"] = [str(x) for x in c if x]
         else:
             item["colors"] = []
-        if "Description" in item and "description" not in item:
-            item["description"] = item["Description"]
+        item["description"] = item.get("description") or item.get("Description") or ""
 
     if parsed:
         parsed[0]["_overwrite"] = True

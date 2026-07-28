@@ -50,6 +50,8 @@ class TestExtractionNode:
         assert "item_id" in items[0]
         assert len(items[0]["item_id"]) == 36  # UUID string format
         assert items[0]["colors"] == ["Nero"]
+        assert items[0]["vendor_code"] == "G001"
+        assert items[0]["quantity"] == 2
         assert items[0]["_overwrite"] is True
 
     @pytest.mark.asyncio

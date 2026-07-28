@@ -259,3 +259,21 @@ class LLMClient:
             contents=text,
         )
         return response.embeddings[0].values
+
+    def generate_embedding_sync(self, text: str, model_name: str = "gemini-embedding-001") -> list[float]:
+        """
+        Synchronously generate an embedding vector for a given text.
+        
+        Args:
+            text: The text to embed.
+            model_name: The embedding model to use.
+            
+        Returns:
+            A list of floats representing the embedding vector.
+        """
+        response = self._client.models.embed_content(
+            model=model_name,
+            contents=text,
+        )
+        return response.embeddings[0].values
+

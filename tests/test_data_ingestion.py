@@ -244,12 +244,12 @@ def test_confirm_endpoint(db_session, monkeypatch):
             "brand_id": str(dummy_brand.id),
             "items": [
                 {
-                    "VendorCode": "TEST-CODE-001",
+                    "vendor_code": "TEST-CODE-001",
                     "article_name": "Official Item Name",
                     "product_short_description": "Test Item",
-                    "Barcode": "8888888888888",
+                    "barcode": "8888888888888",
                     "colors": ["Blue"],
-                    "Quantity": 5,
+                    "quantity": 5,
                     "category": {
                         "id": str(dummy_category.id),
                         "description": dummy_category.name
@@ -291,6 +291,90 @@ def test_confirm_endpoint(db_session, monkeypatch):
     assert deleted_job is None
 
     app.dependency_overrides.clear()
+
+
+def test_confirm_endpoint_bipartite_staging_with_empty_payload(db_session, monkeypatch):
+    app.dependency_overrides[get_db] = lambda: db_session
+
+    from src.models.pim import Brand, Category, ArticleBlueprint
+    from src.models.wms import Article, ArticleMovement
+    from src.agents.llm_client import LLMClient
+
+    dummy_brand = Brand(name="DUMMY_BRAND_BIPARTITE")
+    db_session.add(dummy_brand)
+    
+    dummy_category = Category(name="Valigie", description="Valigie da viaggio")
+    db_session.add(dummy_category)
+    db_session.commit()
+
+    # Mock sync embedding generation
+    monkeypatch.setattr(LLMClient, "generate_embedding_sync", lambda self, text, model_name="gemini-embedding-001": [0.1, 0.2, 0.3])
+
+    job_id = "test_job_bipartite_123"
+    bp_id = "bp_uuid_001"
+    job = StagingArea(
+        id=job_id,
+        file_path="some/bipartite.pdf",
+        status=JobStatus.COMPLETED.value,
+        data={
+            "brand_id": str(dummy_brand.id),
+            "items": [
+                {
+                    "item_id": "item_1",
+                    "vendor_code": "MJ-001",
+                    "barcode": "1111111111111",
+                    "colors": ["Red"],
+                    "quantity": 3,
+                    "article_blueprint_id": bp_id
+                },
+                {
+                    "item_id": "item_2",
+                    "vendor_code": "MJ-002",
+                    "barcode": "2222222222222",
+                    "colors": ["Blue"],
+                    "quantity": 2,
+                    "article_blueprint_id": bp_id
+                }
+            ],
+            "blueprints": [
+                {
+                    "id": bp_id,
+                    "is_new": True,
+                    "category": {
+                        "id": str(dummy_category.id),
+                        "description": dummy_category.name
+                    },
+                    "sub_category": None,
+                    "article_name": "American Tourister Bipartite Bag",
+                    "description": "Short desc",
+                    "extended_description": "Extended desc",
+                    "tags": ["bag", "travel"],
+                    "materials": ["polyester"]
+                }
+            ]
+        }
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    # Confirm with empty payload
+    response = client.post(f"/api/v1/ingestion/confirm/{job_id}", json={})
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+
+    blueprint = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.article_name == "American Tourister Bipartite Bag").first()
+    assert blueprint is not None
+    assert blueprint.description == "Short desc"
+    assert blueprint.embedding == [0.1, 0.2, 0.3]
+
+    articles = db_session.query(Article).filter(Article.article_blueprint_id == str(blueprint.id)).all()
+    assert len(articles) == 5
+
+    deleted_job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
+    assert deleted_job is None
+
+    app.dependency_overrides.clear()
+
 
 
 def test_confirm_endpoint_job_not_found(db_session):
@@ -336,9 +420,9 @@ def test_confirm_endpoint_persistence_failure(db_session, monkeypatch):
             "brand_id": str(dummy_brand.id),
             "items": [
                 {
-                    "VendorCode": "TEST-CODE-001",
+                    "vendor_code": "TEST-CODE-001",
                     "product_short_description": "Test Item",
-                    "Quantity": 5,
+                    "quantity": 5,
                     "category": {
                         "id": str(dummy_category.id),
                         "description": dummy_category.name
@@ -361,6 +445,88 @@ def test_confirm_endpoint_persistence_failure(db_session, monkeypatch):
     assert "Mock DB Failure" in response.json()["detail"]
 
     # Ensure the job is NOT deleted from the staging area when confirmation fails
+    remaining_job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
+    assert remaining_job is not None
+
+    app.dependency_overrides.clear()
+
+
+def test_confirm_endpoint_staging_cleanup_failure_preserves_ingestion(db_session, monkeypatch):
+    app.dependency_overrides[get_db] = lambda: db_session
+
+    from src.models.pim import Brand, Category, ArticleBlueprint
+    from src.models.wms import Article, ArticleMovement
+    from src.agents.llm_client import LLMClient
+
+    dummy_brand = Brand(name="DUMMY_BRAND_CLEANUP_FAIL")
+    db_session.add(dummy_brand)
+    
+    dummy_category = Category(name="Borse", description="Borse da viaggio")
+    db_session.add(dummy_category)
+    db_session.commit()
+
+    monkeypatch.setattr(LLMClient, "generate_embedding_sync", lambda self, text, model_name="gemini-embedding-001": [0.1, 0.2, 0.3])
+
+    job_id = "test_job_cleanup_fail"
+    bp_id = "bp_uuid_cleanup"
+    job = StagingArea(
+        id=job_id,
+        file_path="some/cleanup_fail.pdf",
+        status=JobStatus.COMPLETED.value,
+        data={
+            "brand_id": str(dummy_brand.id),
+            "items": [
+                {
+                    "item_id": "item_cleanup_1",
+                    "vendor_code": "CL-001",
+                    "barcode": "9999999999999",
+                    "colors": ["Green"],
+                    "quantity": 4,
+                    "article_blueprint_id": bp_id
+                }
+            ],
+            "blueprints": [
+                {
+                    "id": bp_id,
+                    "is_new": True,
+                    "category": {
+                        "id": str(dummy_category.id),
+                        "description": dummy_category.name
+                    },
+                    "sub_category": None,
+                    "article_name": "Cleanup Fail Test Bag",
+                    "description": "Desc cleanup",
+                    "extended_description": "Extended desc cleanup",
+                    "tags": ["bag"],
+                    "materials": ["leather"]
+                }
+            ]
+        }
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    # Monkeypatch delete_job to raise an exception when attempting to clean up staging area
+    def mock_delete_job_raise(*args, **kwargs):
+        raise Exception("Mock Staging Cleanup Failure")
+
+    monkeypatch.setattr("src.repositories.staging_repo.delete_job", mock_delete_job_raise)
+
+    response = client.post(f"/api/v1/ingestion/confirm/{job_id}", json={})
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+
+    # Verify that despite staging cleanup failure, ingestion data WAS committed!
+    blueprint = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.article_name == "Cleanup Fail Test Bag").first()
+    assert blueprint is not None
+    assert blueprint.description == "Desc cleanup"
+
+    articles = db_session.query(Article).filter(Article.article_blueprint_id == str(blueprint.id)).all()
+    assert len(articles) == 4
+    assert articles[0].supplier_code == "CL-001"
+    assert articles[0].ean == "9999999999999"
+
+    # Verify that the staging job is still present because delete_job failed
     remaining_job = db_session.query(StagingArea).filter(StagingArea.id == job_id).first()
     assert remaining_job is not None
 
