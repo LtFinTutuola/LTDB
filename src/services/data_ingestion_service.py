@@ -5,8 +5,9 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from src.core.database import SessionLocal
 from src.agents.base import AgentException
-from src.agents.data_ingestion_agent import DataIngestionAgent
-from src.repositories.pim_repo import category_repo
+from src.agents.data_extraction_agent import DataExtractionAgent
+from src.agents.article_blueprints_agent import ArticleBlueprintsAgent
+from src.repositories.pim_repo import pim_repo, category_repo
 from src.schemas.data_ingestion import StagingConfirmationRequest, EnrichedItemSchema
 from src.services.pim_service import get_or_create_product
 from src.services.wms_service import register_inbound_movement
@@ -52,39 +53,63 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
                 raise AgentException(f"Brand ID '{brand_id}' not found in the database.")
             brand_name = brand_obj.name
 
-            # 1. Fetch brand hierarchy
+            # 1. Fetch brand hierarchy and DB embeddings
             categories = category_repo.get_brand_hierarchy(db, brand_id)
+            db_embeddings_matrix = pim_repo.get_embeddings_by_brand(db, brand_id)
 
-            # 2. Build input payload for the agent
-            input_data = {
+            # 2. Run DataExtractionAgent
+            extraction_agent = DataExtractionAgent()
+            extraction_res = await extraction_agent.aexecute({
                 "file_path": file_path,
                 "brand": brand_name,
+            })
+            extracted_items = extraction_res["items"]
+
+            # 3. Run ArticleBlueprintsAgent
+            blueprints_agent = ArticleBlueprintsAgent()
+            blueprints_res = await blueprints_agent.aexecute({
+                "items": extracted_items,
                 "categories": categories,
-                "allowed_sex": ["Uomo", "Donna", "Unisex"],
-            }
+                "db_embeddings_matrix": db_embeddings_matrix,
+                "db_similarity_threshold": 0.92,
+                "articles_similarity_threshold": 0.88,
+            })
+            output_items = blueprints_res["items"]
+            output_blueprints = blueprints_res["blueprints"]
 
-            # 3. Run the agent
-            agent = DataIngestionAgent()
-            result = await agent.aexecute(input_data)
-
-            # 3.5 Post-process categories
+            # 4. Fail-fast category validation and resolution for new blueprints
             from sqlalchemy import func
             from src.models.pim import Category
-            if "items" in result:
-                for item in result["items"]:
-                    item["id"] = str(uuid.uuid4())
-                    for field in ["category", "sub_category"]:
-                        if item.get(field):
-                            cat_name = item[field]
-                            cat = db.query(Category).filter(func.lower(Category.name) == cat_name.lower()).first()
-                            if cat:
-                                item[field] = {"id": str(cat.id), "description": cat.name}
-                            else:
-                                item[field] = None
 
-            # 4. Attach job_id and persist as COMPLETED
-            result["job_id"] = job_id
-            result["brand_id"] = brand_id
+            for bp in output_blueprints:
+                if bp.get("is_new"):
+                    for field, label in [("category", "category"), ("sub_category", "sub-category")]:
+                        cat_name = bp.get(field)
+                        if cat_name:
+                            if isinstance(cat_name, dict):
+                                continue
+                            cat = db.query(Category).filter(
+                                func.lower(Category.name) == str(cat_name).lower()
+                            ).first()
+                            if cat:
+                                bp[field] = {"id": str(cat.id), "description": cat.name}
+                            else:
+                                if field == "category":
+                                    raise AgentException(
+                                        message=f"category '{cat_name}' does not exist, extraction aborted",
+                                        output=None,
+                                    )
+                                else:
+                                    bp[field] = None
+
+            # 5. Build bipartite response and persist as COMPLETED
+            result = {
+                "items": output_items,
+                "blueprints": output_blueprints,
+                "warnings": extraction_res.get("warnings", []) + blueprints_res.get("warnings", []),
+                "job_id": job_id,
+                "brand_id": brand_id,
+            }
             staging_repo.update_job(db, job_id=job_id, status=JobStatus.COMPLETED.value, data=result)
 
         except AgentException as exc:

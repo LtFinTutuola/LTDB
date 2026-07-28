@@ -17,41 +17,44 @@ class MockSessionLocal:
         pass
 
 
-def _mock_agent_result():
-    """Return a realistic enriched items payload matching the new agent output."""
+def _mock_extraction_result():
     return {
         "items": [
+            {"item_id": "item-1", "vendor_code": "SUP-001", "quantity": 100, "colors": ["nero"], "article_name": "Borsa Shopper", "article_description": "Borsa tote in pelle nera."},
+            {"item_id": "item-2", "vendor_code": "SUP-002", "quantity": 50, "colors": ["marrone"], "article_name": "Borsa Tracolla", "article_description": "Tracolla in tessuto marrone."},
+        ],
+        "warnings": [],
+    }
+
+
+def _mock_blueprints_result():
+    return {
+        "items": [
+            {"item_id": "item-1", "vendor_code": "SUP-001", "quantity": 100, "colors": ["nero"], "article_blueprint_id": "bp-1"},
+            {"item_id": "item-2", "vendor_code": "SUP-002", "quantity": 50, "colors": ["marrone"], "article_blueprint_id": "bp-2"},
+        ],
+        "blueprints": [
             {
-                "VendorCode": "SUP-001",
-                "Barcode": None,
-                "Quantity": 100,
+                "id": "bp-1",
+                "is_new": True,
                 "category": "Borse",
                 "sub_category": "Tote / Shopper",
-                "sex": "Donna",
-                "materials": ["pelle"],
-                "colors": ["nero"],
                 "article_name": "Borsa Shopper",
-                "product_short_description": "Borsa tote in pelle nera.",
-                "product_extended_description": "Borsa tote capiente in pelle nera di alta qualità.",
-                "tags": ["borsa", "pelle", "nero", "donna"],
-                "sources": [],
-                "warnings": [],
+                "description": "Borsa tote in pelle nera.",
+                "extended_description": "Borsa tote capiente in pelle nera di alta qualità.",
+                "tags": ["borsa", "pelle", "nero"],
+                "materials": ["pelle"],
             },
             {
-                "VendorCode": "SUP-002",
-                "Barcode": None,
-                "Quantity": 50,
+                "id": "bp-2",
+                "is_new": True,
                 "category": "Borse",
                 "sub_category": "Tracolla / Crossbody",
-                "sex": "Donna",
-                "materials": ["tessuto"],
-                "colors": ["marrone"],
                 "article_name": "Borsa Tracolla",
-                "product_short_description": "Tracolla in tessuto marrone.",
-                "product_extended_description": "Borsa a tracolla leggera in tessuto marrone.",
-                "tags": ["tracolla", "tessuto", "marrone", "donna"],
-                "sources": [],
-                "warnings": [],
+                "description": "Tracolla in tessuto marrone.",
+                "extended_description": "Borsa a tracolla leggera in tessuto marrone.",
+                "tags": ["tracolla", "tessuto", "marrone"],
+                "materials": ["tessuto"],
             },
         ],
         "warnings": [],
@@ -62,27 +65,40 @@ def test_extract_endpoint(db_session, tmp_path, monkeypatch):
     app.dependency_overrides[get_db] = lambda: db_session
     monkeypatch.setattr("src.services.data_ingestion_service.SessionLocal", lambda: MockSessionLocal(db_session))
 
-    # Mock the agent's aexecute so no real LLM calls are made
-    async def mock_aexecute(self, input_data):
-        return _mock_agent_result()
+    async def mock_extraction_aexecute(self, input_data):
+        return _mock_extraction_result()
+
+    async def mock_blueprints_aexecute(self, input_data):
+        return _mock_blueprints_result()
 
     monkeypatch.setattr(
-        "src.agents.data_ingestion_agent.agent.DataIngestionAgent.aexecute",
-        mock_aexecute,
+        "src.services.data_ingestion_service.DataExtractionAgent.aexecute",
+        mock_extraction_aexecute,
+    )
+    monkeypatch.setattr(
+        "src.services.data_ingestion_service.ArticleBlueprintsAgent.aexecute",
+        mock_blueprints_aexecute,
     )
 
-    # Mock the category repo to avoid needing a seeded DB
     monkeypatch.setattr(
         "src.services.data_ingestion_service.category_repo.get_brand_hierarchy",
         lambda db, brand: {
             "Borse": {"description": "Borse da donna", "sub_categories": {"Tote / Shopper": "Borsa grande"}}
         },
     )
+    monkeypatch.setattr(
+        "src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand",
+        lambda db, brand: [],
+    )
 
-    # Seed a brand for the test
-    from src.models.pim import Brand
+    # Seed a brand and category for the test
+    from src.models.pim import Brand, Category
     test_brand = Brand(name="Samsonite")
     db_session.add(test_brand)
+    test_cat = Category(name="Borse", description="Borse da donna")
+    db_session.add(test_cat)
+    test_sub = Category(name="Tote / Shopper", description="Borsa grande", parent_id=test_cat.id)
+    db_session.add(test_sub)
     db_session.commit()
     brand_id_str = str(test_brand.id)
 
@@ -109,6 +125,62 @@ def test_extract_endpoint(db_session, tmp_path, monkeypatch):
     assert data["status"] == JobStatus.COMPLETED.name
     assert "items" in data["data"]
     assert len(data["data"]["items"]) == 2
+    assert "blueprints" in data["data"]
+    assert len(data["data"]["blueprints"]) == 2
+
+    app.dependency_overrides.clear()
+
+
+def test_extract_endpoint_fail_fast_category_error(db_session, tmp_path, monkeypatch):
+    app.dependency_overrides[get_db] = lambda: db_session
+    monkeypatch.setattr("src.services.data_ingestion_service.SessionLocal", lambda: MockSessionLocal(db_session))
+
+    async def mock_extraction_aexecute(self, input_data):
+        return _mock_extraction_result()
+
+    async def mock_blueprints_aexecute(self, input_data):
+        res = _mock_blueprints_result()
+        res["blueprints"][0]["category"] = "NonExistentCategory"
+        return res
+
+    monkeypatch.setattr(
+        "src.services.data_ingestion_service.DataExtractionAgent.aexecute",
+        mock_extraction_aexecute,
+    )
+    monkeypatch.setattr(
+        "src.services.data_ingestion_service.ArticleBlueprintsAgent.aexecute",
+        mock_blueprints_aexecute,
+    )
+
+    monkeypatch.setattr(
+        "src.services.data_ingestion_service.category_repo.get_brand_hierarchy",
+        lambda db, brand: {},
+    )
+    monkeypatch.setattr(
+        "src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand",
+        lambda db, brand: [],
+    )
+
+    from src.models.pim import Brand
+    from src.agents.base import AgentException
+    test_brand = Brand(name="Samsonite Fail")
+    db_session.add(test_brand)
+    db_session.commit()
+    brand_id_str = str(test_brand.id)
+
+    dummy_pdf = tmp_path / "test_doc_fail.pdf"
+    dummy_pdf.write_text("dummy content")
+
+    with pytest.raises(AgentException, match="does not exist, extraction aborted"):
+        client.post(
+            "/api/v1/ingestion/extract",
+            json={"file_path": str(dummy_pdf), "brand_id": brand_id_str},
+        )
+    
+    job = db_session.query(StagingArea).filter(StagingArea.file_path == str(dummy_pdf)).first()
+    assert job is not None
+    assert job.status == JobStatus.ERROR.value
+    assert "does not exist, extraction aborted" in job.data["error"]
 
     app.dependency_overrides.clear()
 

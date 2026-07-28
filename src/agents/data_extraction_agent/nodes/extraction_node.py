@@ -1,21 +1,9 @@
-"""
-nodes/extraction_node.py
--------------------------
-Stage 2: Extract the structured product array from the cleaned text.
-
-Uses the LLM with JSON output mode to normalise the shipment rows into
-a list of dicts with keys: VendorCode, Barcode, Description, Color, Quantity.
-
-Raises AgentException (fatal) if:
-  - The LLM call fails.
-  - The response cannot be parsed as JSON.
-  - The resulting list is empty.
-"""
 import json
+import uuid
 
 from src.agents.base import AgentException
 from src.agents.llm_client import LLMClient
-from src.agents.data_ingestion_agent.state import GraphState
+from src.agents.data_extraction_agent.state import ExtractionGraphState
 
 _SYSTEM_PROMPT = (
     "Sei un Agente di Document Intelligence per un sistema ERP. "
@@ -29,15 +17,9 @@ _SYSTEM_PROMPT = (
 _MODEL = "gemini-3.1-flash-lite"
 
 
-async def extraction_node(state: GraphState) -> dict:
+async def extraction_node(state: ExtractionGraphState) -> dict:
     """
-    Extract a structured list of products from the cleaned text.
-
-    Returns:
-        Partial state update: {"base_items": <list_of_dicts>}
-
-    Raises:
-        AgentException: On LLM failure, JSON parse error, or empty result.
+    Extract a structured list of products from the cleaned text and inject item_id.
     """
     print("[extraction_node] Extracting product JSON from cleaned text...")
     client = LLMClient()
@@ -71,5 +53,20 @@ async def extraction_node(state: GraphState) -> dict:
             output={"parsed": parsed},
         )
 
-    print(f"[extraction_node] Extracted {len(parsed)} product(s).")
-    return {"base_items": parsed}
+    for item in parsed:
+        item["item_id"] = str(uuid.uuid4())
+        c = item.get("Color") or item.get("colors") or []
+        if isinstance(c, str):
+            item["colors"] = [c] if c.strip() else []
+        elif isinstance(c, list):
+            item["colors"] = [str(x) for x in c if x]
+        else:
+            item["colors"] = []
+        if "Description" in item and "description" not in item:
+            item["description"] = item["Description"]
+
+    if parsed:
+        parsed[0]["_overwrite"] = True
+
+    print(f"[extraction_node] Extracted and assigned item_ids to {len(parsed)} product(s).")
+    return {"extracted_items": parsed}

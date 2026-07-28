@@ -1,27 +1,12 @@
-"""
-nodes/ingestion_node.py
-------------------------
-Stage 0: Extract raw text from the input PDF using pdfplumber.
-
-This is the only node that performs I/O on the local filesystem.
-On any failure (file unreadable, zero pages extracted) it raises
-AgentException immediately, aborting the pipeline.
-"""
 import pdfplumber
 
 from src.agents.base import AgentException
-from src.agents.data_ingestion_agent.state import GraphState
+from src.agents.data_extraction_agent.state import ExtractionGraphState
 
 
-async def ingestion_node(state: GraphState) -> dict:
+async def ingestion_node(state: ExtractionGraphState) -> dict:
     """
     Extract raw text from the PDF file referenced in state.file_path.
-
-    Returns:
-        Partial state update: {"raw_text": <extracted_text>}
-
-    Raises:
-        AgentException: If pdfplumber fails or no text is extracted.
     """
     pdf_path = state.file_path
     print(f"[ingestion_node] Extracting text from: {pdf_path}")

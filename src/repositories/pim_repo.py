@@ -10,6 +10,34 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
     def __init__(self):
         super().__init__(ArticleBlueprint)
 
+    def get_embeddings_by_brand(self, db: Session, brand_id: str) -> list[dict]:
+        """
+        Retrieve lightweight dictionary list of all blueprints for a brand where embedding is not null.
+        """
+        blueprints = (
+            db.query(ArticleBlueprint.id, ArticleBlueprint.embedding, ArticleBlueprint.category_id)
+            .filter(ArticleBlueprint.brand_id == brand_id)
+            .filter(ArticleBlueprint.embedding.isnot(None))
+            .all()
+        )
+        return [
+            {"id": str(bp.id), "embedding": bp.embedding, "category_id": str(bp.category_id) if bp.category_id else None}
+            for bp in blueprints
+        ]
+
+    def save_embedding(self, db: Session, blueprint_id: str, embedding: list[float], commit_changes: bool = True) -> None:
+        """
+        Update embedding vector for an existing article blueprint.
+        """
+        bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == blueprint_id).first()
+        if bp:
+            bp.embedding = embedding
+            if commit_changes:
+                db.commit()
+            else:
+                db.flush()
+
+
 
 class CategoryRepository:
     """

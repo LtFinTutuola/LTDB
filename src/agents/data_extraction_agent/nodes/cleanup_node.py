@@ -1,15 +1,5 @@
-"""
-nodes/cleanup_node.py
-----------------------
-Stage 1: Use an LLM to strip non-product content from the raw PDF text.
-
-Removes headers, footers, legal notices, bank details, and totals,
-returning only the product-row lines (including column headers).
-Failure here is non-fatal: if the LLM call fails, we fall back to
-the unmodified raw_text so the pipeline can still attempt extraction.
-"""
 from src.agents.llm_client import LLMClient
-from src.agents.data_ingestion_agent.state import GraphState
+from src.agents.data_extraction_agent.state import ExtractionGraphState
 
 _SYSTEM_PROMPT = (
     "Sei un assistente specializzato nell'estrazione dati. "
@@ -23,13 +13,9 @@ _SYSTEM_PROMPT = (
 _MODEL = "gemini-3.1-flash-lite"
 
 
-async def cleanup_node(state: GraphState) -> dict:
+async def cleanup_node(state: ExtractionGraphState) -> dict:
     """
     Invoke the LLM to clean the raw PDF text.
-
-    Returns:
-        Partial state update: {"cleaned_text": <cleaned_text>}
-        Falls back to raw_text if the LLM call fails.
     """
     print("[cleanup_node] Cleaning raw text via LLM...")
     client = LLMClient()
@@ -46,7 +32,6 @@ async def cleanup_node(state: GraphState) -> dict:
         print("[cleanup_node] Cleanup complete.")
         return {"cleaned_text": cleaned}
     except Exception as exc:
-        # Non-fatal: fall back to raw text and record a warning
         warning = f"[cleanup_node] LLM cleanup failed ({exc}), falling back to raw text."
         print(warning)
         return {"cleaned_text": state.raw_text, "warnings": [warning]}

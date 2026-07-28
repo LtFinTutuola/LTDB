@@ -205,3 +205,41 @@ class TestArticleBlueprintCrud:
         )
         assert bp.category_id is not None
         assert bp.materials is None
+
+    def test_embeddings_methods(self, db_session):
+        from src.repositories.pim_repo import pim_repo
+        brand, cat = self._make_brand_and_category(db_session)
+        bp1 = pim_repo.create(
+            db_session,
+            obj_in=ArticleBlueprintCreate(
+                brand_id=brand.id,
+                category_id=cat.id,
+                article_name="Bag 1",
+                description="Bag 1 desc",
+                extended_description="Ext 1",
+                tags=["t1"],
+            ),
+        )
+        bp2 = pim_repo.create(
+            db_session,
+            obj_in=ArticleBlueprintCreate(
+                brand_id=brand.id,
+                category_id=cat.id,
+                article_name="Bag 2",
+                description="Bag 2 desc",
+                extended_description="Ext 2",
+                tags=["t2"],
+            ),
+        )
+        # Initially no embeddings
+        res = pim_repo.get_embeddings_by_brand(db_session, str(brand.id))
+        assert len(res) == 0
+
+        # Save embedding on bp1
+        pim_repo.save_embedding(db_session, str(bp1.id), [0.1, 0.2, 0.3])
+        res = pim_repo.get_embeddings_by_brand(db_session, str(brand.id))
+        assert len(res) == 1
+        assert res[0]["id"] == str(bp1.id)
+        assert res[0]["embedding"] == [0.1, 0.2, 0.3]
+        assert res[0]["category_id"] == str(cat.id)
+

@@ -55,6 +55,7 @@ class ArticleBlueprint(Base, UUIDMixin, TimestampMixin):
     # JSON arrays for SQLite (using JSON1 extension via SQLAlchemy JSON)
     tags: Mapped[list] = mapped_column(JSON, nullable=False)
     materials: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    embedding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     # Relationships
     brand: Mapped["Brand"] = relationship("Brand", back_populates="blueprints")
