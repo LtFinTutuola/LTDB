@@ -33,7 +33,7 @@ class DataExtractionAgent(BaseAgent):
     def __init__(self):
         super().__init__()
 
-    async def aexecute(self, input_data: dict) -> dict:
+    async def _aexecute(self, input_data: dict) -> dict:
         try:
             initial_state = ExtractionGraphState(
                 file_path=input_data["file_path"],

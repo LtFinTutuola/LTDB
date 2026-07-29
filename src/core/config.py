@@ -11,6 +11,9 @@ config_path = BASE_DIR / "src" / "config.yaml"
 with open(config_path, "r") as f:
     yaml_config = yaml.safe_load(f)
 
+# Logging
+logging_config = yaml_config.get("logging", {})
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = yaml_config.get("project_name", "")
     
@@ -23,6 +26,11 @@ class Settings(BaseSettings):
     
     # Staging Storage
     STAGING_DIRECTORY: str = yaml_config.get("staging_directory", "").replace("{BASE_DIR}", str(BASE_DIR))
+    
+    # Logging Config
+    LOGS_DIR: str = logging_config.get("logs_dir", "data/logs/execution").replace("{BASE_DIR}", str(BASE_DIR))
+    LOGGING_LEVEL: str = logging_config.get("logging_level", "STANDARD").upper()
+    SAVING_INTERVAL: int = int(logging_config.get("saving_interval", 24))
     
     class Config:
         env_file = ".env"

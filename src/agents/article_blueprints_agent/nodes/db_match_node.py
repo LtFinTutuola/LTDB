@@ -1,6 +1,9 @@
 import numpy as np
 from typing import List
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
@@ -16,6 +19,8 @@ def db_match_node(state: BlueprintsGraphState) -> dict:
     Match items against DB embeddings matrix using db_similarity_threshold.
     Records existing blueprints in output_blueprints without duplicates.
     """
+    logger.log_agent("db_match_node", "node_entry", "ok", 
+                     item_count=len(state.items), db_matrix_size=len(state.db_embeddings_matrix), threshold=state.db_similarity_threshold)
     matched: list[dict] = []
     unmatched: list[dict] = []
     output_blueprints: list[dict] = list(state.output_blueprints)
@@ -51,8 +56,10 @@ def db_match_node(state: BlueprintsGraphState) -> dict:
             unmatched.append(dict(item))
 
     print(f"[db_match_node] Matched: {len(matched)}, Unmatched: {len(unmatched)}.")
-    return {
+    result = {
         "matched_items": matched,
         "unmatched_items": unmatched,
         "output_blueprints": output_blueprints,
     }
+    logger.log_agent("db_match_node", "node_exit", "ok", output=result)
+    return result

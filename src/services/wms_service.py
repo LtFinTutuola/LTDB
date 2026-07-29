@@ -5,6 +5,9 @@ from src.repositories.base import BaseRepository
 from src.repositories.wms_repo import wms_repo
 from src.schemas.wms import BatchCreate, ArticleCreate, StockUpdate, SupplierCreate
 from src.models.wms import Batch, ArticleStatus, Supplier, MovementReason
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 batch_repo = BaseRepository[Batch, BatchCreate, BatchCreate](Batch)
 supplier_repo = BaseRepository[Supplier, SupplierCreate, SupplierCreate](Supplier)
@@ -83,4 +86,10 @@ def register_inbound_movement(
     else:
         db.flush()
         
+    logger.log_execution("wms_service", "wms_movement_registered", "ok", 
+                         batch_id=batch_id, 
+                         blueprint_id=blueprint_id, 
+                         quantity_requested=quantity, 
+                         articles_created=len(article_ids), 
+                         article_ids=article_ids)
     return article_ids

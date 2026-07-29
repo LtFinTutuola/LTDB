@@ -7,6 +7,10 @@ Foundational building blocks for the agent layer:
 """
 from abc import ABC, abstractmethod
 from typing import Optional
+import time
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 
 class AgentException(Exception):
@@ -34,19 +38,31 @@ class BaseAgent(ABC):
     the interface agent-agnostic at the service level.
     """
 
-    @abstractmethod
     async def aexecute(self, input_data: dict) -> dict:
         """
-        Run the agent asynchronously.
+        Run the agent asynchronously with automatic logging.
+        """
+        agent_name = self.__class__.__name__
+        logger.log_agent(agent_name, "agent_started", "ok", input_data=input_data)
+        start_time = time.time()
+        
+        try:
+            result = await self._aexecute(input_data)
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.log_agent(agent_name, "agent_finished", "ok", output=result, latency_ms=elapsed_ms)
+            return result
+        except AgentException as e:
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.log_agent(agent_name, "agent_failed", "err", exc=e, output=e.output, latency_ms=elapsed_ms)
+            raise e
+        except Exception as e:
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.log_agent(agent_name, "agent_failed", "err", exc=e, latency_ms=elapsed_ms)
+            raise AgentException(f"Unexpected error in {agent_name}: {e}") from e
 
-        Args:
-            input_data: A dictionary containing all runtime parameters
-                        required by the concrete agent implementation.
-
-        Returns:
-            A dictionary containing the agent's output.
-
-        Raises:
-            AgentException: On any fatal, unrecoverable error.
+    @abstractmethod
+    async def _aexecute(self, input_data: dict) -> dict:
+        """
+        Actual agent implementation to be overridden by subclasses.
         """
         ...

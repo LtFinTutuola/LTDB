@@ -15,6 +15,9 @@ from typing import Optional, Any
 import yaml
 from google import genai
 from google.genai import types
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 
 # Path to credentials — in the same directory as this file
@@ -158,7 +161,7 @@ class LLMClient:
             if hasattr(gm, "web_search_queries") and gm.web_search_queries:
                 query_usage = len(gm.web_search_queries)
 
-        self._logs.append(LLMCallRecord(
+        record = LLMCallRecord(
             call_id=call_id,
             pipeline_stage=pipeline_stage,
             model_name=model_name,
@@ -167,7 +170,13 @@ class LLMClient:
             query_usage=query_usage,
             prompt=prompt,
             output=response.text or "",
-        ))
+        )
+        self._logs.append(record)
+        
+        logger.log_llm("LLMClient", "generate_content", "ok", 
+                       call_id=call_id, pipeline_stage=pipeline_stage, model_name=model_name,
+                       tokens_in=input_tokens, tokens_out=output_tokens, query_usage=query_usage,
+                       prompt=prompt, output=response.text or "")
 
         return response.text or ""
 
@@ -226,7 +235,7 @@ class LLMClient:
             if hasattr(gm, "web_search_queries") and gm.web_search_queries:
                 query_usage = len(gm.web_search_queries)
 
-        self._logs.append(LLMCallRecord(
+        record = LLMCallRecord(
             call_id=call_id,
             pipeline_stage=pipeline_stage,
             model_name=model_name,
@@ -235,7 +244,13 @@ class LLMClient:
             query_usage=query_usage,
             prompt=prompt,
             output=response.text or "",
-        ))
+        )
+        self._logs.append(record)
+        
+        logger.log_llm("LLMClient", "generate_content_grounded", "ok", 
+                       call_id=call_id, pipeline_stage=pipeline_stage, model_name=model_name,
+                       tokens_in=input_tokens, tokens_out=output_tokens, query_usage=query_usage,
+                       prompt=prompt, output=response.text or "", extracted_urls=extracted_urls)
 
         return response.text or "", extracted_urls
 
@@ -258,6 +273,10 @@ class LLMClient:
             model=model_name,
             contents=text,
         )
+        call_id = str(uuid.uuid4())
+        logger.log_llm("LLMClient", "generate_embedding", "ok", 
+                       call_id=call_id, pipeline_stage="embedding", model_name=model_name,
+                       tokens_in=None, tokens_out=None, query_usage=0)
         return response.embeddings[0].values
 
     def generate_embedding_sync(self, text: str, model_name: str = "gemini-embedding-001") -> list[float]:
@@ -275,5 +294,9 @@ class LLMClient:
             model=model_name,
             contents=text,
         )
+        call_id = str(uuid.uuid4())
+        logger.log_llm("LLMClient", "generate_embedding_sync", "ok", 
+                       call_id=call_id, pipeline_stage="embedding", model_name=model_name,
+                       tokens_in=None, tokens_out=None, query_usage=0)
         return response.embeddings[0].values
 

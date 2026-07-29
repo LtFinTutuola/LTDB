@@ -4,6 +4,9 @@ from src.repositories.pim_repo import pim_repo
 from src.schemas.pim import ArticleBlueprintCreate, BrandCreate
 from src.repositories.base import BaseRepository
 from src.models.pim import Brand, ArticleBlueprint
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 brand_repo = BaseRepository[Brand, BrandCreate, BrandCreate](Brand)
 
@@ -36,4 +39,7 @@ def get_or_create_product(
         materials=materials
     )
     new_product = pim_repo.create(db, obj_in=blueprint_in, commit_changes=commit_changes)
+    logger.log_execution("pim_service", "blueprint_created", "ok", 
+                         blueprint_id=str(new_product.id), 
+                         payload=blueprint_in.model_dump())
     return str(new_product.id)

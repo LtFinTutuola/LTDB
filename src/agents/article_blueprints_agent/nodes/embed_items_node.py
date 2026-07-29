@@ -1,6 +1,9 @@
 import asyncio
 from src.agents.llm_client import LLMClient
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 
 async def _embed_single_item(client: LLMClient, item: dict) -> dict:
@@ -25,9 +28,13 @@ async def embed_items_node(state: BlueprintsGraphState) -> dict:
     """
     Batch generate embeddings for all items in parallel using asyncio.gather.
     """
+    logger.log_agent("embed_items_node", "node_entry", "ok", 
+                     items=[{k: v for k, v in item.items() if k in ["article_name", "article_description", "description"]} for item in state.items])
     print(f"[embed_items_node] Generating embeddings for {len(state.items)} item(s)...")
     client = LLMClient()
     tasks = [_embed_single_item(client, item) for item in state.items]
     embedded_items = await asyncio.gather(*tasks)
     print("[embed_items_node] Embeddings generated.")
-    return {"items": embedded_items}
+    result = {"items": embedded_items}
+    logger.log_agent("embed_items_node", "node_exit", "ok", output=result)
+    return result

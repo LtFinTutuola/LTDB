@@ -3,6 +3,9 @@ import numpy as np
 from typing import List
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
 from src.agents.article_blueprints_agent.nodes.db_match_node import cosine_similarity
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 
 def _compute_centroid(embeddings: List[List[float]]) -> List[float]:
@@ -20,6 +23,8 @@ def cluster_unmatched_node(state: BlueprintsGraphState) -> dict:
     unmatched = list(state.unmatched_items)
     threshold = state.articles_similarity_threshold
 
+    logger.log_agent("cluster_unmatched_node", "node_entry", "ok", 
+                     unmatched_items=unmatched, threshold=threshold)
     print(f"[cluster_unmatched_node] Clustering {len(unmatched)} unmatched item(s) (threshold: {threshold})...")
 
     # Each group is a dict: {"items": [...], "centroid": [...]}
@@ -53,8 +58,10 @@ def cluster_unmatched_node(state: BlueprintsGraphState) -> dict:
 
     # Post-merge pass: merge groups whose centroids exceed the threshold
     merged = True
+    iterations = 0
     while merged:
         merged = False
+        iterations += 1
         new_groups = []
         absorbed = set()
         for i in range(len(groups)):
@@ -91,8 +98,11 @@ def cluster_unmatched_node(state: BlueprintsGraphState) -> dict:
         })
 
     print(f"[cluster_unmatched_node] Created {len(new_blueprints)} new blueprint cluster(s).")
-    return {
+    result = {
         "unmatched_items": updated_unmatched,
         "new_blueprints": new_blueprints,
     }
+    logger.log_agent("cluster_unmatched_node", "node_exit", "ok", 
+                     output=result, post_merge_iterations=iterations)
+    return result
 

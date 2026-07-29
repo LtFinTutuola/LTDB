@@ -4,7 +4,9 @@ from sqlalchemy.orm import Session, joinedload
 from src.models.pim import ArticleBlueprint, Brand, Category
 from src.schemas.pim import ArticleBlueprintCreate, ArticleBlueprintResponse  # placeholder for update schema
 from src.repositories.base import BaseRepository
+from src.core.logger import get_logger
 
+logger = get_logger()
 
 class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBlueprintCreate, ArticleBlueprintCreate]):
     def __init__(self):
@@ -20,15 +22,18 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
             .filter(ArticleBlueprint.embedding.isnot(None))
             .all()
         )
-        return [
+        result = [
             {"id": str(bp.id), "embedding": bp.embedding, "category_id": str(bp.category_id) if bp.category_id else None}
             for bp in blueprints
         ]
+        logger.log_execution("pim_repo", "db_embeddings_fetched", "ok", brand_id=brand_id, count=len(result))
+        return result
 
     def save_embedding(self, db: Session, blueprint_id: str, embedding: list[float], commit_changes: bool = True) -> None:
         """
         Update embedding vector for an existing article blueprint.
         """
+        logger.log_execution("pim_repo", "embedding_saved", "ok", blueprint_id=blueprint_id, vector_dim=len(embedding) if embedding else 0)
         bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == blueprint_id).first()
         if bp:
             bp.embedding = embedding
@@ -105,6 +110,8 @@ class CategoryRepository:
                 "sub_categories": sub_categories,
             }
 
+        total_subs = sum(len(h["sub_categories"]) for h in hierarchy.values())
+        logger.log_execution("category_repo", "category_hierarchy_fetched", "ok", brand_id=brand_id, macro_categories=len(hierarchy), total_sub_categories=total_subs, hierarchy=hierarchy)
         return hierarchy
 
 

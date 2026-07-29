@@ -2,6 +2,9 @@ import asyncio
 import json
 from src.agents.llm_client import LLMClient
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 _SYSTEM_PROMPT = (
     "Sei un Agente di PIM (Product Information Management). "
@@ -60,11 +63,16 @@ async def _synthesize_single_blueprint(client: LLMClient, bp: dict) -> dict:
 
 async def synthesize_blueprints_node(state: BlueprintsGraphState) -> dict:
     """
-    Synthesize canonical article_name and description for each new blueprint cluster.
+    For each new blueprint, invoke LLM to synthesize article_name, description, tags, materials
+    based on the characteristics of its clustered items.
     """
+    logger.log_agent("synthesize_blueprints_node", "node_entry", "ok", 
+                     new_blueprints_count=len(state.new_blueprints))
     print(f"[synthesize_blueprints_node] Synthesizing {len(state.new_blueprints)} new blueprint(s)...")
     client = LLMClient()
     tasks = [_synthesize_single_blueprint(client, bp) for bp in state.new_blueprints]
     updated_blueprints = await asyncio.gather(*tasks)
     print("[synthesize_blueprints_node] Synthesis complete.")
-    return {"new_blueprints": updated_blueprints}
+    result = {"new_blueprints": updated_blueprints}
+    logger.log_agent("synthesize_blueprints_node", "node_exit", "ok", output=result)
+    return result

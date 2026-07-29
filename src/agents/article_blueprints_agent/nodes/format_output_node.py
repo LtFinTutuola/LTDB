@@ -1,4 +1,8 @@
+from typing import List
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 
 def _clean_item(item: dict) -> dict:
@@ -45,6 +49,11 @@ def format_output_node(state: BlueprintsGraphState) -> dict:
     """
     Format final bipartite items and blueprints lists, stripping internal fields.
     """
+    logger.log_agent("format_output_node", "node_entry", "ok", 
+                     matched_count=len(state.matched_items), 
+                     unmatched_count=len(state.unmatched_items),
+                     new_blueprints_count=len(state.new_blueprints))
+    
     all_raw_items = list(state.matched_items) + list(state.unmatched_items)
     clean_items = [_clean_item(it) for it in all_raw_items]
 
@@ -58,7 +67,9 @@ def format_output_node(state: BlueprintsGraphState) -> dict:
             seen_bp_ids.add(bp_id)
 
     print(f"[format_output_node] Formatted {len(clean_items)} items and {len(clean_blueprints)} blueprints.")
-    return {
+    result = {
         "output_items": clean_items,
         "output_blueprints": clean_blueprints,
     }
+    logger.log_agent("format_output_node", "node_exit", "ok", output=result)
+    return result

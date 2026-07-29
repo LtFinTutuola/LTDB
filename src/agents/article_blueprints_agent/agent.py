@@ -39,7 +39,7 @@ class ArticleBlueprintsAgent(BaseAgent):
     def __init__(self):
         super().__init__()
 
-    async def aexecute(self, input_data: dict) -> dict:
+    async def _aexecute(self, input_data: dict) -> dict:
         try:
             initial_state = BlueprintsGraphState(
                 items=input_data.get("items", []),

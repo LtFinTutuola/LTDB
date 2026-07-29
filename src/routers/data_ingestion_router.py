@@ -4,6 +4,10 @@ from sqlalchemy.orm import Session
 from src.core.database import get_db
 from src.schemas.data_ingestion import ExtractionRequest, JobStatusResponse, StagingConfirmationRequest
 from src.services import data_ingestion_service
+from src.core.logger import get_logger
+import time
+
+logger = get_logger()
 
 router = APIRouter(prefix="/api/v1/ingestion", tags=["Data Ingestion"])
 
@@ -12,6 +16,10 @@ def extract_data(request: ExtractionRequest, background_tasks: BackgroundTasks, 
     """
     Accepts a file path, checks if it exists and is a PDF, and triggers the extraction in the background.
     """
+    logger.log_execution("data_ingestion_router", "request_received", "ok", 
+                         path="/api/v1/ingestion/extract", method="POST",
+                         request_body=request.model_dump())
+    start_time = time.time()
     try:
         job_id = data_ingestion_service.accept_job(db, request.file_path)
         background_tasks.add_task(
@@ -20,14 +28,23 @@ def extract_data(request: ExtractionRequest, background_tasks: BackgroundTasks, 
             request.file_path,
             request.brand_id,
         )
-        return {
+        response_body = {
             "job_id": job_id,
             "message": "Starting to process the file"
         }
+        latency_ms = int((time.time() - start_time) * 1000)
+        logger.log_execution("data_ingestion_router", "response_dispatched", "ok",
+                             path="/api/v1/ingestion/extract", status_code=status.HTTP_202_ACCEPTED,
+                             job_id=job_id, latency_ms=latency_ms, response_body=response_body)
+        return response_body
     except HTTPException as e:
+        logger.log_execution("data_ingestion_router", "exception_caught", "err",
+                             exc=e, status_code=e.status_code, detail=e.detail)
         raise e
     except Exception as e:
         db.rollback()
+        logger.log_execution("data_ingestion_router", "exception_caught", "err",
+                             exc=e, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e) if str(e).strip() else "unknown server error"
@@ -38,12 +55,25 @@ def get_extracted_data(job_id: str, db: Session = Depends(get_db)):
     """
     Retrieves the extracted staging data and status.
     """
+    logger.log_execution("data_ingestion_router", "request_received", "ok", 
+                         path=f"/api/v1/ingestion/extract/{job_id}", method="GET",
+                         job_id=job_id)
+    start_time = time.time()
     try:
-        return data_ingestion_service.get_job(db, job_id)
+        result = data_ingestion_service.get_job(db, job_id)
+        latency_ms = int((time.time() - start_time) * 1000)
+        logger.log_execution("data_ingestion_router", "response_dispatched", "ok",
+                             path=f"/api/v1/ingestion/extract/{job_id}", status_code=status.HTTP_200_OK,
+                             job_id=job_id, latency_ms=latency_ms, response_body=result)
+        return result
     except HTTPException as e:
+        logger.log_execution("data_ingestion_router", "exception_caught", "err",
+                             exc=e, status_code=e.status_code, detail=e.detail)
         raise e
     except Exception as e:
         db.rollback()
+        logger.log_execution("data_ingestion_router", "exception_caught", "err",
+                             exc=e, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e) if str(e).strip() else "unknown server error"
@@ -58,14 +88,27 @@ def confirm_extraction(
     """
     Confirms the extraction and persists to database (PIM and WMS).
     """
+    logger.log_execution("data_ingestion_router", "request_received", "ok", 
+                         path=f"/api/v1/ingestion/confirm/{job_id}", method="POST",
+                         job_id=job_id, request_body=request.model_dump() if request else None)
+    start_time = time.time()
     try:
         data_ingestion_service.check_job_status(db, job_id)
         data_ingestion_service.confirm_and_persist_staging(db, job_id, request)
-        return {"status": "success", "message": "Data successfully ingested"}
+        response_body = {"status": "success", "message": "Data successfully ingested"}
+        latency_ms = int((time.time() - start_time) * 1000)
+        logger.log_execution("data_ingestion_router", "response_dispatched", "ok",
+                             path=f"/api/v1/ingestion/confirm/{job_id}", status_code=status.HTTP_200_OK,
+                             job_id=job_id, latency_ms=latency_ms, response_body=response_body)
+        return response_body
     except HTTPException as e:
+        logger.log_execution("data_ingestion_router", "exception_caught", "err",
+                             exc=e, status_code=e.status_code, detail=e.detail)
         raise e
     except Exception as e:
         db.rollback()
+        logger.log_execution("data_ingestion_router", "exception_caught", "err",
+                             exc=e, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e) if str(e).strip() else "unknown server error"

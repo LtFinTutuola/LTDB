@@ -3,6 +3,9 @@ import re
 
 from src.agents.llm_client import LLMClient
 from src.agents.data_extraction_agent.state import ExtractionGraphState
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 _SYSTEM_PROMPT = (
     "Sei un Agente AI specializzato nell'estrazione e standardizzazione anagrafica prodotti ERP. "
@@ -86,6 +89,8 @@ async def web_search_node(state: ExtractionGraphState) -> dict:
     """
     Perform concurrent web searches (temperature=0.0) for all extracted items to attach canonical article_name and article_description.
     """
+    logger.log_agent("web_search_node", "node_entry", "ok", 
+                     extracted_items=[{k: v for k, v in item.items() if k in ["vendor_code", "description"]} for item in state.extracted_items])
     print(f"[web_search_node] Running web search (temp=0.0) for {len(state.extracted_items)} item(s)...")
     client = LLMClient()
     tasks = [
@@ -104,4 +109,6 @@ async def web_search_node(state: ExtractionGraphState) -> dict:
         updated_items[0]["_overwrite"] = True
 
     print("[web_search_node] Web search enrichment complete.")
-    return {"extracted_items": updated_items, "warnings": warnings}
+    result = {"extracted_items": updated_items, "warnings": warnings}
+    logger.log_agent("web_search_node", "node_exit", "ok", output=result)
+    return result

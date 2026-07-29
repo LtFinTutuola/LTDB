@@ -2,6 +2,9 @@ import asyncio
 import json
 from src.agents.llm_client import LLMClient
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 _SYSTEM_PROMPT = (
     "Sei un Agente AI di arricchimento catalogo PIM per un brand moda e lusso. "
@@ -70,11 +73,21 @@ async def _enrich_single_blueprint(client: LLMClient, bp: dict, categories: dict
 
 async def enrich_blueprints_node(state: BlueprintsGraphState) -> dict:
     """
-    Enrich newly synthesized blueprints with category mapping and marketing copy.
+    For each new blueprint, perform web searches (temp=0.0) based on the synthesized article_name and description
+    to enrich it with an extended_description.
     """
-    print(f"[enrich_blueprints_node] Enriching {len(state.new_blueprints)} new blueprint(s)...")
+    logger.log_agent("enrich_blueprints_node", "node_entry", "ok", 
+                     new_blueprints_count=len(state.new_blueprints))
+    print(f"[enrich_blueprints_node] Enriching {len(state.new_blueprints)} new blueprint(s) via web search...")
     client = LLMClient()
     tasks = [_enrich_single_blueprint(client, bp, state.categories) for bp in state.new_blueprints]
-    enriched_blueprints = await asyncio.gather(*tasks)
+    enriched = await asyncio.gather(*tasks)
+    warnings = [] # Placeholder logic
+    if warnings:
+        for w in warnings:
+            print(w)
+
     print("[enrich_blueprints_node] Enrichment complete.")
-    return {"new_blueprints": enriched_blueprints}
+    result = {"new_blueprints": enriched, "warnings": warnings}
+    logger.log_agent("enrich_blueprints_node", "node_exit", "ok", output=result)
+    return result

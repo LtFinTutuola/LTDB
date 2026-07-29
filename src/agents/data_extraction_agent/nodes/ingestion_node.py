@@ -2,13 +2,16 @@ import pdfplumber
 
 from src.agents.base import AgentException
 from src.agents.data_extraction_agent.state import ExtractionGraphState
+from src.core.logger import get_logger
 
+logger = get_logger()
 
 async def ingestion_node(state: ExtractionGraphState) -> dict:
     """
     Extract raw text from the PDF file referenced in state.file_path.
     """
     pdf_path = state.file_path
+    logger.log_agent("ingestion_node", "node_entry", "ok", file_path=pdf_path)
     print(f"[ingestion_node] Extracting text from: {pdf_path}")
 
     try:
@@ -27,7 +30,9 @@ async def ingestion_node(state: ExtractionGraphState) -> dict:
 
         full_text = "\n--- PAGINA ---\n".join(pages)
         print(f"[ingestion_node] Extracted {len(pages)} page(s).")
-        return {"raw_text": full_text}
+        result = {"raw_text": full_text}
+        logger.log_agent("ingestion_node", "node_exit", "ok", output=result)
+        return result
 
     except AgentException:
         raise

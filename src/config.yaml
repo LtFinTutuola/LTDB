@@ -5,3 +5,8 @@ api_host: "0.0.0.0"
 api_port: 8000
 
 staging_directory: "{BASE_DIR}/data/staging"
+
+logging:
+  logs_dir: "data/logs"
+  logging_level: "STANDARD"  # STANDARD, DEBUG
+  saving_interval: 24 #hours

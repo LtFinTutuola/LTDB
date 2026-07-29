@@ -4,6 +4,9 @@ import uuid
 from src.agents.base import AgentException
 from src.agents.llm_client import LLMClient
 from src.agents.data_extraction_agent.state import ExtractionGraphState
+from src.core.logger import get_logger
+
+logger = get_logger()
 
 _SYSTEM_PROMPT = (
     "Sei un Agente di Document Intelligence per un sistema ERP. "
@@ -21,6 +24,7 @@ async def extraction_node(state: ExtractionGraphState) -> dict:
     """
     Extract a structured list of products from the cleaned text and inject item_id.
     """
+    logger.log_agent("extraction_node", "node_entry", "ok", cleaned_text=state.cleaned_text)
     print("[extraction_node] Extracting product JSON from cleaned text...")
     client = LLMClient()
     prompt = f"Analizza e mappa questo testo in JSON:\n\n{state.cleaned_text}"
@@ -75,4 +79,6 @@ async def extraction_node(state: ExtractionGraphState) -> dict:
         parsed[0]["_overwrite"] = True
 
     print(f"[extraction_node] Extracted and assigned item_ids to {len(parsed)} product(s).")
-    return {"extracted_items": parsed}
+    result = {"extracted_items": parsed}
+    logger.log_agent("extraction_node", "node_exit", "ok", output=result)
+    return result
