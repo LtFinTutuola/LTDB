@@ -199,8 +199,8 @@ def confirm_and_persist_staging(
     logger.log_execution("data_ingestion_service", "bipartite_merge", "ok", item_count=len(raw_items), blueprint_count=len(raw_blueprints))
 
     # Bipartite merging: if blueprints are present, join each item with its blueprint definition
+    bp_map = {}
     if raw_blueprints:
-        bp_map = {}
         for bp in raw_blueprints:
             bp_dict = bp.model_dump() if hasattr(bp, "model_dump") else dict(bp)
             bp_id = str(bp_dict.get("id", ""))
@@ -233,50 +233,60 @@ def confirm_and_persist_staging(
     resolved_blueprints: Dict[str, str] = {}
 
     for item in items:
-        # Resolve category_id based on sub_category or category objects
-        category_id = None
-        if item.sub_category and item.sub_category.id:
-            category_id = item.sub_category.id
-        elif item.category and item.category.id:
-            category_id = item.category.id
-
-        if not category_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Item is missing a valid category. Confirmation failed."
-            )
-
-        # 1. Ensure product exists
         bp_group_key = item.blueprint_group_id or f"{item.article_name}|{item.product_short_description}"
-        if bp_group_key in resolved_blueprints:
-            blueprint_id = resolved_blueprints[bp_group_key]
-            logger.log_execution("data_ingestion_service", "blueprint_resolved", "ok", blueprint_key=bp_group_key, blueprint_id=blueprint_id, resolution_status="existing")
-        else:
-            blueprint_id = get_or_create_product(
-                db=db,
-                brand_id=brand_id,
-                description=item.product_short_description or "Unknown Product",
-                article_name=item.article_name or item.product_short_description or "Unknown Product",
-                extended_description=item.product_extended_description or "",
-                tags=item.tags,
-                materials=item.materials,
-                category_id=category_id,
-                commit_changes=False
-            )
-            resolved_blueprints[bp_group_key] = blueprint_id
-            logger.log_execution("data_ingestion_service", "blueprint_resolved", "ok", blueprint_key=bp_group_key, blueprint_id=blueprint_id, resolution_status="new")
+        is_new = True
+        if bp_group_key in bp_map:
+            is_new = bp_map[bp_group_key].get("is_new", True)
 
-            # Check if newly created blueprint lacks an embedding; if so, generate and save synchronously
-            bp_obj = pim_repo.get(db, blueprint_id)
-            if bp_obj and bp_obj.embedding is None:
-                text_to_embed = f"{item.article_name or ''} {item.product_short_description or ''}".strip()
-                if text_to_embed:
-                    try:
-                        from src.agents.llm_client import LLMClient
-                        emb = LLMClient().generate_embedding_sync(text_to_embed)
-                        pim_repo.save_embedding(db, blueprint_id, emb, commit_changes=False)
-                    except Exception as exc:
-                        print(f"[confirm_and_persist_staging] Warning: Failed to generate embedding for blueprint {blueprint_id}: {exc}")
+        if not is_new:
+            # Existing DB blueprint: skip category validation and product creation
+            blueprint_id = bp_group_key
+            if bp_group_key not in resolved_blueprints:
+                resolved_blueprints[bp_group_key] = blueprint_id
+                logger.log_execution("data_ingestion_service", "blueprint_resolved", "ok", blueprint_key=bp_group_key, blueprint_id=blueprint_id, resolution_status="existing_db")
+        else:
+            # New blueprint: enforce category validation and create product
+            category_id = None
+            if item.sub_category and item.sub_category.id:
+                category_id = item.sub_category.id
+            elif item.category and item.category.id:
+                category_id = item.category.id
+
+            if not category_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Item is missing a valid category. Confirmation failed."
+                )
+
+            if bp_group_key in resolved_blueprints:
+                blueprint_id = resolved_blueprints[bp_group_key]
+                logger.log_execution("data_ingestion_service", "blueprint_resolved", "ok", blueprint_key=bp_group_key, blueprint_id=blueprint_id, resolution_status="existing_cluster")
+            else:
+                blueprint_id = get_or_create_product(
+                    db=db,
+                    brand_id=brand_id,
+                    description=item.product_short_description or "Unknown Product",
+                    article_name=item.article_name or item.product_short_description or "Unknown Product",
+                    extended_description=item.product_extended_description or "",
+                    tags=item.tags,
+                    materials=item.materials,
+                    category_id=category_id,
+                    commit_changes=False
+                )
+                resolved_blueprints[bp_group_key] = blueprint_id
+                logger.log_execution("data_ingestion_service", "blueprint_resolved", "ok", blueprint_key=bp_group_key, blueprint_id=blueprint_id, resolution_status="new")
+
+                # Check if newly created blueprint lacks an embedding; if so, generate and save synchronously
+                bp_obj = pim_repo.get(db, blueprint_id)
+                if bp_obj and bp_obj.embedding is None:
+                    text_to_embed = f"{item.article_name or ''} {item.product_short_description or ''}".strip()
+                    if text_to_embed:
+                        try:
+                            from src.agents.llm_client import LLMClient
+                            emb = LLMClient().generate_embedding_sync(text_to_embed)
+                            pim_repo.save_embedding(db, blueprint_id, emb, commit_changes=False)
+                        except Exception as exc:
+                            print(f"[confirm_and_persist_staging] Warning: Failed to generate embedding for blueprint {blueprint_id}: {exc}")
 
         # 2. Register warehouse movement
         if item.quantity and item.quantity > 0:
