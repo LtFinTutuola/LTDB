@@ -47,7 +47,7 @@ async def _synthesize_single_blueprint(client: LLMClient, bp: dict) -> dict:
             model_name=_MODEL,
             system_prompt=_SYSTEM_PROMPT,
             prompt=prompt,
-            pipeline_stage="Stage 5 - Blueprint Synthesis",
+            pipeline_stage="Stage 6 - Blueprint Synthesis",
             response_mime_type="application/json",
         )
         parsed = json.loads(raw_res)

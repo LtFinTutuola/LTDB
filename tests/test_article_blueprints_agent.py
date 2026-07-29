@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
 from src.agents.article_blueprints_agent.nodes.db_match_node import db_match_node
 from src.agents.article_blueprints_agent.nodes.cluster_unmatched_node import cluster_unmatched_node
+from src.agents.article_blueprints_agent.nodes.validate_clusters_node import validate_clusters_node
 from src.agents.article_blueprints_agent.nodes.format_output_node import format_output_node
 from src.agents.article_blueprints_agent import ArticleBlueprintsAgent
 
@@ -27,8 +28,13 @@ def base_state() -> BlueprintsGraphState:
 
 
 class TestDbMatchNode:
-    def test_db_match_and_deduplication(self, base_state):
-        res = db_match_node(base_state)
+    @pytest.mark.asyncio
+    async def test_db_match_and_deduplication(self, base_state):
+        """Items with a single unambiguous DB match above strict threshold are matched directly."""
+        with patch("src.agents.article_blueprints_agent.nodes.db_match_node.LLMClient") as MockClient:
+            MockClient.return_value.call = AsyncMock()  # Should not be called
+            res = await db_match_node(base_state)
+
         matched = res["matched_items"]
         unmatched = res["unmatched_items"]
         output_bps = res["output_blueprints"]
@@ -37,10 +43,71 @@ class TestDbMatchNode:
         assert len(unmatched) == 1  # item-3
         assert matched[0]["article_blueprint_id"] == "db-bp-1"
         assert matched[1]["article_blueprint_id"] == "db-bp-1"
-        
+
         # Verify deduplication in output_blueprints
         assert len(output_bps) == 1
         assert output_bps[0] == {"id": "db-bp-1", "is_new": False}
+
+    @pytest.mark.asyncio
+    async def test_db_match_zero_candidates_routes_to_unmatched(self, base_state):
+        """Items with no candidate above the relaxed threshold go to unmatched_items."""
+        base_state.items = [
+            {"item_id": "x", "article_name": "Unrelated", "embedding": [0.0, 0.0, 1.0]}
+        ]
+        base_state.db_similarity_threshold = 0.95  # relaxed = 0.93; [0,0,1] vs [1,0,0] sim=0
+        with patch("src.agents.article_blueprints_agent.nodes.db_match_node.LLMClient") as MockClient:
+            MockClient.return_value.call = AsyncMock()  # Should not be called
+            res = await db_match_node(base_state)
+
+        assert res["matched_items"] == []
+        assert len(res["unmatched_items"]) == 1
+        MockClient.return_value.call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_db_match_multiple_candidates_llm_picks_one(self, base_state):
+        """When 2+ candidates exceed the strict threshold, LLM picks one → matched."""
+        base_state.items = [
+            {"item_id": "a", "article_name": "Spinner 55", "article_description": "Cabin",
+             "embedding": [1.0, 0.0, 0.0]}
+        ]
+        base_state.db_similarity_threshold = 0.90
+        base_state.db_embeddings_matrix = [
+            {"id": "bp-cabin", "article_name": "Spinner Cabin", "description": "55cm",
+             "embedding": [1.0, 0.0, 0.0]},
+            {"id": "bp-large", "article_name": "Spinner Large", "description": "75cm",
+             "embedding": [0.99, 0.0, 0.0]},
+        ]
+        llm_response = json.dumps({"selected_blueprint_id": "bp-cabin"})
+        with patch("src.agents.article_blueprints_agent.nodes.db_match_node.LLMClient") as MockClient:
+            MockClient.return_value.call = AsyncMock(return_value=llm_response)
+            res = await db_match_node(base_state)
+
+        assert len(res["matched_items"]) == 1
+        assert res["matched_items"][0]["article_blueprint_id"] == "bp-cabin"
+        assert res["unmatched_items"] == []
+
+    @pytest.mark.asyncio
+    async def test_db_match_multiple_candidates_llm_returns_null_routes_to_unmatched(self, base_state):
+        """When LLM returns null (no confident match), item goes to unmatched_items, not discarded."""
+        base_state.items = [
+            {"item_id": "b", "article_name": "New Model XL", "article_description": "New line",
+             "embedding": [1.0, 0.0, 0.0]}
+        ]
+        base_state.db_similarity_threshold = 0.90
+        base_state.db_embeddings_matrix = [
+            {"id": "bp-A", "article_name": "Model A", "description": "Old line",
+             "embedding": [1.0, 0.0, 0.0]},
+            {"id": "bp-B", "article_name": "Model B", "description": "Old line B",
+             "embedding": [0.99, 0.0, 0.0]},
+        ]
+        llm_response = json.dumps({"selected_blueprint_id": None})
+        with patch("src.agents.article_blueprints_agent.nodes.db_match_node.LLMClient") as MockClient:
+            MockClient.return_value.call = AsyncMock(return_value=llm_response)
+            res = await db_match_node(base_state)
+
+        assert res["matched_items"] == []
+        assert len(res["unmatched_items"]) == 1
+        assert res["unmatched_items"][0]["item_id"] == "b"
 
 
 class TestClusterUnmatchedNode:
@@ -82,6 +149,110 @@ class TestClusterUnmatchedNode:
         ]
         res = cluster_unmatched_node(base_state)
         assert len(res["new_blueprints"]) >= 1
+
+
+class TestValidateClustersNode:
+    @pytest.mark.asyncio
+    async def test_validation_confirms_single_cluster(self, base_state):
+        """When LLM returns a single array, the original cluster is preserved with its UUID."""
+        original_id = "cluster-uuid-1"
+        base_state.new_blueprints = [{
+            "id": original_id,
+            "is_new": True,
+            "cluster_items": [
+                {"item_id": "1", "article_name": "Bag Blue", "article_description": "Leather bag",
+                 "embedding": [1.0, 0.0, 0.0], "article_blueprint_id": original_id},
+                {"item_id": "2", "article_name": "Bag Red", "article_description": "Leather bag",
+                 "embedding": [0.99, 0.0, 0.0], "article_blueprint_id": original_id},
+            ],
+        }]
+        # LLM returns all items in a single sub-array → confirmed, no split.
+        llm_response = json.dumps([[1, 2]])
+        with patch("src.agents.article_blueprints_agent.nodes.validate_clusters_node.LLMClient") as MockClient:
+            MockClient.return_value.call = AsyncMock(return_value=llm_response)
+            res = await validate_clusters_node(base_state)
+
+        assert len(res["new_blueprints"]) == 1
+        assert res["new_blueprints"][0]["id"] == original_id
+        assert res["warnings"] == []
+
+    @pytest.mark.asyncio
+    async def test_validation_accepts_split_geometrically_consistent(self, base_state):
+        """LLM splits into geometrically distant sub-groups → split accepted, no warning."""
+        original_id = "cluster-uuid-2"
+        base_state.articles_similarity_threshold = 0.90
+        base_state.new_blueprints = [{
+            "id": original_id,
+            "is_new": True,
+            "cluster_items": [
+                # Two orthogonal embeddings → centroids will be far apart (sim ≈ 0)
+                {"item_id": "1", "article_name": "Spinner 55", "article_description": "Cabin size",
+                 "embedding": [1.0, 0.0], "article_blueprint_id": original_id},
+                {"item_id": "2", "article_name": "Spinner 75", "article_description": "Large size",
+                 "embedding": [0.0, 1.0], "article_blueprint_id": original_id},
+            ],
+        }]
+        # LLM proposes two sub-groups.
+        llm_response = json.dumps([[1], [2]])
+        with patch("src.agents.article_blueprints_agent.nodes.validate_clusters_node.LLMClient") as MockClient:
+            MockClient.return_value.call = AsyncMock(return_value=llm_response)
+            res = await validate_clusters_node(base_state)
+
+        assert len(res["new_blueprints"]) == 2
+        # Both sub-groups get fresh UUIDs, different from the original.
+        ids = {bp["id"] for bp in res["new_blueprints"]}
+        assert original_id not in ids
+        assert len(ids) == 2
+        assert res["warnings"] == []
+
+    @pytest.mark.asyncio
+    async def test_validation_accepts_split_with_warning_when_geometrically_close(self, base_state):
+        """LLM splits into geometrically close sub-groups → split still accepted, warning appended."""
+        original_id = "cluster-uuid-3"
+        base_state.articles_similarity_threshold = 0.90
+        base_state.new_blueprints = [{
+            "id": original_id,
+            "is_new": True,
+            "cluster_items": [
+                # Nearly identical embeddings → centroids will be above threshold after split.
+                {"item_id": "1", "article_name": "Spinner 55 Blue", "article_description": "Cabin",
+                 "embedding": [1.0, 0.0], "article_blueprint_id": original_id},
+                {"item_id": "2", "article_name": "Spinner 55 Red", "article_description": "Cabin",
+                 "embedding": [0.99, 0.0], "article_blueprint_id": original_id},
+            ],
+        }]
+        llm_response = json.dumps([[1], [2]])
+        with patch("src.agents.article_blueprints_agent.nodes.validate_clusters_node.LLMClient") as MockClient:
+            MockClient.return_value.call = AsyncMock(return_value=llm_response)
+            res = await validate_clusters_node(base_state)
+
+        # Split must be accepted regardless.
+        assert len(res["new_blueprints"]) == 2
+        # A warning must have been appended.
+        assert len(res["warnings"]) == 1
+        assert "Soft-check warning" in res["warnings"][0]
+
+    @pytest.mark.asyncio
+    async def test_validation_all_clusters_processed_in_parallel(self, base_state):
+        """Multiple clusters are submitted concurrently: LLM called once per cluster."""
+        base_state.new_blueprints = [
+            {
+                "id": f"c-{i}", "is_new": True,
+                "cluster_items": [
+                    {"item_id": str(i), "article_name": f"Item {i}", "article_description": "Desc",
+                     "embedding": [1.0, 0.0], "article_blueprint_id": f"c-{i}"},
+                ],
+            }
+            for i in range(3)
+        ]
+        # Single-item clusters pass through without an LLM call.
+        with patch("src.agents.article_blueprints_agent.nodes.validate_clusters_node.LLMClient") as MockClient:
+            MockClient.return_value.call = AsyncMock()
+            res = await validate_clusters_node(base_state)
+
+        # 3 single-item clusters → confirmed unchanged, no LLM call needed.
+        assert len(res["new_blueprints"]) == 3
+        MockClient.return_value.call.assert_not_called()
 
 
 class TestSynthesisAndEnrichment:
@@ -155,10 +326,16 @@ class TestArticleBlueprintsAgent:
     async def test_agent_aexecute_end_to_end(self):
         agent = ArticleBlueprintsAgent()
         with patch("src.agents.article_blueprints_agent.nodes.embed_items_node.LLMClient") as MockEmb, \
+             patch("src.agents.article_blueprints_agent.nodes.db_match_node.LLMClient") as MockDbMatch, \
+             patch("src.agents.article_blueprints_agent.nodes.validate_clusters_node.LLMClient") as MockValidate, \
              patch("src.agents.article_blueprints_agent.nodes.synthesize_blueprints_node.LLMClient") as MockSynth, \
              patch("src.agents.article_blueprints_agent.nodes.enrich_blueprints_node.LLMClient") as MockEnrich:
 
             MockEmb.return_value.generate_embedding = AsyncMock(return_value=[1.0, 0.0])
+            # db_match_node: no DB matrix → no LLM call needed, but patch for safety.
+            MockDbMatch.return_value.call = AsyncMock()
+            # validate_clusters_node: single-item cluster passes through without LLM call.
+            MockValidate.return_value.call = AsyncMock()
             MockSynth.return_value.call = AsyncMock(return_value='{"article_name": "N", "description": "D"}')
             MockEnrich.return_value.call = AsyncMock(return_value='{"category": "C", "sub_category": "S", "extended_description": "E", "tags": [], "materials": []}')
 

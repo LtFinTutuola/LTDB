@@ -5,6 +5,7 @@ from src.agents.article_blueprints_agent.state import BlueprintsGraphState
 from src.agents.article_blueprints_agent.nodes.embed_items_node import embed_items_node
 from src.agents.article_blueprints_agent.nodes.db_match_node import db_match_node
 from src.agents.article_blueprints_agent.nodes.cluster_unmatched_node import cluster_unmatched_node
+from src.agents.article_blueprints_agent.nodes.validate_clusters_node import validate_clusters_node
 from src.agents.article_blueprints_agent.nodes.synthesize_blueprints_node import synthesize_blueprints_node
 from src.agents.article_blueprints_agent.nodes.enrich_blueprints_node import enrich_blueprints_node
 from src.agents.article_blueprints_agent.nodes.format_output_node import format_output_node
@@ -16,6 +17,7 @@ def _build_graph() -> StateGraph:
     graph.add_node("embed_items_node", embed_items_node)
     graph.add_node("db_match_node", db_match_node)
     graph.add_node("cluster_unmatched_node", cluster_unmatched_node)
+    graph.add_node("validate_clusters_node", validate_clusters_node)
     graph.add_node("synthesize_blueprints_node", synthesize_blueprints_node)
     graph.add_node("enrich_blueprints_node", enrich_blueprints_node)
     graph.add_node("format_output_node", format_output_node)
@@ -23,7 +25,8 @@ def _build_graph() -> StateGraph:
     graph.add_edge(START, "embed_items_node")
     graph.add_edge("embed_items_node", "db_match_node")
     graph.add_edge("db_match_node", "cluster_unmatched_node")
-    graph.add_edge("cluster_unmatched_node", "synthesize_blueprints_node")
+    graph.add_edge("cluster_unmatched_node", "validate_clusters_node")
+    graph.add_edge("validate_clusters_node", "synthesize_blueprints_node")
     graph.add_edge("synthesize_blueprints_node", "enrich_blueprints_node")
     graph.add_edge("enrich_blueprints_node", "format_output_node")
     graph.add_edge("format_output_node", END)

@@ -51,7 +51,7 @@ async def _enrich_single_blueprint(client: LLMClient, bp: dict, categories: dict
             model_name=_MODEL,
             system_prompt=_SYSTEM_PROMPT,
             prompt=prompt,
-            pipeline_stage="Stage 6 - Blueprint Enrichment",
+            pipeline_stage="Stage 7 - Blueprint Enrichment",
             response_mime_type="application/json",
         )
         parsed = json.loads(raw_res)
