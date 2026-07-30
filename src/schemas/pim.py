@@ -26,6 +26,7 @@ class ArticleBlueprintCreate(BaseModel):
     extended_description: str
     tags: List[str]
     materials: Optional[List[str]] = None
+    dimensions: Optional[str] = None
 
 class ArticleBlueprintResponse(BaseSchemaWithAudit):
     brand_id: str
@@ -35,3 +36,4 @@ class ArticleBlueprintResponse(BaseSchemaWithAudit):
     extended_description: str
     tags: List[str]
     materials: Optional[List[str]]
+    dimensions: Optional[str]

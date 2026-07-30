@@ -23,6 +23,7 @@ class EnrichedItemSchema(BaseModel):
     sub_category: Optional[CategoryRefSchema] = None
     sex: Optional[str] = None
     materials: Optional[List[str]] = None
+    dimensions: Optional[str] = None
     colors: Optional[List[str]] = None
     article_name: Optional[str] = None
     product_short_description: Optional[str] = None
@@ -50,6 +51,7 @@ class BlueprintDefinitionSchema(BaseModel):
     extended_description: Optional[str] = None
     tags: Optional[List[str]] = None
     materials: Optional[List[str]] = None
+    dimensions: Optional[str] = None
 
 class StagingConfirmationRequest(BaseModel):
     items: Optional[List[EnrichedItemSchema]] = None

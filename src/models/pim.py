@@ -51,6 +51,7 @@ class ArticleBlueprint(Base, UUIDMixin, TimestampMixin):
     
     description: Mapped[str] = mapped_column(String, nullable=False)
     extended_description: Mapped[str] = mapped_column(String, nullable=False)
+    dimensions: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     
     # JSON arrays for SQLite (using JSON1 extension via SQLAlchemy JSON)
     tags: Mapped[list] = mapped_column(JSON, nullable=False)

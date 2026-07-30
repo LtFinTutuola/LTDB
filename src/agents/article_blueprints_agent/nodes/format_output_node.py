@@ -42,6 +42,7 @@ def _clean_blueprint(bp: dict) -> dict:
         cleaned["extended_description"] = bp.get("extended_description")
         cleaned["tags"] = bp.get("tags", [])
         cleaned["materials"] = bp.get("materials", [])
+        cleaned["dimensions"] = bp.get("dimensions")
     return cleaned
 
 

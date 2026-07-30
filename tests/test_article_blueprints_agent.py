@@ -87,7 +87,7 @@ class TestDbMatchNode:
         assert res["unmatched_items"] == []
 
     @pytest.mark.asyncio
-    async def test_db_match_multiple_candidates_llm_returns_null_routes_to_unmatched(self, base_state):
+    async def test_db_match_multiple_candidates_llm_returns_null_routes_to_most_similar(self, base_state):
         """When LLM returns null (no confident match), item goes to unmatched_items, not discarded."""
         base_state.items = [
             {"item_id": "b", "article_name": "New Model XL", "article_description": "New line",
@@ -105,9 +105,10 @@ class TestDbMatchNode:
             MockClient.return_value.call = AsyncMock(return_value=llm_response)
             res = await db_match_node(base_state)
 
-        assert res["matched_items"] == []
-        assert len(res["unmatched_items"]) == 1
-        assert res["unmatched_items"][0]["item_id"] == "b"
+        assert len(res["matched_items"]) == 1
+        assert res["matched_items"][0]["item_id"] == "b"
+        assert res["matched_items"][0]["article_blueprint_id"] == "bp-A"  # 0.999 is top
+        assert res["unmatched_items"] == []
 
 
 class TestClusterUnmatchedNode:
@@ -206,10 +207,10 @@ class TestValidateClustersNode:
         assert res["warnings"] == []
 
     @pytest.mark.asyncio
-    async def test_validation_accepts_split_with_warning_when_geometrically_close(self, base_state):
-        """LLM splits into geometrically close sub-groups → split still accepted, warning appended."""
+    async def test_validation_rejects_split_with_warning_when_geometrically_close(self, base_state):
+        """LLM splits into geometrically close sub-groups → split REJECTED, warning appended."""
         original_id = "cluster-uuid-3"
-        base_state.articles_similarity_threshold = 0.90
+        base_state.hallucination_recognition_threshold = 0.90
         base_state.new_blueprints = [{
             "id": original_id,
             "is_new": True,
@@ -226,8 +227,9 @@ class TestValidateClustersNode:
             MockClient.return_value.call = AsyncMock(return_value=llm_response)
             res = await validate_clusters_node(base_state)
 
-        # Split must be accepted regardless.
-        assert len(res["new_blueprints"]) == 2
+        # Split must be rejected (only 1 blueprint remains).
+        assert len(res["new_blueprints"]) == 1
+        assert res["new_blueprints"][0]["id"] == original_id
         # A warning must have been appended.
         assert len(res["warnings"]) == 1
         assert "Soft-check warning" in res["warnings"][0]
@@ -262,7 +264,11 @@ class TestSynthesisAndEnrichment:
         base_state.new_blueprints = [
             {"id": "new-bp-1", "is_new": True, "cluster_items": [{"article_name": "Var 1", "article_description": "Desc"}]}
         ]
-        mock_json = json.dumps({"article_name": "Unified Name", "description": "Unified Desc"})
+        mock_json = json.dumps({
+            "article_name": "Unified Name",
+            "description": "Unified Desc",
+            "dimensions": {"width_cm": 25.0, "height_cm": 15.0, "depth_cm": 13.0}
+        })
         with patch("src.agents.article_blueprints_agent.nodes.synthesize_blueprints_node.LLMClient") as MockClient:
             mock_inst = MockClient.return_value
             mock_inst.call = AsyncMock(return_value=mock_json)
@@ -271,6 +277,32 @@ class TestSynthesisAndEnrichment:
         bps = res["new_blueprints"]
         assert bps[0]["article_name"] == "Unified Name"
         assert bps[0]["description"] == "Unified Desc"
+        # dimensions must be stored as a canonical JSON string
+        dims = json.loads(bps[0]["dimensions"])
+        assert dims["width_cm"] == 25.0
+        assert dims["height_cm"] == 15.0
+        assert dims["depth_cm"] == 13.0
+
+    @pytest.mark.asyncio
+    async def test_synthesis_node_null_dimensions(self, base_state):
+        """When dimensions are not present, the field must be None (not a string)."""
+        from src.agents.article_blueprints_agent.nodes.synthesize_blueprints_node import synthesize_blueprints_node
+        base_state.new_blueprints = [
+            {"id": "new-bp-2", "is_new": True, "cluster_items": [{"article_name": "Scarf", "article_description": "A silk scarf"}]}
+        ]
+        mock_json = json.dumps({
+            "article_name": "Silk Scarf",
+            "description": "A fine silk scarf",
+            "dimensions": None
+        })
+        with patch("src.agents.article_blueprints_agent.nodes.synthesize_blueprints_node.LLMClient") as MockClient:
+            mock_inst = MockClient.return_value
+            mock_inst.call = AsyncMock(return_value=mock_json)
+            res = await synthesize_blueprints_node(base_state)
+
+        bps = res["new_blueprints"]
+        assert bps[0]["article_name"] == "Silk Scarf"
+        assert bps[0]["dimensions"] is None
 
     @pytest.mark.asyncio
     async def test_enrichment_node_success(self, base_state):

@@ -17,13 +17,27 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
         Retrieve lightweight dictionary list of all blueprints for a brand where embedding is not null.
         """
         blueprints = (
-            db.query(ArticleBlueprint.id, ArticleBlueprint.embedding, ArticleBlueprint.category_id)
+            db.query(
+                ArticleBlueprint.id,
+                ArticleBlueprint.embedding,
+                ArticleBlueprint.category_id,
+                ArticleBlueprint.article_name,
+                ArticleBlueprint.description,
+                ArticleBlueprint.dimensions
+            )
             .filter(ArticleBlueprint.brand_id == brand_id)
             .filter(ArticleBlueprint.embedding.isnot(None))
             .all()
         )
         result = [
-            {"id": str(bp.id), "embedding": bp.embedding, "category_id": str(bp.category_id) if bp.category_id else None}
+            {
+                "id": str(bp.id),
+                "embedding": bp.embedding,
+                "category_id": str(bp.category_id) if bp.category_id else None,
+                "article_name": bp.article_name,
+                "description": bp.description,
+                "dimensions": bp.dimensions
+            }
             for bp in blueprints
         ]
         logger.log_execution("pim_repo", "db_embeddings_fetched", "ok", brand_id=brand_id, count=len(result))

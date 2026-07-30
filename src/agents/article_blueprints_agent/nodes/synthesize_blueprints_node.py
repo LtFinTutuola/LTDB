@@ -1,10 +1,33 @@
 import asyncio
 import json
+from typing import Optional
+from pydantic import BaseModel
 from src.agents.llm_client import LLMClient
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
 from src.core.logger import get_logger
 
 logger = get_logger()
+
+
+# ---------------------------------------------------------------------------
+# Canonical output schema — enforced via Gemini responseSchema.
+# All numeric fields are optional: if a dimension is not applicable or not
+# mentioned in the source data, the model returns null.
+# ---------------------------------------------------------------------------
+
+class Dimensions(BaseModel):
+    width_cm:  Optional[float] = None
+    height_cm: Optional[float] = None
+    depth_cm:  Optional[float] = None
+
+
+class BlueprintSynthesisOutput(BaseModel):
+    article_name: str
+    description:  str
+    dimensions:   Optional[Dimensions] = None
+
+
+# ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
     "Sei un Agente di PIM (Product Information Management). "
@@ -16,7 +39,10 @@ _SYSTEM_PROMPT = (
     "2. La descrizione deve essere basata ESCLUSIVAMENTE sulle informazioni fornite nelle varianti in input. "
     "Non inventare materiali o caratteristiche non presenti nei dati forniti.\n"
     "3. Se le varianti fornite riportano materiali contraddittori tra loro, ometti completamente i materiali dalla descrizione.\n"
-    "Restituisci ESCLUSIVAMENTE un oggetto JSON con le chiavi: article_name, description."
+    "4. Estrai le dimensioni fisiche principali dell'articolo nel campo 'dimensions' (width_cm, height_cm, depth_cm). "
+    "Usa i valori in centimetri. Se le dimensioni non sono presenti o non sono applicabili all'articolo, imposta il campo su null. "
+    "La 'description' DEVE essere priva di qualsiasi riferimento numerico dimensionale.\n"
+    "Restituisci ESCLUSIVAMENTE un oggetto JSON conforme allo schema fornito."
 )
 
 _MODEL = "gemini-3.1-flash-lite"
@@ -28,6 +54,7 @@ async def _synthesize_single_blueprint(client: LLMClient, bp: dict) -> dict:
     if not items:
         bp_copy["article_name"] = "Articolo Sconosciuto"
         bp_copy["description"] = "Descrizione non disponibile"
+        bp_copy["dimensions"] = None
         return bp_copy
 
     variations = []
@@ -48,31 +75,40 @@ async def _synthesize_single_blueprint(client: LLMClient, bp: dict) -> dict:
             system_prompt=_SYSTEM_PROMPT,
             prompt=prompt,
             pipeline_stage="Stage 6 - Blueprint Synthesis",
-            response_mime_type="application/json",
+            response_schema=BlueprintSynthesisOutput,
         )
-        parsed = json.loads(raw_res)
-        bp_copy["article_name"] = parsed.get("article_name", fallback_name)
-        bp_copy["description"] = parsed.get("description", fallback_desc)
+        parsed = BlueprintSynthesisOutput.model_validate_json(raw_res)
+        bp_copy["article_name"] = parsed.article_name
+        bp_copy["description"] = parsed.description
+        # Serialize Dimensions to a compact JSON string, or None if absent
+        bp_copy["dimensions"] = (
+            parsed.dimensions.model_dump_json(exclude_none=True)
+            if parsed.dimensions else None
+        )
     except Exception as exc:
         print(f"[synthesize_blueprints_node] Warning: Synthesis failed ({exc}). Using fallback.")
         bp_copy["article_name"] = fallback_name
         bp_copy["description"] = fallback_desc
+        bp_copy["dimensions"] = None
 
     return bp_copy
 
 
 async def synthesize_blueprints_node(state: BlueprintsGraphState) -> dict:
     """
-    For each new blueprint, invoke LLM to synthesize article_name, description, tags, materials
-    based on the characteristics of its clustered items.
+    For each new blueprint, invoke LLM to synthesize article_name, description and
+    dimensions based on the characteristics of its clustered items.
+    The output schema is enforced via Gemini responseSchema (BlueprintSynthesisOutput),
+    guaranteeing a canonical {width_cm, height_cm, depth_cm} structure every time.
     """
-    logger.log_agent("synthesize_blueprints_node", "node_entry", "ok", 
+    logger.log_agent("synthesize_blueprints_node", "node_entry", "ok",
                      new_blueprints_count=len(state.new_blueprints))
     print(f"[synthesize_blueprints_node] Synthesizing {len(state.new_blueprints)} new blueprint(s)...")
     client = LLMClient()
     tasks = [_synthesize_single_blueprint(client, bp) for bp in state.new_blueprints]
     updated_blueprints = await asyncio.gather(*tasks)
     print("[synthesize_blueprints_node] Synthesis complete.")
-    result = {"new_blueprints": updated_blueprints}
+    result = {"new_blueprints": list(updated_blueprints)}
     logger.log_agent("synthesize_blueprints_node", "node_exit", "ok", output=result)
     return result
+

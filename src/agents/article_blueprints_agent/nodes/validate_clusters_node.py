@@ -203,6 +203,8 @@ async def _validate_single_cluster(
         warnings.append(warning)
         print(warning)
         logger.log_agent("validate_clusters_node", "soft_check_warning", "warning", message=warning)
+        # Hard guard: reject the split and keep the original cluster intact
+        return [bp], warnings
 
     # Build confirmed blueprint dicts for each sub-group.
     confirmed_blueprints: list[dict] = []
@@ -235,7 +237,7 @@ async def validate_clusters_node(state: BlueprintsGraphState) -> dict:
     print(f"[validate_clusters_node] Validating {len(state.new_blueprints)} candidate cluster(s)...")
 
     client = LLMClient()
-    threshold = state.articles_similarity_threshold
+    threshold = state.hallucination_recognition_threshold
 
     tasks = [
         _validate_single_cluster(client, bp, threshold)

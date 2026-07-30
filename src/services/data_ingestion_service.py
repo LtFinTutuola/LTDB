@@ -80,14 +80,25 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             logger.log_execution("data_ingestion_service", "extraction_agent_completed", "ok")
 
             # 3. Run ArticleBlueprintsAgent
+            from pathlib import Path
+            import yaml
+            
+            gemini_yaml_path = Path("src/agents/gemini.yaml")
+            if gemini_yaml_path.exists():
+                with open(gemini_yaml_path, "r") as f:
+                    gemini_cfg = yaml.safe_load(f) or {}
+            else:
+                gemini_cfg = {}
+
             blueprints_agent = ArticleBlueprintsAgent()
             logger.log_execution("data_ingestion_service", "blueprints_agent_dispatched", "ok", input_summary={"items_count": len(extracted_items)})
             blueprints_res = await blueprints_agent.aexecute({
                 "items": extracted_items,
                 "categories": categories,
                 "db_embeddings_matrix": db_embeddings_matrix,
-                "db_similarity_threshold": 0.92,
-                "articles_similarity_threshold": 0.88,
+                "db_similarity_threshold": gemini_cfg.get("db_similarity_threshold", 0.92),
+                "articles_similarity_threshold": gemini_cfg.get("articles_similarity_threshold", 0.88),
+                "hallucination_recognition_threshold": gemini_cfg.get("hallucination_recognition_threshold", 0.95),
             })
             output_items = blueprints_res["items"]
             output_blueprints = blueprints_res["blueprints"]
@@ -220,6 +231,7 @@ def confirm_and_persist_staging(
                 it_dict["product_extended_description"] = it_dict.get("product_extended_description") or bp.get("extended_description")
                 it_dict["tags"] = it_dict.get("tags") or bp.get("tags")
                 it_dict["materials"] = it_dict.get("materials") or bp.get("materials")
+                it_dict["dimensions"] = it_dict.get("dimensions") or bp.get("dimensions")
                 it_dict["blueprint_group_id"] = bp_id
             merged_items.append(it_dict)
         items = [EnrichedItemSchema.model_validate(item) for item in merged_items]
@@ -270,6 +282,7 @@ def confirm_and_persist_staging(
                     extended_description=item.product_extended_description or "",
                     tags=item.tags,
                     materials=item.materials,
+                    dimensions=item.dimensions,
                     category_id=category_id,
                     commit_changes=False
                 )

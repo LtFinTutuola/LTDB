@@ -63,28 +63,32 @@ async def _disambiguate_via_llm(
     """
     name = item.get("article_name", "")
     desc = item.get("article_description", "") or item.get("description", "")
+    dimensions = item.get("dimensions")
 
     candidate_lines = []
     for c in candidates:
-        candidate_lines.append(
-            f"- ID: {c['id']} | Nome Blueprint: {c.get('article_name', '')} | "
-            f"Descrizione: {c.get('description', '')}"
-        )
+        line = f"- ID: {c['id']} | Nome Blueprint: {c.get('article_name', '')} | Descrizione: {c.get('description', '')}"
+        if c.get("dimensions"):
+            line += f" | Dimensioni: {c.get('dimensions')}"
+        candidate_lines.append(line)
     candidates_text = "\n".join(candidate_lines)
+
+    article_details = f"- Nome: {name}\n- Descrizione: {desc}"
+    if dimensions:
+        article_details += f"\n- Dimensioni: {dimensions}"
 
     prompt = (
         f"**Articolo in Ingresso:**\n"
-        f"- Nome: {name}\n"
-        f"- Descrizione: {desc}\n\n"
+        f"{article_details}\n\n"
         f"**Blueprint Candidati dal Database:**\n"
         f"{candidates_text}\n\n"
         f"**TASK:**\n"
         f"Confronta l'articolo in ingresso con i candidati. Identifica se l'articolo corrisponde "
         f"esattamente a uno dei blueprint candidati, prestando estrema attenzione ai dettagli "
-        f"strutturali e dimensionali (es. misure, capacità, taglia).\n\n"
+        f"strutturali e dimensionali (es. misure, capacità, taglia) se presenti.\n\n"
         f"Restituisci ESCLUSIVAMENTE un JSON con la chiave 'selected_blueprint_id' contenente "
-        f"l'ID del candidato corretto. Se l'articolo presenta caratteristiche strutturali o "
-        f"dimensionali diverse da TUTTI i candidati forniti, restituisci null come valore per questa chiave."
+        f"l'ID del candidato corretto. Se l'articolo presenta caratteristiche diverse "
+        f"da TUTTI i candidati forniti, restituisci null come valore per questa chiave."
     )
 
     try:
@@ -145,16 +149,7 @@ async def _process_item(
         # No candidates at all → unmatched.
         return None, dict(item)
 
-    if len(candidates) == 1:
-        # Exactly one candidate — only match if it also clears the strict threshold.
-        if candidates[0]["_sim"] >= threshold:
-            item_copy = dict(item)
-            item_copy["article_blueprint_id"] = candidates[0]["id"]
-            return item_copy, None
-        else:
-            return None, dict(item)
-
-    # 2+ candidates — check if the top candidate already clears the strict threshold alone.
+    # 1+ candidates — check if the top candidate already clears the strict threshold alone.
     candidates.sort(key=lambda c: c["_sim"], reverse=True)
     top = candidates[0]
 
@@ -166,7 +161,7 @@ async def _process_item(
         return item_copy, None
 
     # Genuine ambiguity (2+ candidates above strict threshold, or top below strict
-    # but multiple near-matches) → LLM disambiguation.
+    # but multiple near-matches, or exactly 1 candidate below strict) → LLM disambiguation.
     ambiguous = strict_candidates if strict_candidates else candidates
     selected_id = await _disambiguate_via_llm(client, item, ambiguous)
 
@@ -175,8 +170,22 @@ async def _process_item(
         item_copy["article_blueprint_id"] = selected_id
         return item_copy, None
     else:
-        # LLM returned null → no confident match → route to unmatched.
-        return None, dict(item)
+        # LLM returned null
+        if len(candidates) == 1:
+            # If the LLM explicitly rejected the only candidate we had, route to unmatched.
+            return None, dict(item)
+
+        # fallback to the most similar candidate
+        top_fallback = ambiguous[0]
+        logger.log_agent(
+            "db_match_node", "unresolved_ambiguity", "warning",
+            item_id=item.get("item_id"),
+            fallback_candidate_id=top_fallback["id"]
+        )
+        print(f"[db_match_node] Warning: Unresolved ambiguity for item {item.get('item_id')}. Falling back to {top_fallback['id']}.")
+        item_copy = dict(item)
+        item_copy["article_blueprint_id"] = top_fallback["id"]
+        return item_copy, None
 
 
 async def db_match_node(state: BlueprintsGraphState) -> dict:

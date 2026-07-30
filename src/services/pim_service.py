@@ -18,6 +18,7 @@ def get_or_create_product(
     extended_description: str = "",
     tags: Optional[list[str]] = None,
     materials: Optional[list[str]] = None,
+    dimensions: Optional[str] = None,
     category_id: Optional[str] = None,
     commit_changes: bool = True
 ) -> str:
@@ -36,7 +37,8 @@ def get_or_create_product(
         description=description,
         extended_description=extended_description,
         tags=tags,
-        materials=materials
+        materials=materials,
+        dimensions=dimensions
     )
     new_product = pim_repo.create(db, obj_in=blueprint_in, commit_changes=commit_changes)
     logger.log_execution("pim_service", "blueprint_created", "ok", 
