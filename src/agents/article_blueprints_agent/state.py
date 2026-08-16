@@ -13,6 +13,7 @@ class BlueprintsGraphState(BaseModel):
     db_similarity_threshold: float = Field(default=0.92, description="Cosine similarity threshold for DB matching.")
     articles_similarity_threshold: float = Field(default=0.88, description="Cosine similarity threshold for intra-DDT clustering.")
     hallucination_recognition_threshold: float = Field(default=0.95, description="Cosine similarity threshold for LLM hallucination recognition.")
+    candidate_tolerance: float = Field(default=0.04, description="Tolerance subtracted from db_similarity_threshold to form candidate band.")
 
     # Internal buckets
     matched_items: List[dict] = Field(default_factory=list, description="Items matched to an existing DB blueprint.")

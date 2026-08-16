@@ -51,6 +51,7 @@ class ArticleBlueprintsAgent(BaseAgent):
                 db_similarity_threshold=input_data.get("db_similarity_threshold", 0.92),
                 articles_similarity_threshold=input_data.get("articles_similarity_threshold", 0.88),
                 hallucination_recognition_threshold=input_data.get("hallucination_recognition_threshold", 0.95),
+                candidate_tolerance=input_data.get("candidate_tolerance", 0.04),
             )
         except Exception as exc:
             raise AgentException(

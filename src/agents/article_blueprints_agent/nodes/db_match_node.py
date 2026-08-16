@@ -28,9 +28,6 @@ from src.core.logger import get_logger
 
 logger = get_logger()
 
-# Fixed tolerance subtracted from db_similarity_threshold to form the relaxed
-# candidate collection band (e.g. 0.92 - 0.02 = 0.90).
-CANDIDATE_TOLERANCE: float = 0.02
 
 _MODEL = "gemini-3.1-flash-lite"
 
@@ -197,7 +194,7 @@ async def db_match_node(state: BlueprintsGraphState) -> dict:
     Items with no confident match are forwarded to unmatched_items for clustering.
     """
     threshold = state.db_similarity_threshold
-    candidate_threshold = threshold - CANDIDATE_TOLERANCE
+    candidate_threshold = threshold - state.candidate_tolerance
     matrix = state.db_embeddings_matrix
 
     logger.log_agent(

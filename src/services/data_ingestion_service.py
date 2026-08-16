@@ -99,6 +99,7 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
                 "db_similarity_threshold": gemini_cfg.get("db_similarity_threshold", 0.92),
                 "articles_similarity_threshold": gemini_cfg.get("articles_similarity_threshold", 0.88),
                 "hallucination_recognition_threshold": gemini_cfg.get("hallucination_recognition_threshold", 0.95),
+                "candidate_tolerance": gemini_cfg.get("candidate_tolerance", 0.04),
             })
             output_items = blueprints_res["items"]
             output_blueprints = blueprints_res["blueprints"]
