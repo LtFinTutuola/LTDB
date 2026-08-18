@@ -570,8 +570,93 @@ def test_process_single_item_endpoint(db_session, monkeypatch):
     )
     assert response.status_code == 202
     data = response.json()
-    assert "items" in data
-    assert len(data["items"]) == 1
-    assert data["items"][0]["vendor_code"] == "SNGL-01"
+    assert "job_id" in data
+    assert "message" in data
+
+    app.dependency_overrides.clear()
+
+@pytest.mark.asyncio
+async def test_process_and_stage_single_item_success(db_session, monkeypatch):
+    monkeypatch.setattr("src.services.data_ingestion_service.SessionLocal", lambda: MockSessionLocal(db_session))
+    
+    from src.models.pim import Brand, Category
+    test_brand = Brand(name="Single Brand Service")
+    db_session.add(test_brand)
+    test_cat = Category(name="Borse", description="Borse")
+    db_session.add(test_cat)
+    db_session.commit()
+
+    async def mock_extraction_aexecute(self, input_data):
+        return {"items": [{"item_id": "uuid-single", "vendor_code": "SNGL-02", "quantity": 1}], "warnings": []}
+
+    async def mock_blueprints_aexecute(self, input_data):
+        return {
+            "items": [{"item_id": "uuid-single", "vendor_code": "SNGL-02", "quantity": 1, "article_blueprint_id": "bp-sngl"}],
+            "blueprints": [{"id": "bp-sngl", "is_new": True, "category": {"id": str(test_cat.id), "description": "Borse"}}],
+            "warnings": []
+        }
+
+    monkeypatch.setattr("src.services.data_ingestion_service.SingleItemExtractionAgent.aexecute", mock_extraction_aexecute)
+    monkeypatch.setattr("src.services.data_ingestion_service.ArticleBlueprintsAgent.aexecute", mock_blueprints_aexecute)
+    monkeypatch.setattr("src.services.data_ingestion_service.category_repo.get_brand_hierarchy", lambda db, brand: {})
+    monkeypatch.setattr("src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand", lambda db, brand: [])
+    
+    from src.schemas.data_ingestion import SingleItemIngestionRequest
+    request = SingleItemIngestionRequest(
+        brand_id=str(test_brand.id),
+        vendor_code="SNGL-02",
+        description="Hint desc",
+        colors=["Rosso"]
+    )
+    
+    from src.services.data_ingestion_service import accept_single_item_job, process_and_stage_single_item
+    job_id = accept_single_item_job(db_session, request)
+    
+    await process_and_stage_single_item(job_id, request)
+    
+    from src.models.staging import StagingArea, JobStatus
+    job = db_session.query(StagingArea).filter_by(id=job_id).first()
+    assert job is not None
+    assert job.status == JobStatus.COMPLETED.value
+    assert "items" in job.data
+    assert job.data["items"][0]["vendor_code"] == "SNGL-02"
+
+@pytest.mark.asyncio
+async def test_process_and_stage_single_item_failure(db_session, monkeypatch):
+    monkeypatch.setattr("src.services.data_ingestion_service.SessionLocal", lambda: MockSessionLocal(db_session))
+    
+    from src.models.pim import Brand
+    test_brand = Brand(name="Single Brand Error")
+    db_session.add(test_brand)
+    db_session.commit()
+
+    async def mock_extraction_aexecute(self, input_data):
+        from src.agents.base import AgentException
+        raise AgentException(message="Simulated error", output=None)
+
+    monkeypatch.setattr("src.services.data_ingestion_service.SingleItemExtractionAgent.aexecute", mock_extraction_aexecute)
+    monkeypatch.setattr("src.services.data_ingestion_service.category_repo.get_brand_hierarchy", lambda db, brand: {})
+    monkeypatch.setattr("src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand", lambda db, brand: [])
+    
+    from src.schemas.data_ingestion import SingleItemIngestionRequest
+    request = SingleItemIngestionRequest(
+        brand_id=str(test_brand.id),
+        vendor_code="ERR-01",
+        description="Hint desc",
+        colors=["Rosso"]
+    )
+    
+    from src.services.data_ingestion_service import accept_single_item_job, process_and_stage_single_item
+    job_id = accept_single_item_job(db_session, request)
+    
+    from src.agents.base import AgentException
+    with pytest.raises(AgentException):
+        await process_and_stage_single_item(job_id, request)
+        
+    from src.models.staging import StagingArea, JobStatus
+    job = db_session.query(StagingArea).filter_by(id=job_id).first()
+    assert job is not None
+    assert job.status == JobStatus.ERROR.value
+    assert "Simulated error" in job.data["error"]
 
     app.dependency_overrides.clear()

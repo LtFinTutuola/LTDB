@@ -46,6 +46,16 @@ def accept_job(db: Session, file_path: str) -> str:
     logger.log_execution("data_ingestion_service", "accept_job_success", "ok", job_id=job_id)
     return job_id
 
+def accept_single_item_job(db: Session, request: SingleItemIngestionRequest) -> str:
+    """
+    Creates a new staging job for a single item ingestion.
+    """
+    job_id = str(uuid.uuid4())
+    logger.log_execution("data_ingestion_service", "accept_single_item_job_start", "ok", job_id=job_id, brand_id=request.brand_id)
+    staging_repo.create_job(db, job_id=job_id, file_path="single-item-ingestion")
+    logger.log_execution("data_ingestion_service", "accept_single_item_job_success", "ok", job_id=job_id)
+    return job_id
+
 async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> None:
     """
     Fetches the brand hierarchy from the DB using brand_id, retrieves the brand name,
@@ -327,13 +337,13 @@ def confirm_and_persist_staging(
     except Exception as exc:
         print(f"[confirm_and_persist_staging] Warning: Failed to clean up staging job {job_id}: {exc}")
 
-async def process_single_item(request: SingleItemIngestionRequest) -> dict:
+async def process_and_stage_single_item(job_id: str, request: SingleItemIngestionRequest) -> None:
     """
-    Processes a single item ingestion bypassing the DDT file upload and staging area.
+    Processes a single item ingestion synchronously by running the agents and persisting the result in staging area.
     """
     with SessionLocal() as db:
         try:
-            logger.log_execution("data_ingestion_service", "process_single_item_start", "ok", brand_id=request.brand_id)
+            logger.log_execution("data_ingestion_service", "process_and_stage_single_item_start", "ok", job_id=job_id, brand_id=request.brand_id)
             from src.models.pim import Brand
             brand_obj = db.query(Brand).filter(Brand.id == request.brand_id).first()
             if not brand_obj:
@@ -414,10 +424,18 @@ async def process_single_item(request: SingleItemIngestionRequest) -> dict:
                 "items": output_items,
                 "blueprints": output_blueprints,
                 "warnings": extraction_res.get("warnings", []) + blueprints_res.get("warnings", []),
+                "job_id": job_id,
+                "brand_id": request.brand_id,
             }
-            logger.log_execution("data_ingestion_service", "process_single_item_success", "ok")
-            return result
+            staging_repo.update_job(db, job_id=job_id, status=JobStatus.COMPLETED.value, data=result)
+            logger.log_execution("data_ingestion_service", "process_and_stage_single_item_success", "ok", job_id=job_id)
 
         except AgentException as exc:
-            logger.log_execution("data_ingestion_service", "process_single_item_exception", "err", exc=exc, output=exc.output)
+            logger.log_execution("data_ingestion_service", "process_and_stage_single_item_exception", "err", job_id=job_id, exc=exc, output=exc.output)
+            staging_repo.update_job(
+                db,
+                job_id=job_id,
+                status=JobStatus.ERROR.value,
+                data={"error": str(exc), "output": exc.output},
+            )
             raise

@@ -117,22 +117,32 @@ def confirm_extraction(
 @router.post("/single-item", status_code=status.HTTP_202_ACCEPTED)
 async def process_single_item(
     request: SingleItemIngestionRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     """
-    Directly processes a single item ingestion bypassing DDT and staging area.
+    Directly processes a single item ingestion through the staging area asynchronously.
     """
     logger.log_execution("data_ingestion_router", "request_received", "ok", 
                          path="/api/v1/ingestion/single-item", method="POST",
                          request_body=request.model_dump())
     start_time = time.time()
     try:
-        result = await data_ingestion_service.process_single_item(request)
+        job_id = data_ingestion_service.accept_single_item_job(db, request)
+        background_tasks.add_task(
+            data_ingestion_service.process_and_stage_single_item,
+            job_id,
+            request
+        )
+        response_body = {
+            "job_id": job_id,
+            "message": "Starting to process the single item"
+        }
         latency_ms = int((time.time() - start_time) * 1000)
         logger.log_execution("data_ingestion_router", "response_dispatched", "ok",
-                             path="/api/v1/ingestion/single-item", status_code=status.HTTP_200_OK,
-                             latency_ms=latency_ms, response_body=result)
-        return result
+                             path="/api/v1/ingestion/single-item", status_code=status.HTTP_202_ACCEPTED,
+                             latency_ms=latency_ms, response_body=response_body)
+        return response_body
     except HTTPException as e:
         logger.log_execution("data_ingestion_router", "exception_caught", "err",
                              exc=e, status_code=e.status_code, detail=e.detail)
