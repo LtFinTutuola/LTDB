@@ -39,13 +39,12 @@ class DataExtractionAgent(BaseAgent):
                 file_path=input_data["file_path"],
                 brand=input_data["brand"],
             )
+            graph = _build_graph()
         except (KeyError, Exception) as exc:
             raise AgentException(
                 message=f"Invalid input_data for DataExtractionAgent: {exc}",
                 output=None,
             ) from exc
-
-        graph = _build_graph()
 
         try:
             final_state = await graph.ainvoke(initial_state)

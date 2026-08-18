@@ -531,3 +531,47 @@ def test_confirm_endpoint_staging_cleanup_failure_preserves_ingestion(db_session
     assert remaining_job is not None
 
     app.dependency_overrides.clear()
+
+def test_process_single_item_endpoint(db_session, monkeypatch):
+    app.dependency_overrides[get_db] = lambda: db_session
+    monkeypatch.setattr("src.services.data_ingestion_service.SessionLocal", lambda: MockSessionLocal(db_session))
+
+    async def mock_extraction_aexecute(self, input_data):
+        return {"items": [{"item_id": "uuid-single", "vendor_code": "SNGL-01", "quantity": 1}], "warnings": []}
+
+    async def mock_blueprints_aexecute(self, input_data):
+        return {
+            "items": [{"item_id": "uuid-single", "vendor_code": "SNGL-01", "quantity": 1, "article_blueprint_id": "bp-sngl"}],
+            "blueprints": [{"id": "bp-sngl", "is_new": True, "category": {"id": "test-cat", "description": "Borse"}}],
+            "warnings": []
+        }
+
+    monkeypatch.setattr("src.services.data_ingestion_service.SingleItemExtractionAgent.aexecute", mock_extraction_aexecute)
+    monkeypatch.setattr("src.services.data_ingestion_service.ArticleBlueprintsAgent.aexecute", mock_blueprints_aexecute)
+    monkeypatch.setattr("src.services.data_ingestion_service.category_repo.get_brand_hierarchy", lambda db, brand: {})
+    monkeypatch.setattr("src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand", lambda db, brand: [])
+
+    from src.models.pim import Brand, Category
+    test_brand = Brand(name="Single Brand")
+    db_session.add(test_brand)
+    test_cat = Category(name="Borse", description="Borse")
+    db_session.add(test_cat)
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/ingestion/single-item",
+        json={
+            "brand_id": str(test_brand.id),
+            "vendor_code": "SNGL-01",
+            "description": "Hint desc",
+            "quantity": 1,
+            "colors": ["Rosso"]
+        }
+    )
+    assert response.status_code == 202
+    data = response.json()
+    assert "items" in data
+    assert len(data["items"]) == 1
+    assert data["items"][0]["vendor_code"] == "SNGL-01"
+
+    app.dependency_overrides.clear()

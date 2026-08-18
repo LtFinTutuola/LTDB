@@ -82,3 +82,10 @@ class BipartiteIngestionResponse(BaseModel):
     blueprints: List[BlueprintDefinitionSchema]
     warnings: Optional[List[str]] = None
 
+class SingleItemIngestionRequest(BaseModel):
+    brand_id: str = Field(..., description="Brand ID for the item")
+    vendor_code: str = Field(..., description="Vendor code or model")
+    description: str = Field(..., description="Product description hint for web search")
+    barcode: Optional[str] = Field(default=None, description="Barcode or EAN")
+    quantity: Optional[int] = Field(default=1, description="Item quantity")
+    colors: List[str] = Field(..., description="Article colors hint for web search")

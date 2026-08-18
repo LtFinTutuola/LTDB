@@ -28,7 +28,8 @@ class TestStateValidation:
     def test_missing_required_fields(self):
         with pytest.raises(ValidationError):
             ExtractionGraphState(brand="Gucci")
-
+        with pytest.raises(ValidationError):
+            ExtractionGraphState(file_path="/tmp/test.pdf")
 
 class TestExtractionNode:
     @pytest.mark.asyncio
@@ -64,7 +65,6 @@ class TestExtractionNode:
 
             with pytest.raises(AgentException, match="empty"):
                 await extraction_node(base_state)
-
 
 class TestWebSearchNode:
     @pytest.mark.asyncio
@@ -112,7 +112,6 @@ class TestWebSearchNode:
         assert items[0]["article_name"] == "Borsa"
         assert items[0]["article_description"] == "Borsa"
         assert len(res["warnings"]) == 1
-
 
 class TestDataExtractionAgent:
     @pytest.mark.asyncio

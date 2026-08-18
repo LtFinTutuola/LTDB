@@ -6,9 +6,10 @@ from sqlalchemy.orm import Session
 from src.core.database import SessionLocal
 from src.agents.base import AgentException
 from src.agents.data_extraction_agent import DataExtractionAgent
+from src.agents.single_item_extraction_agent import SingleItemExtractionAgent
 from src.agents.article_blueprints_agent import ArticleBlueprintsAgent
 from src.repositories.pim_repo import pim_repo, category_repo
-from src.schemas.data_ingestion import StagingConfirmationRequest, EnrichedItemSchema
+from src.schemas.data_ingestion import StagingConfirmationRequest, EnrichedItemSchema, SingleItemIngestionRequest
 from src.services.pim_service import get_or_create_product
 from src.services.wms_service import register_inbound_movement
 from src.repositories import staging_repo
@@ -325,3 +326,98 @@ def confirm_and_persist_staging(
         staging_repo.delete_job(db, job_id)
     except Exception as exc:
         print(f"[confirm_and_persist_staging] Warning: Failed to clean up staging job {job_id}: {exc}")
+
+async def process_single_item(request: SingleItemIngestionRequest) -> dict:
+    """
+    Processes a single item ingestion bypassing the DDT file upload and staging area.
+    """
+    with SessionLocal() as db:
+        try:
+            logger.log_execution("data_ingestion_service", "process_single_item_start", "ok", brand_id=request.brand_id)
+            from src.models.pim import Brand
+            brand_obj = db.query(Brand).filter(Brand.id == request.brand_id).first()
+            if not brand_obj:
+                raise AgentException(f"Brand ID '{request.brand_id}' not found in the database.")
+            brand_name = brand_obj.name
+            logger.log_execution("data_ingestion_service", "brand_resolved", "ok", brand_id=request.brand_id, brand_name=brand_name)
+
+            # 1. Fetch brand hierarchy and DB embeddings
+            categories = category_repo.get_brand_hierarchy(db, request.brand_id)
+            db_embeddings_matrix = pim_repo.get_embeddings_by_brand(db, request.brand_id)
+
+            # 2. Run SingleItemExtractionAgent
+            extraction_agent = SingleItemExtractionAgent()
+            logger.log_execution("data_ingestion_service", "extraction_agent_single_item", "ok", vendor_code=request.vendor_code)
+            
+            extraction_res = await extraction_agent.aexecute({
+                "brand": brand_name,
+                "vendor_code": request.vendor_code,
+                "description": request.description,
+                "barcode": request.barcode,
+                "quantity": request.quantity,
+                "colors": request.colors
+            })
+            extracted_items = extraction_res["items"]
+            
+            # 3. Run ArticleBlueprintsAgent
+            from pathlib import Path
+            import yaml
+            
+            gemini_yaml_path = Path("src/agents/gemini.yaml")
+            if gemini_yaml_path.exists():
+                with open(gemini_yaml_path, "r") as f:
+                    gemini_cfg = yaml.safe_load(f) or {}
+            else:
+                gemini_cfg = {}
+
+            blueprints_agent = ArticleBlueprintsAgent()
+            logger.log_execution("data_ingestion_service", "blueprints_agent_single_item", "ok")
+            blueprints_res = await blueprints_agent.aexecute({
+                "items": extracted_items,
+                "categories": categories,
+                "db_embeddings_matrix": db_embeddings_matrix,
+                "db_similarity_threshold": gemini_cfg.get("db_similarity_threshold", 0.92),
+                "articles_similarity_threshold": gemini_cfg.get("articles_similarity_threshold", 0.88),
+                "hallucination_recognition_threshold": gemini_cfg.get("hallucination_recognition_threshold", 0.95),
+                "candidate_tolerance": gemini_cfg.get("candidate_tolerance", 0.04),
+            })
+            
+            output_items = blueprints_res["items"]
+            output_blueprints = blueprints_res["blueprints"]
+
+            # 4. Fail-fast category validation for new blueprints
+            from sqlalchemy import func
+            from src.models.pim import Category
+
+            for bp in output_blueprints:
+                if bp.get("is_new"):
+                    for field, label in [("category", "category"), ("sub_category", "sub-category")]:
+                        cat_name = bp.get(field)
+                        if cat_name:
+                            if isinstance(cat_name, dict):
+                                continue
+                            cat = db.query(Category).filter(
+                                func.lower(Category.name) == str(cat_name).lower()
+                            ).first()
+                            if cat:
+                                bp[field] = {"id": str(cat.id), "description": cat.name}
+                            else:
+                                if field == "category":
+                                    raise AgentException(
+                                        message=f"category '{cat_name}' does not exist, extraction aborted",
+                                        output=None,
+                                    )
+                                else:
+                                    bp[field] = None
+
+            result = {
+                "items": output_items,
+                "blueprints": output_blueprints,
+                "warnings": extraction_res.get("warnings", []) + blueprints_res.get("warnings", []),
+            }
+            logger.log_execution("data_ingestion_service", "process_single_item_success", "ok")
+            return result
+
+        except AgentException as exc:
+            logger.log_execution("data_ingestion_service", "process_single_item_exception", "err", exc=exc, output=exc.output)
+            raise

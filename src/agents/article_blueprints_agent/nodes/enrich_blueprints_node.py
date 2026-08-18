@@ -38,10 +38,16 @@ async def _enrich_single_blueprint(client: LLMClient, bp: dict, categories: dict
             cat_lines.append(f"- Macro: '{cat_name}'")
     cat_prompt = "\n".join(cat_lines)
 
+    items = bp.get("cluster_items", [])
+    long_desc = ""
+    if items:
+        long_desc = max((it.get("article_description", "") for it in items), key=len)
+
     prompt = (
-        f"Articolo:\nNome: {name}\nDescrizione: {desc}\n\n"
+        f"Articolo:\nNome: {name}\nDescrizione Breve: {desc}\n"
+        f"Dettagli Extra (Dalle varianti): {long_desc}\n\n"
         f"Gerarchia Categorie Brand:\n{cat_prompt}\n\n"
-        f"Mappa la categoria corretta e genera descrizione estesa, tag e materiali in formato JSON."
+        f"Mappa la categoria corretta e usa tutti i dettagli forniti per generare una descrizione estesa, tag e materiali in formato JSON."
     )
 
     fallback_cat = list(categories.keys())[0] if categories else "Generico"

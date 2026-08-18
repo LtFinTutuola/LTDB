@@ -32,11 +32,11 @@ class BlueprintSynthesisOutput(BaseModel):
 _SYSTEM_PROMPT = (
     "Sei un Agente di PIM (Product Information Management). "
     "Il tuo compito è analizzare le varianti di un gruppo di articoli simili e sintetizzare un unico nome commerciale ufficiale (article_name) "
-    "e un'unica descrizione standardizzata (description) che rappresenti l'intero gruppo di articoli.\n"
+    "e un'unica descrizione BREVE standardizzata (description) che rappresenti l'intero gruppo di articoli.\n"
     "REGOLE OBBLIGATORIE:\n"
     "1. Il nome articolo (article_name) NON deve contenere riferimenti a colori specifici. "
     "Usa solo il nome commerciale del modello e, se rilevante per distinguere il prodotto, la dimensione.\n"
-    "2. La descrizione deve essere basata ESCLUSIVAMENTE sulle informazioni fornite nelle varianti in input. "
+    "2. La descrizione deve essere un riassunto conciso e basata ESCLUSIVAMENTE sulle informazioni fornite nelle varianti in input. "
     "Non inventare materiali o caratteristiche non presenti nei dati forniti.\n"
     "3. Se le varianti fornite riportano materiali contraddittori tra loro, ometti completamente i materiali dalla descrizione.\n"
     "4. Estrai le dimensioni fisiche principali dell'articolo nel campo 'dimensions' (width_cm, height_cm, depth_cm). "
@@ -60,7 +60,7 @@ async def _synthesize_single_blueprint(client: LLMClient, bp: dict) -> dict:
     variations = []
     for it in items:
         variations.append(
-            f"- Codice: {it.get('vendor_code', '')} | Nome: {it.get('article_name', '')} | Desc: {it.get('article_description', '')}"
+            f"- Codice: {it.get('vendor_code', '')} | Nome: {it.get('article_name', '')} | Desc: {it.get('description', '')}"
         )
     variations_text = "\n".join(variations)
 
