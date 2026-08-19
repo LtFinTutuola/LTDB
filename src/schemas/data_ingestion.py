@@ -1,3 +1,4 @@
+from __future__ import annotations
 from pydantic import BaseModel, Field
 from typing import List, Optional, Any
 
@@ -54,7 +55,7 @@ class BlueprintDefinitionSchema(BaseModel):
     dimensions: Optional[str] = None
 
 class StagingConfirmationRequest(BaseModel):
-    items: Optional[List[EnrichedItemSchema]] = None
+    items: Optional[List[BlueprintItemSchema]] = None
     blueprints: Optional[List[BlueprintDefinitionSchema]] = None
 
 class ExtractedItemSchema(BaseModel):
