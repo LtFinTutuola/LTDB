@@ -9,7 +9,7 @@ from src.agents.data_extraction_agent import DataExtractionAgent
 from src.agents.single_item_extraction_agent import SingleItemExtractionAgent
 from src.agents.article_blueprints_agent import ArticleBlueprintsAgent
 from src.repositories.pim_repo import pim_repo, category_repo
-from src.schemas.data_ingestion import StagingConfirmationRequest, EnrichedItemSchema, SingleItemIngestionRequest
+from src.schemas.data_ingestion import EnrichedItemSchema, SingleItemIngestionRequest
 from src.services.pim_service import get_or_create_product
 from src.services.wms_service import register_inbound_movement
 from src.repositories import staging_repo
@@ -194,34 +194,26 @@ def check_job_status(db: Session, job_id: str) -> None:
 def confirm_and_persist_staging(
     db: Session, 
     job_id: str, 
-    staging_data: Optional[StagingConfirmationRequest] = None
 ) -> None:
     """
     Orchestrates the creation of missing products and registration of warehouse movements.
+    Always reads from the staging area data (edited via the revision endpoint).
     """
     logger.log_execution("data_ingestion_service", "confirm_staging_start", "ok", job_id=job_id)
     job = staging_repo.get_job(db, job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    # Determine items and blueprints: use request if present, otherwise fallback to stored job data
-    raw_items = None
-    raw_blueprints = []
-
-    if staging_data and (staging_data.items is not None or staging_data.blueprints is not None):
-        raw_items = [item.model_dump(by_alias=True) if hasattr(item, "model_dump") else item for item in (staging_data.items or [])]
-        if staging_data.blueprints is not None:
-            raw_blueprints = [bp.model_dump() if hasattr(bp, "model_dump") else bp for bp in staging_data.blueprints]
-    elif job.data and "items" in job.data:
-        raw_items = job.data.get("items") or []
-        raw_blueprints = job.data.get("blueprints") or []
+    # Always read from stored staging data
+    raw_items = job.data.get("items") or [] if job.data else []
+    raw_blueprints = job.data.get("blueprints") or [] if job.data else []
 
     if not raw_items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No items to confirm")
 
     logger.log_execution("data_ingestion_service", "bipartite_merge", "ok", item_count=len(raw_items), blueprint_count=len(raw_blueprints))
 
-    # Bipartite merging: if blueprints are present, join each item with its blueprint definition
+    # Build blueprint map indexed by ID
     bp_map = {}
     if raw_blueprints:
         for bp in raw_blueprints:
@@ -230,25 +222,25 @@ def confirm_and_persist_staging(
             if bp_id:
                 bp_map[bp_id] = bp_dict
 
-        merged_items = []
-        for raw_it in raw_items:
-            it_dict = raw_it.model_dump(by_alias=True) if hasattr(raw_it, "model_dump") else dict(raw_it)
-            bp_id = str(it_dict.get("article_blueprint_id") or it_dict.get("blueprint_group_id") or "")
-            if bp_id in bp_map:
-                bp = bp_map[bp_id]
-                it_dict["category"] = it_dict.get("category") or bp.get("category")
-                it_dict["sub_category"] = it_dict.get("sub_category") or bp.get("sub_category")
-                it_dict["article_name"] = it_dict.get("article_name") or bp.get("article_name")
-                it_dict["product_short_description"] = it_dict.get("product_short_description") or bp.get("description")
-                it_dict["product_extended_description"] = it_dict.get("product_extended_description") or bp.get("extended_description")
-                it_dict["tags"] = it_dict.get("tags") or bp.get("tags")
-                it_dict["materials"] = it_dict.get("materials") or bp.get("materials")
-                it_dict["dimensions"] = it_dict.get("dimensions") or bp.get("dimensions")
-                it_dict["blueprint_group_id"] = bp_id
-            merged_items.append(it_dict)
-        items = [EnrichedItemSchema.model_validate(item) for item in merged_items]
-    else:
-        items = [EnrichedItemSchema.model_validate(item) for item in raw_items]
+    # Bipartite merging: join each item with its blueprint definition via article_blueprint_id
+    merged_items = []
+    for raw_it in raw_items:
+        it_dict = raw_it.model_dump(by_alias=True) if hasattr(raw_it, "model_dump") else dict(raw_it)
+        bp_id = str(it_dict.get("article_blueprint_id") or it_dict.get("blueprint_group_id") or "")
+        if bp_id in bp_map:
+            bp = bp_map[bp_id]
+            it_dict["category"] = it_dict.get("category") or bp.get("category")
+            it_dict["sub_category"] = it_dict.get("sub_category") or bp.get("sub_category")
+            it_dict["article_name"] = it_dict.get("article_name") or bp.get("article_name")
+            it_dict["product_short_description"] = it_dict.get("product_short_description") or bp.get("description")
+            it_dict["product_extended_description"] = it_dict.get("product_extended_description") or bp.get("extended_description")
+            it_dict["tags"] = it_dict.get("tags") or bp.get("tags")
+            it_dict["materials"] = it_dict.get("materials") or bp.get("materials")
+            it_dict["dimensions"] = it_dict.get("dimensions") or bp.get("dimensions")
+            it_dict["blueprint_group_id"] = bp_id
+        merged_items.append(it_dict)
+
+    items = [EnrichedItemSchema.model_validate(item) for item in merged_items]
 
     brand_id = job.data.get("brand_id") if job.data else None
     if not brand_id:
@@ -257,7 +249,7 @@ def confirm_and_persist_staging(
     resolved_blueprints: Dict[str, str] = {}
 
     for item in items:
-        bp_group_key = item.blueprint_group_id or f"{item.article_name}|{item.product_short_description}"
+        bp_group_key = item.blueprint_group_id or item.article_name or f"{item.product_short_description}"
         is_new = True
         if bp_group_key in bp_map:
             is_new = bp_map[bp_group_key].get("is_new", True)

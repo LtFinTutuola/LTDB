@@ -2,8 +2,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Body
 from sqlalchemy.orm import Session
 from src.core.database import get_db
-from src.schemas.data_ingestion import ExtractionRequest, JobStatusResponse, StagingConfirmationRequest, SingleItemIngestionRequest
-from src.services import data_ingestion_service
+from src.schemas.data_ingestion import ExtractionRequest, JobStatusResponse, SingleItemIngestionRequest, StagingRevisionRequest, StagingRevisionResponse
+from src.services import data_ingestion_service, staging_revision_service
 from src.core.logger import get_logger
 import time
 
@@ -79,22 +79,59 @@ def get_extracted_data(job_id: str, db: Session = Depends(get_db)):
             detail=str(e) if str(e).strip() else "unknown server error"
         )
 
+@router.put("/staging/{job_id}", response_model=StagingRevisionResponse, status_code=status.HTTP_200_OK)
+def revise_staging(
+    job_id: str,
+    request: StagingRevisionRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Revises the staged extraction data before confirmation (human-in-the-loop).
+    """
+    logger.log_execution("data_ingestion_router", "request_received", "ok",
+                         path=f"/api/v1/ingestion/staging/{job_id}", method="PUT",
+                         job_id=job_id, request_body=request.model_dump())
+    start_time = time.time()
+    try:
+        updated_data = staging_revision_service.revise_staging_data(db, job_id, request.operations)
+        response_body = {
+            "status": "success",
+            "data": updated_data
+        }
+        latency_ms = int((time.time() - start_time) * 1000)
+        logger.log_execution("data_ingestion_router", "response_dispatched", "ok",
+                             path=f"/api/v1/ingestion/staging/{job_id}", status_code=status.HTTP_200_OK,
+                             job_id=job_id, latency_ms=latency_ms)
+        return response_body
+    except HTTPException as e:
+        logger.log_execution("data_ingestion_router", "exception_caught", "err",
+                             exc=e, status_code=e.status_code, detail=e.detail)
+        raise e
+    except Exception as e:
+        db.rollback()
+        logger.log_execution("data_ingestion_router", "exception_caught", "err",
+                             exc=e, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e) if str(e).strip() else "unknown server error"
+        )
+
 @router.post("/confirm/{job_id}", status_code=status.HTTP_200_OK)
 def confirm_extraction(
     job_id: str,
-    request: Optional[StagingConfirmationRequest] = Body(None),
     db: Session = Depends(get_db)
 ):
     """
     Confirms the extraction and persists to database (PIM and WMS).
+    Always reads from the staging area data.
     """
     logger.log_execution("data_ingestion_router", "request_received", "ok", 
                          path=f"/api/v1/ingestion/confirm/{job_id}", method="POST",
-                         job_id=job_id, request_body=request.model_dump() if request else None)
+                         job_id=job_id)
     start_time = time.time()
     try:
         data_ingestion_service.check_job_status(db, job_id)
-        data_ingestion_service.confirm_and_persist_staging(db, job_id, request)
+        data_ingestion_service.confirm_and_persist_staging(db, job_id)
         response_body = {"status": "success", "message": "Data successfully ingested"}
         latency_ms = int((time.time() - start_time) * 1000)
         logger.log_execution("data_ingestion_router", "response_dispatched", "ok",

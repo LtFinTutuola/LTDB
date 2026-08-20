@@ -1,6 +1,6 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field
-from typing import List, Optional, Any
+from pydantic import BaseModel, Field, model_validator
+from typing import List, Literal, Optional, Any
 
 class ExtractionRequest(BaseModel):
     file_path: str = Field(..., description="Absolute path to the PDF file on the server filesystem")
@@ -54,10 +54,6 @@ class BlueprintDefinitionSchema(BaseModel):
     materials: Optional[List[str]] = None
     dimensions: Optional[str] = None
 
-class StagingConfirmationRequest(BaseModel):
-    items: Optional[List[BlueprintItemSchema]] = None
-    blueprints: Optional[List[BlueprintDefinitionSchema]] = None
-
 class ExtractedItemSchema(BaseModel):
     """Item schema returned by DataExtractionAgent."""
     item_id: str
@@ -90,3 +86,59 @@ class SingleItemIngestionRequest(BaseModel):
     barcode: Optional[str] = Field(default=None, description="Barcode or EAN")
     quantity: Optional[int] = Field(default=1, description="Item quantity")
     colors: List[str] = Field(..., description="Article colors hint for web search")
+
+
+# ---------------------------------------------------------------------------
+# Human-in-the-Loop Staging Revision Schemas
+# ---------------------------------------------------------------------------
+
+class CreateBlueprintPayload(BaseModel):
+    """Payload for the create_blueprint operation with strict validation."""
+    article_name: str
+    description: str
+    extended_description: str
+    category: CategoryRefSchema
+    tags: List[str]
+    materials: List[str]
+    sub_category: Optional[CategoryRefSchema] = None
+    dimensions: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_non_empty_lists(self) -> "CreateBlueprintPayload":
+        errors = []
+        if not self.tags:
+            errors.append("'tags' must be a non-empty list")
+        if not self.materials:
+            errors.append("'materials' must be a non-empty list")
+        if errors:
+            raise ValueError("; ".join(errors))
+        return self
+
+
+class RevisionOperation(BaseModel):
+    """A single revision operation to apply to staged data."""
+    op: Literal[
+        "update_item", "update_blueprint", "reassign_item",
+        "create_blueprint", "merge_blueprints", "split_blueprint", "delete_item"
+    ]
+    # Conditionally required fields (validated in service layer based on op type):
+    item_id: Optional[str] = None
+    item_ids: Optional[List[str]] = None
+    blueprint_id: Optional[str] = None
+    fields: Optional[dict] = None
+    target_blueprint_id: Optional[str] = None
+    blueprint: Optional[CreateBlueprintPayload] = None
+    source_blueprint_ids: Optional[List[str]] = None
+    source_blueprint_id: Optional[str] = None
+    blueprint_overrides: Optional[dict] = None
+
+
+class StagingRevisionRequest(BaseModel):
+    """Request body for PUT /api/v1/ingestion/staging/{job_id}."""
+    operations: List[RevisionOperation]
+
+
+class StagingRevisionResponse(BaseModel):
+    """Response body for PUT /api/v1/ingestion/staging/{job_id}."""
+    status: str
+    data: dict

@@ -36,6 +36,21 @@ def update_job(db: Session, job_id: str, status: int, data: dict) -> Optional[St
     return db_obj
 
 
+def update_job_data(db: Session, job_id: str, data: dict) -> Optional[StagingArea]:
+    """
+    Updates only the JSON data payload and increments revision_count.
+    Does NOT change the job status.
+    """
+    logger.log_execution("staging_repo", "staging_job_data_revised", "ok", job_id=job_id)
+    db_obj = get_job(db, job_id)
+    if db_obj:
+        db_obj.data = data
+        db_obj.revision_count = (db_obj.revision_count or 0) + 1
+        db.commit()
+        db.refresh(db_obj)
+    return db_obj
+
+
 def delete_job(db: Session, job_id: str) -> None:
     logger.log_execution("staging_repo", "staging_job_deleted", "ok", job_id=job_id)
     db_obj = get_job(db, job_id)

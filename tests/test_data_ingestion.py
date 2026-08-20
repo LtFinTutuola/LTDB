@@ -358,7 +358,7 @@ def test_confirm_endpoint_bipartite_staging_with_empty_payload(db_session, monke
     db_session.commit()
 
     # Confirm with empty payload
-    response = client.post(f"/api/v1/ingestion/confirm/{job_id}", json={})
+    response = client.post(f"/api/v1/ingestion/confirm/{job_id}")
     assert response.status_code == 200
     assert response.json()["status"] == "success"
 
@@ -512,7 +512,7 @@ def test_confirm_endpoint_staging_cleanup_failure_preserves_ingestion(db_session
 
     monkeypatch.setattr("src.repositories.staging_repo.delete_job", mock_delete_job_raise)
 
-    response = client.post(f"/api/v1/ingestion/confirm/{job_id}", json={})
+    response = client.post(f"/api/v1/ingestion/confirm/{job_id}")
     assert response.status_code == 200
     assert response.json()["status"] == "success"
 
