@@ -38,7 +38,8 @@ _SYSTEM_PROMPT = (
     "- Variazioni strutturali (es. taglie fisiche, capacità in litri, diametri, versioni 'Cabin' vs 'Large', "
     "genere Uomo/Donna) modificano l'identità del prodotto e richiedono Blueprint DIFFERENTI.\n\n"
     "Restituisci ESCLUSIVAMENTE un JSON strutturato come una lista di liste (array di array), "
-    "dove ogni lista interna rappresenta un Blueprint valido contenente gli elementi ad esso associati."
+    "contenente SOLO i numeri indice (1, 2, 3, ecc.) degli articoli assegnati a ciascun Blueprint.\n"
+    "Esempio di output valido: [[1, 2], [3, 4]]"
 )
 
 
@@ -63,8 +64,9 @@ def _build_cluster_prompt(cluster_items: List[dict]) -> str:
         f"Se tutti gli articoli condividono la stessa identità strutturale, restituisci un unico cluster. "
         f"Se individui articoli che divergono nei requisiti strutturali del Blueprint, splitta il gruppo "
         f"in array separati.\n"
-        f"Restituisci ESCLUSIVAMENTE un JSON strutturato come una lista di liste (array di array), "
-        f"dove ogni lista interna rappresenta un Blueprint valido contenente gli elementi ad esso associati."
+        f"Restituisci ESCLUSIVAMENTE un JSON strutturato come una lista di liste (array di array) "
+        f"contenente SOLO i numeri indice (1, 2, 3...) degli articoli, senza alcun altro testo.\n"
+        f"Esempio di output valido: [[1, 2], [3, 4]] oppure [[1, 2, 3, 4]]"
     )
 
 
@@ -203,8 +205,7 @@ async def _validate_single_cluster(
         warnings.append(warning)
         print(warning)
         logger.log_agent("validate_clusters_node", "soft_check_warning", "warning", message=warning)
-        # Hard guard: reject the split and keep the original cluster intact
-        return [bp], warnings
+        # Soft guard: we merely log the warning, the LLM split is respected and preserved
 
     # Build confirmed blueprint dicts for each sub-group.
     confirmed_blueprints: list[dict] = []
@@ -237,7 +238,7 @@ async def validate_clusters_node(state: BlueprintsGraphState) -> dict:
     print(f"[validate_clusters_node] Validating {len(state.new_blueprints)} candidate cluster(s)...")
 
     client = LLMClient()
-    threshold = state.hallucination_recognition_threshold
+    threshold = state.articles_similarity_threshold
 
     tasks = [
         _validate_single_cluster(client, bp, threshold)

@@ -207,10 +207,9 @@ class TestValidateClustersNode:
         assert res["warnings"] == []
 
     @pytest.mark.asyncio
-    async def test_validation_rejects_split_with_warning_when_geometrically_close(self, base_state):
-        """LLM splits into geometrically close sub-groups → split REJECTED, warning appended."""
-        original_id = "cluster-uuid-3"
-        base_state.hallucination_recognition_threshold = 0.90
+    async def test_validation_allows_split_with_warning_when_geometrically_close(self, base_state):
+        """If centroids of sub-groups are above threshold, the split is preserved but a warning is issued."""
+        original_id = "test-cluster-id"
         base_state.new_blueprints = [{
             "id": original_id,
             "is_new": True,
@@ -227,9 +226,9 @@ class TestValidateClustersNode:
             MockClient.return_value.call = AsyncMock(return_value=llm_response)
             res = await validate_clusters_node(base_state)
 
-        # Split must be rejected (only 1 blueprint remains).
-        assert len(res["new_blueprints"]) == 1
-        assert res["new_blueprints"][0]["id"] == original_id
+        # Split must be preserved (2 blueprints).
+        assert len(res["new_blueprints"]) == 2
+        assert res["new_blueprints"][0]["id"] != original_id
         # A warning must have been appended.
         assert len(res["warnings"]) == 1
         assert "Soft-check warning" in res["warnings"][0]
