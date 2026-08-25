@@ -281,7 +281,7 @@ def test_confirm_endpoint(db_session, monkeypatch):
     assert len(articles) == 5
     assert articles[0].supplier_code == "TEST-CODE-001"
     assert articles[0].ean == "8888888888888"
-    assert articles[0].colors == ["Blue"]
+    assert articles[0].colors == ["blue"]
 
     movements = db_session.query(ArticleMovement).all()
     assert len(movements) == 5

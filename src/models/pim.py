@@ -3,6 +3,7 @@ from sqlalchemy import String, ForeignKey, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, UUIDMixin, TimestampMixin
+from src.models.types import LowercaseJSONList
 
 
 class Brand(Base, UUIDMixin, TimestampMixin):
@@ -54,8 +55,8 @@ class ArticleBlueprint(Base, UUIDMixin, TimestampMixin):
     dimensions: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     
     # JSON arrays for SQLite (using JSON1 extension via SQLAlchemy JSON)
-    tags: Mapped[list] = mapped_column(JSON, nullable=False)
-    materials: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    tags: Mapped[list] = mapped_column(LowercaseJSONList, nullable=False)
+    materials: Mapped[Optional[list]] = mapped_column(LowercaseJSONList, nullable=True)
     embedding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     # Relationships

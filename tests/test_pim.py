@@ -185,7 +185,7 @@ class TestArticleBlueprintCrud:
         )
         assert bp.article_name == "Leather Bag"
         assert bp.tags == ["bag", "leather", "premium"]
-        assert bp.materials == ["Leather"]
+        assert bp.materials == ["leather"]
 
     def test_blueprint_nullable_fields(self, db_session):
         """materials is nullable."""

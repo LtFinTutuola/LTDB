@@ -2,12 +2,14 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, model_validator
 from typing import List, Literal, Optional, Any
 
+from src.schemas.types import NormalizedIdentifier, NormalizedStringList
+
 class ExtractionRequest(BaseModel):
     file_path: str = Field(..., description="Absolute path to the PDF file on the server filesystem")
     brand_id: str = Field(..., description="Brand ID for the shipment document (must exist in the database)")
 
 class DdtItemSchema(BaseModel):
-    supplier_code: str
+    supplier_code: NormalizedIdentifier
     description: str
     quantity: int
 
@@ -17,19 +19,19 @@ class CategoryRefSchema(BaseModel):
 
 class EnrichedItemSchema(BaseModel):
     """Full enriched item schema returned by the DataIngestionAgent."""
-    vendor_code: Optional[str] = None
+    vendor_code: Optional[NormalizedIdentifier] = None
     barcode: Optional[str] = None
     quantity: Optional[int] = None
     category: Optional[CategoryRefSchema] = None
     sub_category: Optional[CategoryRefSchema] = None
     sex: Optional[str] = None
-    materials: Optional[List[str]] = None
+    materials: Optional[NormalizedStringList] = None
     dimensions: Optional[str] = None
-    colors: Optional[List[str]] = None
+    colors: Optional[NormalizedStringList] = None
     article_name: Optional[str] = None
     product_short_description: Optional[str] = None
     product_extended_description: Optional[str] = None
-    tags: Optional[List[str]] = None
+    tags: Optional[NormalizedStringList] = None
     sources: Optional[List[str]] = None
     warnings: Optional[List[str]] = None
     blueprint_group_id: Optional[str] = None
@@ -50,17 +52,17 @@ class BlueprintDefinitionSchema(BaseModel):
     article_name: Optional[str] = None
     description: Optional[str] = None
     extended_description: Optional[str] = None
-    tags: Optional[List[str]] = None
-    materials: Optional[List[str]] = None
+    tags: Optional[NormalizedStringList] = None
+    materials: Optional[NormalizedStringList] = None
     dimensions: Optional[str] = None
 
 class ExtractedItemSchema(BaseModel):
     """Item schema returned by DataExtractionAgent."""
     item_id: str
-    vendor_code: Optional[str] = None
+    vendor_code: Optional[NormalizedIdentifier] = None
     barcode: Optional[str] = None
     quantity: Optional[int] = None
-    colors: Optional[List[str]] = None
+    colors: Optional[NormalizedStringList] = None
     description: Optional[str] = None
     article_name: Optional[str] = None
     article_description: Optional[str] = None
@@ -68,10 +70,10 @@ class ExtractedItemSchema(BaseModel):
 class BlueprintItemSchema(BaseModel):
     """Item schema returned by ArticleBlueprintsAgent linking to a blueprint."""
     item_id: str
-    vendor_code: Optional[str] = None
+    vendor_code: Optional[NormalizedIdentifier] = None
     barcode: Optional[str] = None
     quantity: Optional[int] = None
-    colors: Optional[List[str]] = None
+    colors: Optional[NormalizedStringList] = None
     article_blueprint_id: str
 
 class BipartiteIngestionResponse(BaseModel):
@@ -81,11 +83,11 @@ class BipartiteIngestionResponse(BaseModel):
 
 class SingleItemIngestionRequest(BaseModel):
     brand_id: str = Field(..., description="Brand ID for the item")
-    vendor_code: str = Field(..., description="Vendor code or model")
+    vendor_code: NormalizedIdentifier = Field(..., description="Vendor code or model")
     description: str = Field(..., description="Product description hint for web search")
     barcode: Optional[str] = Field(default=None, description="Barcode or EAN")
     quantity: Optional[int] = Field(default=1, description="Item quantity")
-    colors: List[str] = Field(..., description="Article colors hint for web search")
+    colors: NormalizedStringList = Field(..., description="Article colors hint for web search")
 
 
 # ---------------------------------------------------------------------------
@@ -98,8 +100,8 @@ class CreateBlueprintPayload(BaseModel):
     description: str
     extended_description: str
     category: CategoryRefSchema
-    tags: List[str]
-    materials: List[str]
+    tags: NormalizedStringList
+    materials: NormalizedStringList
     sub_category: Optional[CategoryRefSchema] = None
     dimensions: Optional[str] = None
 
