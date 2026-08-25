@@ -660,3 +660,93 @@ async def test_process_and_stage_single_item_failure(db_session, monkeypatch):
     assert "Simulated error" in job.data["error"]
 
     app.dependency_overrides.clear()
+
+
+def test_get_job_existing_blueprint_name_and_description(db_session):
+    """Verify that get_job returns article_name and description for blueprints even when is_new is False."""
+    from src.models.pim import Brand, ArticleBlueprint
+    from src.services.data_ingestion_service import get_job
+
+    brand = Brand(name="JobStatusBrand")
+    db_session.add(brand)
+    db_session.commit()
+
+    existing_bp = ArticleBlueprint(
+        brand_id=str(brand.id),
+        article_name="Existing Blueprint Name",
+        description="Existing Blueprint Description",
+        extended_description="Extended info",
+        tags=["tag1"],
+        materials=["leather"],
+    )
+    db_session.add(existing_bp)
+    db_session.commit()
+
+    bp_id = str(existing_bp.id)
+    job_id = "job_existing_bp_test"
+
+    job = StagingArea(
+        id=job_id,
+        file_path="some/path.pdf",
+        status=JobStatus.COMPLETED.value,
+        data={
+            "brand_id": str(brand.id),
+            "items": [
+                {
+                    "item_id": "item_1",
+                    "vendor_code": "V-001",
+                    "article_blueprint_id": bp_id,
+                    "quantity": 1,
+                }
+            ],
+            "blueprints": [
+                {
+                    "id": bp_id,
+                    "is_new": False,
+                    "article_name": "Existing Blueprint Name",
+                    "description": "Existing Blueprint Description",
+                }
+            ],
+        },
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    result = get_job(db_session, job_id)
+    assert result["status"] == "COMPLETED"
+    assert "data" in result
+    blueprints = result["data"].get("blueprints", [])
+    assert len(blueprints) == 1
+    bp = blueprints[0]
+    assert bp["id"] == bp_id
+    assert bp["is_new"] is False
+    assert bp["article_name"] == "Existing Blueprint Name"
+    assert bp["description"] == "Existing Blueprint Description"
+
+    # Also test fallback enrichment if article_name/description were omitted in stored job data
+    job_id_omitted = "job_existing_bp_omitted_test"
+    job_omitted = StagingArea(
+        id=job_id_omitted,
+        file_path="some/path2.pdf",
+        status=JobStatus.COMPLETED.value,
+        data={
+            "brand_id": str(brand.id),
+            "items": [],
+            "blueprints": [
+                {
+                    "id": bp_id,
+                    "is_new": False,
+                }
+            ],
+        },
+    )
+    db_session.add(job_omitted)
+    db_session.commit()
+
+    result_omitted = get_job(db_session, job_id_omitted)
+    bp_omitted = result_omitted["data"]["blueprints"][0]
+    assert bp_omitted["id"] == bp_id
+    assert bp_omitted["is_new"] is False
+    assert bp_omitted["article_name"] == "Existing Blueprint Name"
+    assert bp_omitted["description"] == "Existing Blueprint Description"
+

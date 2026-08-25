@@ -1,3 +1,4 @@
+import copy
 import os
 import uuid
 from typing import Dict, Any, Optional
@@ -170,14 +171,33 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
 def get_job(db: Session, job_id: str) -> Dict[str, Any]:
     """
     Retrieves the job data from the database.
+    Enriches existing DB blueprints (is_new=False) with article_name and description if missing.
     """
     job = staging_repo.get_job(db, job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
         
+    data = copy.deepcopy(job.data) if job.data else None
+    if data and "blueprints" in data and isinstance(data["blueprints"], list):
+        from src.models.pim import ArticleBlueprint
+        missing_bp_ids = [
+            bp["id"] for bp in data["blueprints"]
+            if isinstance(bp, dict) and not bp.get("is_new", True) and (bp.get("article_name") is None or bp.get("description") is None) and bp.get("id")
+        ]
+        if missing_bp_ids:
+            db_bps = db.query(ArticleBlueprint).filter(ArticleBlueprint.id.in_(missing_bp_ids)).all()
+            bp_map = {str(b.id): b for b in db_bps}
+            for bp in data["blueprints"]:
+                if isinstance(bp, dict) and not bp.get("is_new", True) and bp.get("id") in bp_map:
+                    db_bp = bp_map[bp["id"]]
+                    if bp.get("article_name") is None:
+                        bp["article_name"] = db_bp.article_name
+                    if bp.get("description") is None:
+                        bp["description"] = db_bp.description
+
     return {
         "status": JobStatus(job.status).name,
-        "data": job.data
+        "data": data
     }
 
 def check_job_status(db: Session, job_id: str) -> None:

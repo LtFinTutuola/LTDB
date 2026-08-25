@@ -521,6 +521,8 @@ def _resolve_blueprint_ref(
         staging_data["blueprints"].append({
             "id": str(db_bp.id),
             "is_new": False,
+            "article_name": db_bp.article_name,
+            "description": db_bp.description,
         })
         return str(db_bp.id)
 

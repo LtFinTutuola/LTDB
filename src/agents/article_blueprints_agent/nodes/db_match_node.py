@@ -226,7 +226,13 @@ async def db_match_node(state: BlueprintsGraphState) -> dict:
             matched.append(matched_item)
             bp_id = matched_item["article_blueprint_id"]
             if bp_id not in seen_bp_ids:
-                output_blueprints.append({"id": bp_id, "is_new": False})
+                bp_info = next((c for c in matrix if str(c.get("id")) == str(bp_id)), {})
+                output_blueprints.append({
+                    "id": bp_id,
+                    "is_new": False,
+                    "article_name": bp_info.get("article_name"),
+                    "description": bp_info.get("description"),
+                })
                 seen_bp_ids.add(bp_id)
         else:
             unmatched.append(unmatched_item)

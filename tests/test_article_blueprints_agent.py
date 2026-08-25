@@ -46,7 +46,7 @@ class TestDbMatchNode:
 
         # Verify deduplication in output_blueprints
         assert len(output_bps) == 1
-        assert output_bps[0] == {"id": "db-bp-1", "is_new": False}
+        assert output_bps[0] == {"id": "db-bp-1", "is_new": False, "article_name": None, "description": None}
 
     @pytest.mark.asyncio
     async def test_db_match_zero_candidates_routes_to_unmatched(self, base_state):
@@ -346,7 +346,7 @@ class TestFormatOutputNode:
         assert items[0]["item_id"] == "i1"
 
         assert len(bps) == 2
-        assert bps[0] == {"id": "bp-1", "is_new": False}
+        assert bps[0] == {"id": "bp-1", "is_new": False, "article_name": None, "description": None}
         assert bps[1]["id"] == "bp-2"
         assert bps[1]["is_new"] is True
         assert "cluster_items" not in bps[1]
