@@ -56,6 +56,22 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
             else:
                 db.flush()
 
+    def get_blueprint_by_normalized_code(
+        self, db: Session, brand_id: str, normalized_vendor_code: str
+    ) -> Optional[ArticleBlueprint]:
+        """
+        Deterministic lookup by composite unique key (brand_id, normalized_vendor_code).
+        Returns the ArticleBlueprint or None if not found.
+        """
+        return (
+            db.query(ArticleBlueprint)
+            .filter(
+                ArticleBlueprint.brand_id == brand_id,
+                ArticleBlueprint.normalized_vendor_code == normalized_vendor_code,
+            )
+            .first()
+        )
+
 
 
 class CategoryRepository:

@@ -93,7 +93,11 @@ def test_extract_endpoint(db_session, tmp_path, monkeypatch):
 
     # Seed a brand and category for the test
     from src.models.pim import Brand, Category
-    test_brand = Brand(name="Samsonite")
+    test_brand = Brand(
+        name="Samsonite", 
+        heuristic_confirmed=True, 
+        brand_code_heuristic=r"^(?P<model_code>.*)$"
+    )
     db_session.add(test_brand)
     test_cat = Category(name="Borse", description="Borse da donna")
     db_session.add(test_cat)
@@ -163,7 +167,11 @@ def test_extract_endpoint_fail_fast_category_error(db_session, tmp_path, monkeyp
 
     from src.models.pim import Brand
     from src.agents.base import AgentException
-    test_brand = Brand(name="Samsonite Fail")
+    test_brand = Brand(
+        name="Samsonite Fail", 
+        heuristic_confirmed=True, 
+        brand_code_heuristic=r"^(?P<model_code>.*)$"
+    )
     db_session.add(test_brand)
     db_session.commit()
     brand_id_str = str(test_brand.id)
@@ -552,7 +560,11 @@ def test_process_single_item_endpoint(db_session, monkeypatch):
     monkeypatch.setattr("src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand", lambda db, brand: [])
 
     from src.models.pim import Brand, Category
-    test_brand = Brand(name="Single Brand")
+    test_brand = Brand(
+        name="Single Brand", 
+        heuristic_confirmed=True, 
+        brand_code_heuristic=r"^(?P<model_code>.*)$"
+    )
     db_session.add(test_brand)
     test_cat = Category(name="Borse", description="Borse")
     db_session.add(test_cat)
@@ -580,7 +592,11 @@ async def test_process_and_stage_single_item_success(db_session, monkeypatch):
     monkeypatch.setattr("src.services.data_ingestion_service.SessionLocal", lambda: MockSessionLocal(db_session))
     
     from src.models.pim import Brand, Category
-    test_brand = Brand(name="Single Brand Service")
+    test_brand = Brand(
+        name="Single Brand Service", 
+        heuristic_confirmed=True, 
+        brand_code_heuristic=r"^(?P<model_code>.*)$"
+    )
     db_session.add(test_brand)
     test_cat = Category(name="Borse", description="Borse")
     db_session.add(test_cat)
@@ -626,7 +642,11 @@ async def test_process_and_stage_single_item_failure(db_session, monkeypatch):
     monkeypatch.setattr("src.services.data_ingestion_service.SessionLocal", lambda: MockSessionLocal(db_session))
     
     from src.models.pim import Brand
-    test_brand = Brand(name="Single Brand Error")
+    test_brand = Brand(
+        name="Single Brand Error", 
+        heuristic_confirmed=True, 
+        brand_code_heuristic=r"^(?P<model_code>.*)$"
+    )
     db_session.add(test_brand)
     db_session.commit()
 

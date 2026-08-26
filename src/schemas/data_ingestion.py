@@ -144,3 +144,28 @@ class StagingRevisionResponse(BaseModel):
     """Response body for PUT /api/v1/ingestion/staging/{job_id}."""
     status: str
     data: dict
+
+
+# ---------------------------------------------------------------------------
+# Heuristic Deduction Schemas
+# ---------------------------------------------------------------------------
+
+class HeuristicDeductionRequest(BaseModel):
+    """Request body for POST /api/v1/brands/{brand_id}/heuristic."""
+    file_path: str = Field(..., description="Absolute path to a sample PDF for pattern discovery")
+
+class HeuristicExampleSchema(BaseModel):
+    """A single before/after transformation example."""
+    raw: str
+    normalized: str
+
+class HeuristicProposalResponse(BaseModel):
+    """Proposed heuristic data returned by the deduction agent."""
+    regex: str
+    explanation: str
+    examples: List[HeuristicExampleSchema]
+
+class HeuristicJobStatusResponse(BaseModel):
+    """Response body for GET /api/v1/brands/{brand_id}/heuristic/{job_id}."""
+    status: str
+    data: Optional[dict] = None

@@ -1,5 +1,5 @@
 from typing import List, Optional
-from sqlalchemy import String, ForeignKey, JSON
+from sqlalchemy import String, ForeignKey, JSON, Boolean, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, UUIDMixin, TimestampMixin
@@ -10,6 +10,11 @@ class Brand(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "brands"
 
     name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+
+    # Heuristic columns for deterministic SKU matching
+    brand_code_heuristic: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    brand_code_explanation: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    heuristic_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Relationships
     blueprints: Mapped[List["ArticleBlueprint"]] = relationship("ArticleBlueprint", back_populates="brand")
@@ -44,9 +49,13 @@ class BrandCategory(Base):
 
 class ArticleBlueprint(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "article_blueprints"
+    __table_args__ = (
+        UniqueConstraint("brand_id", "normalized_vendor_code", name="uq_brand_normalized_vendor_code"),
+    )
 
     brand_id: Mapped[str] = mapped_column(String(36), ForeignKey("brands.id"), nullable=False)
     category_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("categories.id"), nullable=True)
+    normalized_vendor_code: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
     
     article_name: Mapped[str] = mapped_column(String, nullable=False, default="Unknown")
     

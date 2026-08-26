@@ -14,8 +14,11 @@ from src.models.wms import Article
 
 def _seed_staging_job(db_session) -> str:
     """Helper to seed a brand, category, and a completed staging job with bipartite data."""
-    # Seed Brand
-    brand = Brand(name="Test Brand")
+    brand = Brand(
+        name="Test Brand",
+        heuristic_confirmed=True, 
+        brand_code_heuristic=r"^(?P<model_code>.*)$"
+    )
     db_session.add(brand)
     db_session.commit()
     db_session.refresh(brand)

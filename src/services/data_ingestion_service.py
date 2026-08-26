@@ -1,7 +1,8 @@
 import copy
 import os
+import re
 import uuid
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from src.core.database import SessionLocal
@@ -14,7 +15,7 @@ from src.schemas.data_ingestion import EnrichedItemSchema, SingleItemIngestionRe
 from src.services.pim_service import get_or_create_product
 from src.services.wms_service import register_inbound_movement
 from src.repositories import staging_repo
-from src.models.staging import JobStatus
+from src.models.staging import JobStatus, JobType
 from src.core.logger import get_logger
 
 logger = get_logger()
@@ -37,13 +38,13 @@ def accept_job(db: Session, file_path: str) -> str:
         logger.log_execution("data_ingestion_service", "accept_job_failed", "err", reason="Invalid file format")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file format. Only PDF files (.pdf) are supported.")
 
-    existing_job = staging_repo.get_job_by_status_and_path(db, status=JobStatus.ACCEPTED.value, file_path=file_path)
+    existing_job = staging_repo.get_job_by_status_and_path(db, status=JobStatus.ACCEPTED.value, file_path=file_path, job_type=JobType.DDT_IMPORT.value)
     if existing_job:
         logger.log_execution("data_ingestion_service", "accept_job_failed", "err", reason="Job already exists")
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A job for this file is already in progress")
         
     job_id = str(uuid.uuid4())
-    staging_repo.create_job(db, job_id=job_id, file_path=file_path)
+    staging_repo.create_job(db, job_id=job_id, job_type=JobType.DDT_IMPORT.value, file_path=file_path)
     logger.log_execution("data_ingestion_service", "accept_job_success", "ok", job_id=job_id)
     return job_id
 
@@ -53,7 +54,7 @@ def accept_single_item_job(db: Session, request: SingleItemIngestionRequest) -> 
     """
     job_id = str(uuid.uuid4())
     logger.log_execution("data_ingestion_service", "accept_single_item_job_start", "ok", job_id=job_id, brand_id=request.brand_id)
-    staging_repo.create_job(db, job_id=job_id, file_path="single-item-ingestion")
+    staging_repo.create_job(db, job_id=job_id, job_type=JobType.SINGLE_ITEM_IMPORT.value)
     logger.log_execution("data_ingestion_service", "accept_single_item_job_success", "ok", job_id=job_id)
     return job_id
 
@@ -75,11 +76,9 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             brand_name = brand_obj.name
             logger.log_execution("data_ingestion_service", "brand_resolved", "ok", brand_id=brand_id, brand_name=brand_name)
 
-            # 1. Fetch brand hierarchy and DB embeddings
+            # 1. Fetch brand hierarchy
             categories = category_repo.get_brand_hierarchy(db, brand_id)
             logger.log_execution("data_ingestion_service", "categories_fetched", "ok", macro_category_count=len(categories))
-            db_embeddings_matrix = pim_repo.get_embeddings_by_brand(db, brand_id)
-            logger.log_execution("data_ingestion_service", "db_embeddings_fetched", "ok", db_embeddings_count=len(db_embeddings_matrix))
 
             # 2. Run DataExtractionAgent
             extraction_agent = DataExtractionAgent()
@@ -91,31 +90,100 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             extracted_items = extraction_res["items"]
             logger.log_execution("data_ingestion_service", "extraction_agent_completed", "ok")
 
-            # 3. Run ArticleBlueprintsAgent
-            from pathlib import Path
-            import yaml
+            # 3. Deterministic Pre-Resolution
+            if not brand_obj.heuristic_confirmed:
+                raise AgentException(
+                    message="Brand heuristic not confirmed. Run heuristic deduction first.",
+                    output=None
+                )
             
-            gemini_yaml_path = Path("src/agents/gemini.yaml")
-            if gemini_yaml_path.exists():
-                with open(gemini_yaml_path, "r") as f:
-                    gemini_cfg = yaml.safe_load(f) or {}
-            else:
-                gemini_cfg = {}
+            regex_pattern = brand_obj.brand_code_heuristic
+            if not regex_pattern:
+                raise AgentException(message="Brand heuristic missing despite being confirmed.", output=None)
+                
+            compiled_regex = re.compile(regex_pattern)
+            
+            resolved_items = []
+            unresolved_items = []
+            heuristic_warnings = []
+            
+            for item in extracted_items:
+                raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
+                raw_code = raw_code.strip().upper()
+                
+                match = compiled_regex.match(raw_code)
+                if match and "model_code" in match.groupdict():
+                    normalized_code = match.group("model_code")
+                    bp = pim_repo.get_blueprint_by_normalized_code(db, brand_id, normalized_code)
+                    if bp:
+                        item["article_blueprint_id"] = str(bp.id)
+                        item["normalized_vendor_code"] = normalized_code
+                        resolved_items.append(item)
+                    else:
+                        item["normalized_vendor_code"] = normalized_code
+                        unresolved_items.append(item)
+                else:
+                    heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
+                    unresolved_items.append(item)
+                    
+            # Group unresolved_items into new_blueprints
+            clusters = {}
+            for item in unresolved_items:
+                n_code = item.get("normalized_vendor_code") or item.get("vendor_code") or ""
+                if n_code not in clusters:
+                    clusters[n_code] = {
+                        "id": str(uuid.uuid4()),
+                        "is_new": True,
+                        "cluster_items": []
+                    }
+                clusters[n_code]["cluster_items"].append(item)
+                
+            new_blueprints_input = list(clusters.values())
+            logger.log_execution("data_ingestion_service", "deterministic_resolution", "ok", 
+                                 resolved=len(resolved_items), unresolved=len(unresolved_items),
+                                 new_clusters=len(new_blueprints_input))
 
-            blueprints_agent = ArticleBlueprintsAgent()
-            logger.log_execution("data_ingestion_service", "blueprints_agent_dispatched", "ok", input_summary={"items_count": len(extracted_items)})
-            blueprints_res = await blueprints_agent.aexecute({
-                "items": extracted_items,
-                "categories": categories,
-                "db_embeddings_matrix": db_embeddings_matrix,
-                "db_similarity_threshold": gemini_cfg.get("db_similarity_threshold", 0.92),
-                "articles_similarity_threshold": gemini_cfg.get("articles_similarity_threshold", 0.88),
-                "hallucination_recognition_threshold": gemini_cfg.get("hallucination_recognition_threshold", 0.95),
-                "candidate_tolerance": gemini_cfg.get("candidate_tolerance", 0.04),
-            })
-            output_items = blueprints_res["items"]
-            output_blueprints = blueprints_res["blueprints"]
-            logger.log_execution("data_ingestion_service", "blueprints_agent_completed", "ok")
+            # 4. Run ArticleBlueprintsAgent ONLY IF there are unresolved items
+            if new_blueprints_input:
+                blueprints_agent = ArticleBlueprintsAgent()
+                logger.log_execution("data_ingestion_service", "blueprints_agent_dispatched", "ok", input_summary={"clusters_count": len(new_blueprints_input)})
+                blueprints_res = await blueprints_agent.aexecute({
+                    "new_blueprints": new_blueprints_input,
+                    "categories": categories,
+                })
+                agent_items = blueprints_res["items"]
+                agent_blueprints = blueprints_res["blueprints"]
+                agent_warnings = blueprints_res.get("warnings", [])
+                logger.log_execution("data_ingestion_service", "blueprints_agent_completed", "ok")
+            else:
+                agent_items = []
+                agent_blueprints = []
+                agent_warnings = []
+                
+            # Merge outputs
+            def _clean_item(it: dict) -> dict:
+                colors = it.get("colors") or it.get("Color") or []
+                if isinstance(colors, str):
+                    colors = [colors] if colors.strip() else []
+                elif isinstance(colors, list):
+                    colors = [str(c) for c in colors if c]
+                else:
+                    colors = []
+                try:
+                    qty = int(it.get("quantity") or it.get("Quantity") or 0)
+                except (ValueError, TypeError):
+                    qty = 0
+                return {
+                    "item_id": it.get("item_id", ""),
+                    "vendor_code": it.get("vendor_code") or it.get("VendorCode") or "",
+                    "barcode": it.get("barcode") or it.get("Barcode") or "",
+                    "quantity": qty,
+                    "colors": colors,
+                    "article_blueprint_id": it.get("article_blueprint_id", ""),
+                }
+            
+            output_items = [_clean_item(it) for it in resolved_items] + agent_items
+            output_blueprints = agent_blueprints
 
             # 4. Fail-fast category validation and resolution for new blueprints
             from sqlalchemy import func
@@ -149,7 +217,7 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             result = {
                 "items": output_items,
                 "blueprints": output_blueprints,
-                "warnings": extraction_res.get("warnings", []) + blueprints_res.get("warnings", []),
+                "warnings": extraction_res.get("warnings", []) + heuristic_warnings + agent_warnings,
                 "job_id": job_id,
                 "brand_id": brand_id,
             }
@@ -211,9 +279,12 @@ def check_job_status(db: Session, job_id: str) -> None:
     if job.status != JobStatus.COMPLETED.value:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job is not yet completed")
 
+from fastapi import BackgroundTasks
+
 def confirm_and_persist_staging(
     db: Session, 
-    job_id: str, 
+    job_id: str,
+    background_tasks: BackgroundTasks,
 ) -> None:
     """
     Orchestrates the creation of missing products and registration of warehouse movements.
@@ -343,6 +414,43 @@ def confirm_and_persist_staging(
     db.commit()
     logger.log_execution("data_ingestion_service", "confirm_staging_commit", "ok", job_id=job_id)
 
+    # Check for heuristic breaks and trigger recalculation if needed
+    warnings = job.data.get("warnings") or [] if job.data else []
+    heuristic_breaks = [w for w in warnings if isinstance(w, str) and w.startswith("heuristic_break:")]
+    
+    if heuristic_breaks:
+        logger.log_execution("data_ingestion_service", "heuristic_break_detected", "warn", job_id=job_id, breaks_count=len(heuristic_breaks))
+        brand = db.query(Brand).filter(Brand.id == brand_id).first()
+        if brand:
+            brand.heuristic_confirmed = False
+            previous_explanation = brand.brand_code_explanation
+            db.commit()
+            
+            # Extract breaking codes
+            breaking_codes = []
+            for w in heuristic_breaks:
+                # Format: "heuristic_break: 'CODE' failed regex validation"
+                parts = w.split("'")
+                if len(parts) >= 3:
+                    breaking_codes.append(parts[1])
+                    
+            # Get historical codes
+            from src.models.wms import Article
+            historical_articles = db.query(Article.supplier_code).filter(Article.brand_id == brand_id).all()
+            historical_codes = [a.supplier_code for a in historical_articles if a.supplier_code]
+            
+            corpus = list(set(historical_codes + breaking_codes))
+            
+            # Dispatch background recalculation
+            from src.services.heuristic_service import process_recalculation
+            background_tasks.add_task(
+                process_recalculation,
+                brand_id=brand_id,
+                vendor_codes_corpus=corpus,
+                previous_explanation=previous_explanation
+            )
+            logger.log_execution("data_ingestion_service", "recalculation_task_dispatched", "ok", brand_id=brand_id)
+
     # Delete job from staging area in a separate, isolated transaction
     try:
         staging_repo.delete_job(db, job_id)
@@ -363,9 +471,8 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
             brand_name = brand_obj.name
             logger.log_execution("data_ingestion_service", "brand_resolved", "ok", brand_id=request.brand_id, brand_name=brand_name)
 
-            # 1. Fetch brand hierarchy and DB embeddings
+            # 1. Fetch brand hierarchy
             categories = category_repo.get_brand_hierarchy(db, request.brand_id)
-            db_embeddings_matrix = pim_repo.get_embeddings_by_brand(db, request.brand_id)
 
             # 2. Run SingleItemExtractionAgent
             extraction_agent = SingleItemExtractionAgent()
@@ -381,31 +488,96 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
             })
             extracted_items = extraction_res["items"]
             
-            # 3. Run ArticleBlueprintsAgent
-            from pathlib import Path
-            import yaml
+            # 3. Deterministic Pre-Resolution
+            if not brand_obj.heuristic_confirmed:
+                raise AgentException(
+                    message="Brand heuristic not confirmed. Run heuristic deduction first.",
+                    output=None
+                )
             
-            gemini_yaml_path = Path("src/agents/gemini.yaml")
-            if gemini_yaml_path.exists():
-                with open(gemini_yaml_path, "r") as f:
-                    gemini_cfg = yaml.safe_load(f) or {}
-            else:
-                gemini_cfg = {}
+            regex_pattern = brand_obj.brand_code_heuristic
+            if not regex_pattern:
+                raise AgentException(message="Brand heuristic missing despite being confirmed.", output=None)
+                
+            compiled_regex = re.compile(regex_pattern)
+            
+            resolved_items = []
+            unresolved_items = []
+            heuristic_warnings = []
+            
+            for item in extracted_items:
+                raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
+                raw_code = raw_code.strip().upper()
+                
+                match = compiled_regex.match(raw_code)
+                if match and "model_code" in match.groupdict():
+                    normalized_code = match.group("model_code")
+                    bp = pim_repo.get_blueprint_by_normalized_code(db, request.brand_id, normalized_code)
+                    if bp:
+                        item["article_blueprint_id"] = str(bp.id)
+                        item["normalized_vendor_code"] = normalized_code
+                        resolved_items.append(item)
+                    else:
+                        item["normalized_vendor_code"] = normalized_code
+                        unresolved_items.append(item)
+                else:
+                    heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
+                    unresolved_items.append(item)
+                    
+            # Group unresolved_items into new_blueprints
+            clusters = {}
+            for item in unresolved_items:
+                n_code = item.get("normalized_vendor_code") or item.get("vendor_code") or ""
+                if n_code not in clusters:
+                    clusters[n_code] = {
+                        "id": str(uuid.uuid4()),
+                        "is_new": True,
+                        "cluster_items": []
+                    }
+                clusters[n_code]["cluster_items"].append(item)
+                
+            new_blueprints_input = list(clusters.values())
 
-            blueprints_agent = ArticleBlueprintsAgent()
-            logger.log_execution("data_ingestion_service", "blueprints_agent_single_item", "ok")
-            blueprints_res = await blueprints_agent.aexecute({
-                "items": extracted_items,
-                "categories": categories,
-                "db_embeddings_matrix": db_embeddings_matrix,
-                "db_similarity_threshold": gemini_cfg.get("db_similarity_threshold", 0.92),
-                "articles_similarity_threshold": gemini_cfg.get("articles_similarity_threshold", 0.88),
-                "hallucination_recognition_threshold": gemini_cfg.get("hallucination_recognition_threshold", 0.95),
-                "candidate_tolerance": gemini_cfg.get("candidate_tolerance", 0.04),
-            })
+            # 4. Run ArticleBlueprintsAgent ONLY IF there are unresolved items
+            if new_blueprints_input:
+                blueprints_agent = ArticleBlueprintsAgent()
+                logger.log_execution("data_ingestion_service", "blueprints_agent_single_item", "ok")
+                blueprints_res = await blueprints_agent.aexecute({
+                    "new_blueprints": new_blueprints_input,
+                    "categories": categories,
+                })
+                agent_items = blueprints_res["items"]
+                agent_blueprints = blueprints_res["blueprints"]
+                agent_warnings = blueprints_res.get("warnings", [])
+            else:
+                agent_items = []
+                agent_blueprints = []
+                agent_warnings = []
+
+            # Merge outputs
+            def _clean_item(it: dict) -> dict:
+                colors = it.get("colors") or it.get("Color") or []
+                if isinstance(colors, str):
+                    colors = [colors] if colors.strip() else []
+                elif isinstance(colors, list):
+                    colors = [str(c) for c in colors if c]
+                else:
+                    colors = []
+                try:
+                    qty = int(it.get("quantity") or it.get("Quantity") or 0)
+                except (ValueError, TypeError):
+                    qty = 0
+                return {
+                    "item_id": it.get("item_id", ""),
+                    "vendor_code": it.get("vendor_code") or it.get("VendorCode") or "",
+                    "barcode": it.get("barcode") or it.get("Barcode") or "",
+                    "quantity": qty,
+                    "colors": colors,
+                    "article_blueprint_id": it.get("article_blueprint_id", ""),
+                }
             
-            output_items = blueprints_res["items"]
-            output_blueprints = blueprints_res["blueprints"]
+            output_items = [_clean_item(it) for it in resolved_items] + agent_items
+            output_blueprints = agent_blueprints
 
             # 4. Fail-fast category validation for new blueprints
             from sqlalchemy import func
@@ -435,7 +607,7 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
             result = {
                 "items": output_items,
                 "blueprints": output_blueprints,
-                "warnings": extraction_res.get("warnings", []) + blueprints_res.get("warnings", []),
+                "warnings": extraction_res.get("warnings", []) + heuristic_warnings + agent_warnings,
                 "job_id": job_id,
                 "brand_id": request.brand_id,
             }
