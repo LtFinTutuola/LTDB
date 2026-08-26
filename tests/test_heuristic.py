@@ -22,16 +22,25 @@ def test_trigger_heuristic(db_session, monkeypatch):
     db_session.add(test_brand)
     db_session.commit()
     
-    from src.models.wms import Article
-    art = Article(brand_id=test_brand.id, supplier_code="CODE-123", article_blueprint_id="fake-bp")
-    db_session.add(art)
-    db_session.commit()
+    import os
+    monkeypatch.setattr(os.path, "exists", lambda path: True)
+
+    async def mock_extraction_aexecute(self, input_data):
+        return {
+            "items": [
+                {"vendor_code": "CODE-123", "description": "Test Item", "quantity": 1}
+            ],
+            "warnings": []
+        }
+        
+    monkeypatch.setattr("src.services.heuristic_service.DataExtractionAgent.aexecute", mock_extraction_aexecute)
 
     async def mock_aexecute(self, input_data):
         return {
             "status": "success",
-            "regex_pattern": "^(?P<model_code>[A-Z]+)-.*$",
-            "explanation": "Test explanation"
+            "regex": "^(?P<model_code>[A-Z]+)-.*$",
+            "explanation": "Test explanation",
+            "examples": []
         }
         
     monkeypatch.setattr("src.services.heuristic_service.CodesDeductionAgent.aexecute", mock_aexecute)
@@ -52,7 +61,7 @@ def test_confirm_heuristic(db_session, monkeypatch):
     from src.models.staging import StagingArea
     import uuid
     job_id = str(uuid.uuid4())
-    job = StagingArea(id=job_id, status="COMPLETED", data={"regex_pattern": ".*", "explanation": "test"}, job_type="HEURISTIC")
+    job = StagingArea(id=job_id, status=2, data={"regex": ".*", "textual_explanation": "test"}, job_type="HEURISTIC")
     db_session.add(job)
     db_session.commit()
     

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field, model_validator
-from typing import List, Literal, Optional, Any
+from typing import List, Literal, Optional, Any, Dict
 
 from src.schemas.types import NormalizedIdentifier, NormalizedStringList
 
@@ -161,9 +161,8 @@ class HeuristicExampleSchema(BaseModel):
 
 class HeuristicProposalResponse(BaseModel):
     """Proposed heuristic data returned by the deduction agent."""
-    regex: str
-    explanation: str
-    examples: List[HeuristicExampleSchema]
+    textual_explanation: str
+    grouped_items: Dict[str, List[Dict[str, Any]]]
 
 class HeuristicJobStatusResponse(BaseModel):
     """Response body for GET /api/v1/brands/{brand_id}/heuristic/{job_id}."""

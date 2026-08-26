@@ -9,6 +9,7 @@ Service layer orchestrating the heuristic deduction flow:
 """
 import os
 import uuid
+import re
 from typing import Dict, Any, Optional, List
 
 from fastapi import HTTPException, status
@@ -119,11 +120,33 @@ async def process_heuristic(job_id: str, brand_id: str, file_path: str) -> None:
                 "previous_explanation": brand_obj.brand_code_explanation,
             })
 
+            # Group the extracted items using the deduced regex
+            compiled_regex = re.compile(deduction_res["regex"])
+            grouped_items = {}
+            for item in extracted_items:
+                raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
+                raw_code = raw_code.strip().upper()
+                match = compiled_regex.match(raw_code)
+                if match and "model_code" in match.groupdict():
+                    key = match.group("model_code")
+                else:
+                    key = "UNMATCHED"
+                    
+                if key not in grouped_items:
+                    grouped_items[key] = []
+                # Ensure the item is serializable (it's typically a dict from extraction)
+                item_dict = item if isinstance(item, dict) else item.model_dump()
+                sanitized_item = {
+                    k: v for k, v in item_dict.items()
+                    if k == k.lower() and k != "item_id"
+                }
+                grouped_items[key].append(sanitized_item)
+
             # Stage result
             result = {
                 "regex": deduction_res["regex"],
-                "explanation": deduction_res["explanation"],
-                "examples": deduction_res["examples"],
+                "textual_explanation": deduction_res["explanation"],
+                "grouped_items": grouped_items,
                 "brand_id": brand_id,
                 "vendor_codes_analyzed": len(vendor_codes),
             }
@@ -154,9 +177,13 @@ def get_heuristic_job(db: Session, job_id: str) -> Dict[str, Any]:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job not found"
         )
+    data = job.data.copy() if job.data else None
+    if data and "regex" in data:
+        data.pop("regex")
+        
     return {
         "status": JobStatus(job.status).name,
-        "data": job.data
+        "data": data
     }
 
 
@@ -183,7 +210,7 @@ def confirm_heuristic(db: Session, brand_id: str, job_id: str) -> None:
 
     data = job.data or {}
     regex = data.get("regex")
-    explanation = data.get("explanation")
+    explanation = data.get("textual_explanation")
 
     if not regex:
         raise HTTPException(
