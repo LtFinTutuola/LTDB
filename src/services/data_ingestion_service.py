@@ -529,6 +529,7 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
             
             resolved_items = []
             unresolved_items = []
+            resolved_blueprints = {}
             heuristic_warnings = []
             
             for item in extracted_items:
@@ -547,6 +548,23 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
                     item["article_blueprint_id"] = str(bp.id)
                     item["normalized_vendor_code"] = normalized_code
                     resolved_items.append(item)
+                    if str(bp.id) not in resolved_blueprints:
+                        cat_dict = None
+                        if bp.category:
+                            cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
+                            
+                        resolved_blueprints[str(bp.id)] = {
+                            "id": str(bp.id),
+                            "is_new": False,
+                            "article_name": bp.article_name,
+                            "description": bp.description,
+                            "category": cat_dict,
+                            "sub_category": None,
+                            "extended_description": bp.extended_description,
+                            "tags": bp.tags,
+                            "materials": bp.materials,
+                            "dimensions": bp.dimensions
+                        }
                 else:
                     item["normalized_vendor_code"] = normalized_code
                     unresolved_items.append(item)
@@ -604,7 +622,7 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
                 }
             
             output_items = [_clean_item(it) for it in resolved_items] + agent_items
-            output_blueprints = agent_blueprints
+            output_blueprints = list(resolved_blueprints.values()) + agent_blueprints
 
             # 4. Fail-fast category validation for new blueprints
             from sqlalchemy import func
