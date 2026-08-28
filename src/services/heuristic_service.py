@@ -121,17 +121,24 @@ async def process_heuristic(job_id: str, brand_id: str, file_path: str) -> None:
             })
 
             # Group the extracted items using the deduced regex
-            compiled_regex = re.compile(deduction_res["regex"])
+            regex_str = deduction_res.get("regex", "")
+            compiled_regex = re.compile(regex_str) if regex_str else None
+            
             grouped_items = {}
             for item in extracted_items:
                 raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
                 raw_code = raw_code.strip().upper()
-                match = compiled_regex.match(raw_code)
-                if match and "model_code" in match.groupdict():
-                    key = match.group("model_code")
-                else:
-                    key = "UNMATCHED"
-                    
+                
+                key = raw_code
+                if compiled_regex:
+                    match = compiled_regex.search(raw_code)
+                    if match and "color_code" in match.groupdict() and match.group("color_code") is not None:
+                        key = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
+                    else:
+                        # If regex is provided but doesn't match color_code, it might be a valid non-colored variant
+                        # but we fallback to raw_code to be safe.
+                        pass
+                        
                 if key not in grouped_items:
                     grouped_items[key] = []
                 # Ensure the item is serializable (it's typically a dict from extraction)
@@ -187,14 +194,14 @@ def get_heuristic_job(db: Session, job_id: str) -> Dict[str, Any]:
     }
 
 
-def confirm_heuristic(db: Session, brand_id: str, job_id: str) -> None:
+def confirm_heuristic(db: Session, job_id: str) -> None:
     """
     Confirms a completed heuristic deduction job.
     Persists regex, explanation, and heuristic_confirmed=True to the Brand record.
     Deletes the staging job.
     """
     logger.log_execution("heuristic_service", "confirm_heuristic_start", "ok",
-                         brand_id=brand_id, job_id=job_id)
+                         job_id=job_id)
 
     job = staging_repo.get_job(db, job_id)
     if not job:
@@ -209,21 +216,31 @@ def confirm_heuristic(db: Session, brand_id: str, job_id: str) -> None:
         )
 
     data = job.data or {}
+    
+    # Retrieve the correct brand_id from the job data (overriding the URL parameter)
+    target_brand_id = data.get("brand_id")
+    if not target_brand_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Staged heuristic data is missing the brand ID."
+        )
+
     regex = data.get("regex")
     explanation = data.get("textual_explanation")
 
-    if not regex:
+    # regex can be an empty string if no masking is needed
+    if regex is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Staged heuristic data is missing the regex pattern."
         )
 
-    # Update Brand record
-    brand = db.query(Brand).filter(Brand.id == brand_id).first()
+    # Update Brand record using the correct target_brand_id
+    brand = db.query(Brand).filter(Brand.id == target_brand_id).first()
     if not brand:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Brand ID '{brand_id}' not found in the database."
+            detail=f"Brand ID '{target_brand_id}' not found in the database."
         )
 
     brand.brand_code_heuristic = regex
@@ -238,7 +255,7 @@ def confirm_heuristic(db: Session, brand_id: str, job_id: str) -> None:
         print(f"[heuristic_service] Warning: Failed to clean up staging job {job_id}: {exc}")
 
     logger.log_execution("heuristic_service", "confirm_heuristic_success", "ok",
-                         brand_id=brand_id, job_id=job_id)
+                         brand_id=target_brand_id, job_id=job_id)
 
 
 async def process_recalculation(brand_id: str, vendor_codes_corpus: List[str], previous_explanation: Optional[str]) -> None:

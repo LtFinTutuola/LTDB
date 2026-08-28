@@ -20,6 +20,7 @@ class CategoryRefSchema(BaseModel):
 class EnrichedItemSchema(BaseModel):
     """Full enriched item schema returned by the DataIngestionAgent."""
     vendor_code: Optional[NormalizedIdentifier] = None
+    normalized_vendor_code: Optional[str] = None
     barcode: Optional[str] = None
     quantity: Optional[int] = None
     category: Optional[CategoryRefSchema] = None

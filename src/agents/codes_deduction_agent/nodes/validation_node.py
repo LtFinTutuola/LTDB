@@ -64,12 +64,17 @@ def validation_node(state: CodesDeductionGraphState) -> dict:
     candidate = state.candidate_regex
 
     if not candidate:
-        print("[validation_node] Empty regex candidate. Marking as failure.")
-        return {
-            "validation_failures": state.vendor_codes[:10],
-            "success": False,
-            "error_message": "Regex synthesis produced an empty pattern." if state.iteration >= state.max_iterations else "",
+        print("[validation_node] Empty regex candidate. No masking needed.")
+        examples = [{"raw": c, "normalized": c} for c in state.vendor_codes[:5]]
+        result = {
+            "success": True,
+            "output_regex": "",
+            "output_examples": examples,
+            "validation_failures": [],
+            "error_message": "",
         }
+        logger.log_agent("validation_node", "node_exit", "ok", output=result)
+        return result
 
     # Safety check
     safety_error = _validate_regex_safety(candidate, state.vendor_codes)
@@ -95,10 +100,14 @@ def validation_node(state: CodesDeductionGraphState) -> dict:
     failures: list[str] = []
 
     for code in state.vendor_codes:
-        match = compiled.match(code)
-        if match and "model_code" in match.groupdict():
-            model_code = match.group("model_code")
-            successes.append({"raw": code, "normalized": model_code})
+        match = compiled.search(code)
+        if match and "color_code" in match.groupdict():
+            color_code = match.group("color_code")
+            if color_code is not None:
+                normalized_code = code[:match.start("color_code")] + "#" + code[match.end("color_code"):]
+                successes.append({"raw": code, "normalized": normalized_code})
+            else:
+                failures.append(code)
         else:
             failures.append(code)
 

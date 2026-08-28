@@ -80,17 +80,7 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             categories = category_repo.get_brand_hierarchy(db, brand_id)
             logger.log_execution("data_ingestion_service", "categories_fetched", "ok", macro_category_count=len(categories))
 
-            # 2. Run DataExtractionAgent
-            extraction_agent = DataExtractionAgent()
-            logger.log_execution("data_ingestion_service", "extraction_agent_dispatched", "ok", input_summary={"file_path": file_path, "brand": brand_name})
-            extraction_res = await extraction_agent.aexecute({
-                "file_path": file_path,
-                "brand": brand_name,
-            })
-            extracted_items = extraction_res["items"]
-            logger.log_execution("data_ingestion_service", "extraction_agent_completed", "ok")
-
-            # 3. Deterministic Pre-Resolution
+            # 2. Check Heuristic Pre-Requisites
             if not brand_obj.heuristic_confirmed:
                 raise AgentException(
                     message="Brand heuristic not confirmed. Run heuristic deduction first.",
@@ -98,32 +88,65 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
                 )
             
             regex_pattern = brand_obj.brand_code_heuristic
-            if not regex_pattern:
+            if regex_pattern is None:
                 raise AgentException(message="Brand heuristic missing despite being confirmed.", output=None)
                 
-            compiled_regex = re.compile(regex_pattern)
+            compiled_regex = re.compile(regex_pattern) if regex_pattern else None
+
+            # 3. Run DataExtractionAgent
+            extraction_agent = DataExtractionAgent()
+            logger.log_execution("data_ingestion_service", "extraction_agent_dispatched", "ok", input_summary={"file_path": file_path, "brand": brand_name})
+            extraction_res = await extraction_agent.aexecute({
+                "file_path": file_path,
+                "brand": brand_name,
+                "brand_code_heuristic": regex_pattern if regex_pattern is not None else "",
+            })
+            extracted_items = extraction_res["items"]
+            logger.log_execution("data_ingestion_service", "extraction_agent_completed", "ok")
+
+            # 4. Deterministic Pre-Resolution
             
             resolved_items = []
             unresolved_items = []
+            resolved_blueprints = {}
             heuristic_warnings = []
             
             for item in extracted_items:
                 raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
                 raw_code = raw_code.strip().upper()
                 
-                match = compiled_regex.match(raw_code)
-                if match and "model_code" in match.groupdict():
-                    normalized_code = match.group("model_code")
-                    bp = pim_repo.get_blueprint_by_normalized_code(db, brand_id, normalized_code)
-                    if bp:
-                        item["article_blueprint_id"] = str(bp.id)
-                        item["normalized_vendor_code"] = normalized_code
-                        resolved_items.append(item)
+                normalized_code = raw_code
+                if compiled_regex:
+                    match = compiled_regex.search(raw_code)
+                    if match and "color_code" in match.groupdict() and match.group("color_code") is not None:
+                        normalized_code = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
                     else:
-                        item["normalized_vendor_code"] = normalized_code
-                        unresolved_items.append(item)
+                        heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
+                
+                bp = pim_repo.get_blueprint_by_normalized_code(db, brand_id, normalized_code)
+                if bp:
+                    item["article_blueprint_id"] = str(bp.id)
+                    item["normalized_vendor_code"] = normalized_code
+                    resolved_items.append(item)
+                    if str(bp.id) not in resolved_blueprints:
+                        cat_dict = None
+                        if bp.category:
+                            cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
+                            
+                        resolved_blueprints[str(bp.id)] = {
+                            "id": str(bp.id),
+                            "is_new": False,
+                            "article_name": bp.article_name,
+                            "description": bp.description,
+                            "category": cat_dict,
+                            "sub_category": None,
+                            "extended_description": bp.extended_description,
+                            "tags": bp.tags,
+                            "materials": bp.materials,
+                            "dimensions": bp.dimensions
+                        }
                 else:
-                    heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
+                    item["normalized_vendor_code"] = normalized_code
                     unresolved_items.append(item)
                     
             # Group unresolved_items into new_blueprints
@@ -150,6 +173,7 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
                 blueprints_res = await blueprints_agent.aexecute({
                     "new_blueprints": new_blueprints_input,
                     "categories": categories,
+                    "brand_name": brand_name,
                 })
                 agent_items = blueprints_res["items"]
                 agent_blueprints = blueprints_res["blueprints"]
@@ -176,6 +200,7 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
                 return {
                     "item_id": it.get("item_id", ""),
                     "vendor_code": it.get("vendor_code") or it.get("VendorCode") or "",
+                    "normalized_vendor_code": it.get("normalized_vendor_code") or "",
                     "barcode": it.get("barcode") or it.get("Barcode") or "",
                     "quantity": qty,
                     "colors": colors,
@@ -183,7 +208,7 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
                 }
             
             output_items = [_clean_item(it) for it in resolved_items] + agent_items
-            output_blueprints = agent_blueprints
+            output_blueprints = list(resolved_blueprints.values()) + agent_blueprints
 
             # 4. Fail-fast category validation and resolution for new blueprints
             from sqlalchemy import func
@@ -379,6 +404,7 @@ def confirm_and_persist_staging(
                     materials=item.materials,
                     dimensions=item.dimensions,
                     category_id=category_id,
+                    normalized_vendor_code=item.normalized_vendor_code,
                     commit_changes=False
                 )
                 resolved_blueprints[bp_group_key] = blueprint_id
@@ -508,22 +534,22 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
             for item in extracted_items:
                 raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
                 raw_code = raw_code.strip().upper()
-                
-                match = compiled_regex.match(raw_code)
-                if match and "model_code" in match.groupdict():
-                    normalized_code = match.group("model_code")
-                    bp = pim_repo.get_blueprint_by_normalized_code(db, request.brand_id, normalized_code)
-                    if bp:
-                        item["article_blueprint_id"] = str(bp.id)
-                        item["normalized_vendor_code"] = normalized_code
-                        resolved_items.append(item)
+                normalized_code = raw_code
+                if compiled_regex:
+                    match = compiled_regex.search(raw_code)
+                    if match and "color_code" in match.groupdict() and match.group("color_code") is not None:
+                        normalized_code = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
                     else:
-                        item["normalized_vendor_code"] = normalized_code
-                        unresolved_items.append(item)
+                        heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
+                
+                bp = pim_repo.get_blueprint_by_normalized_code(db, request.brand_id, normalized_code)
+                if bp:
+                    item["article_blueprint_id"] = str(bp.id)
+                    item["normalized_vendor_code"] = normalized_code
+                    resolved_items.append(item)
                 else:
-                    heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
+                    item["normalized_vendor_code"] = normalized_code
                     unresolved_items.append(item)
-                    
             # Group unresolved_items into new_blueprints
             clusters = {}
             for item in unresolved_items:
@@ -570,6 +596,7 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
                 return {
                     "item_id": it.get("item_id", ""),
                     "vendor_code": it.get("vendor_code") or it.get("VendorCode") or "",
+                    "normalized_vendor_code": it.get("normalized_vendor_code") or "",
                     "barcode": it.get("barcode") or it.get("Barcode") or "",
                     "quantity": qty,
                     "colors": colors,

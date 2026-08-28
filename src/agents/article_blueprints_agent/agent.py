@@ -5,16 +5,19 @@ from src.agents.article_blueprints_agent.state import BlueprintsGraphState
 from src.agents.article_blueprints_agent.nodes.synthesize_blueprints_node import synthesize_blueprints_node
 from src.agents.article_blueprints_agent.nodes.enrich_blueprints_node import enrich_blueprints_node
 from src.agents.article_blueprints_agent.nodes.format_output_node import format_output_node
+from src.agents.article_blueprints_agent.nodes.web_search_blueprints_node import web_search_blueprints_node
 
 
 def _build_graph() -> StateGraph:
     """Construct and compile the ArticleBlueprintsAgent LangGraph state machine."""
     graph = StateGraph(BlueprintsGraphState)
+    graph.add_node("web_search_blueprints_node", web_search_blueprints_node)
     graph.add_node("synthesize_blueprints_node", synthesize_blueprints_node)
     graph.add_node("enrich_blueprints_node", enrich_blueprints_node)
     graph.add_node("format_output_node", format_output_node)
 
-    graph.add_edge(START, "synthesize_blueprints_node")
+    graph.add_edge(START, "web_search_blueprints_node")
+    graph.add_edge("web_search_blueprints_node", "synthesize_blueprints_node")
     graph.add_edge("synthesize_blueprints_node", "enrich_blueprints_node")
     graph.add_edge("enrich_blueprints_node", "format_output_node")
     graph.add_edge("format_output_node", END)
@@ -35,6 +38,7 @@ class ArticleBlueprintsAgent(BaseAgent):
             initial_state = BlueprintsGraphState(
                 new_blueprints=input_data.get("new_blueprints", []),
                 categories=input_data.get("categories", {}),
+                brand_name=input_data.get("brand_name", ""),
             )
         except Exception as exc:
             raise AgentException(

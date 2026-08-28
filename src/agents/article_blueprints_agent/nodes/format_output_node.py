@@ -22,6 +22,7 @@ def _clean_item(item: dict) -> dict:
     return {
         "item_id": item.get("item_id", ""),
         "vendor_code": item.get("vendor_code") or item.get("VendorCode") or "",
+        "normalized_vendor_code": item.get("normalized_vendor_code") or "",
         "barcode": item.get("barcode") or item.get("Barcode") or "",
         "quantity": qty,
         "colors": colors,

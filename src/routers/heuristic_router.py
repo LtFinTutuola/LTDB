@@ -6,8 +6,8 @@ Completely decoupled from the ingestion pipeline.
 
 Endpoints:
   POST   /api/v1/brands/{brand_id}/heuristic             - Trigger deduction
-  GET    /api/v1/brands/{brand_id}/heuristic/{job_id}     - Poll job status
-  POST   /api/v1/brands/{brand_id}/heuristic/{job_id}/confirm - Confirm heuristic
+    GET    /api/v1/brands/heuristic/{job_id}              - Poll job status
+    POST   /api/v1/brands/heuristic/{job_id}/confirm      - Confirm heuristic
 """
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
@@ -42,9 +42,8 @@ def trigger_heuristic_deduction(
     return {"job_id": job_id}
 
 
-@router.get("/{brand_id}/heuristic/{job_id}", response_model=HeuristicJobStatusResponse)
+@router.get("/heuristic/{job_id}", response_model=HeuristicJobStatusResponse)
 def get_heuristic_status(
-    brand_id: str,
     job_id: str,
     db: Session = Depends(get_db),
 ):
@@ -52,12 +51,11 @@ def get_heuristic_status(
     return heuristic_service.get_heuristic_job(db, job_id)
 
 
-@router.post("/{brand_id}/heuristic/{job_id}/confirm")
+@router.post("/heuristic/{job_id}/confirm")
 def confirm_heuristic(
-    brand_id: str,
     job_id: str,
     db: Session = Depends(get_db),
 ):
     """Confirm a completed heuristic proposal and persist it to the Brand record."""
-    heuristic_service.confirm_heuristic(db, brand_id=brand_id, job_id=job_id)
-    return {"status": "confirmed", "brand_id": brand_id}
+    heuristic_service.confirm_heuristic(db, job_id=job_id)
+    return {"status": "success", "message": "Heuristic confirmed and saved"}

@@ -22,24 +22,25 @@ def _get_model() -> str:
     if gemini_yaml_path.exists():
         with open(gemini_yaml_path, "r") as f:
             cfg = yaml.safe_load(f) or {}
-        return cfg.get("codes_deduction_agent_model", "gemini-3.5-flash")
-    return "gemini-3.5-flash"
+        return cfg.get("codes_deduction_agent_model", "gemini-3.1-flash-lite")
+    return "gemini-3.1-flash-lite"
 
 
 _SYSTEM_PROMPT = (
     "Sei un AI Data Steward specializzato in analisi strutturale dei codici prodotto. "
-    "Il tuo compito è analizzare un insieme di codici fornitore (vendor codes) per un brand "
-    "e identificare lo schema di codifica utilizzato.\n\n"
+    "Il tuo compito è analizzare un insieme di codici fornitore (vendor codes) e le loro "
+    "caratteristiche per un brand e identificare quale parte del codice codifica le varianti puramente estetiche (colori/finiture).\n\n"
+    "REGOLA FONDAMENTALE:\n"
+    "- Vogliamo NORMALIZZARE i codici mascherando SOLO la parte del colore/finitura, lasciando intatto il resto (inclusa la taglia e la famiglia prodotto).\n"
+    "- Se tutti i codici dello stesso modello sono identici e NON includono un codice colore, significa che la normalizzazione non serve (mascheramento vuoto).\n\n"
     "Devi determinare:\n"
-    "1. Quale parte del codice rappresenta l'identificativo del modello (model code)\n"
-    "2. Quale parte rappresenta varianti (colore, taglia, ecc.)\n"
-    "3. Quali delimitatori separano le parti\n"
-    "4. Se esistono pattern multipli per lo stesso brand\n\n"
+    "1. Quale parte del codice rappresenta varianti puramente estetiche (colore, finitura).\n"
+    "2. Quali delimitatori la separano, per avere un contesto sicuro.\n"
+    "3. Se non c'è nessuna parte variabile per il colore, indicalo esplicitamente.\n\n"
     "Restituisci ESCLUSIVAMENTE un JSON con le seguenti chiavi:\n"
-    "- 'pattern_description': descrizione strutturale dettagliata dello schema di codifica\n"
-    "- 'model_code_position': dove si trova il codice modello (es. 'before the hyphen', 'first N characters')\n"
-    "- 'variant_parts': cosa rappresentano le parti variabili\n"
-    "- 'multiple_formats': boolean, se ci sono formati multipli"
+    "- 'pattern_description': descrizione di quale parte è il colore e come mascherarla\n"
+    "- 'color_code_position': dove si trova il codice colore (es. 'dopo l'asterisco', 'ultimi 2 caratteri')\n"
+    "- 'needs_masking': boolean, true se c'è un codice colore da mascherare, false se il codice fornitore va tenuto così com'è"
 )
 
 

@@ -4,7 +4,9 @@ from src.agents.article_blueprints_agent.state import BlueprintsGraphState
 from src.agents.article_blueprints_agent.nodes.synthesize_blueprints_node import synthesize_blueprints_node
 from src.agents.article_blueprints_agent.nodes.enrich_blueprints_node import enrich_blueprints_node
 from src.agents.article_blueprints_agent.nodes.format_output_node import format_output_node
+from src.agents.article_blueprints_agent.nodes.web_search_blueprints_node import web_search_blueprints_node
 from src.agents.article_blueprints_agent.agent import ArticleBlueprintsAgent
+from unittest.mock import patch, AsyncMock
 
 @pytest.fixture
 def base_state():
@@ -19,8 +21,45 @@ def base_state():
                 ]
             }
         ],
-        categories={"Cat": {"description": "desc", "sub_categories": {}}}
+        categories={"Cat": {"description": "desc", "sub_categories": {}}},
+        brand_name="TestBrand"
     )
+
+@pytest.mark.asyncio
+async def test_web_search_blueprints_node_success(base_state):
+    mock_raw = "<NAME>Official Name</NAME><DESCRIPTION>Official Desc</DESCRIPTION>"
+    
+    with patch("src.agents.article_blueprints_agent.nodes.web_search_blueprints_node.LLMClient") as MockClient:
+        mock_inst = MockClient.return_value
+        mock_inst.call_with_grounding = AsyncMock(return_value=(mock_raw, ["http://example.com"]))
+        
+        res = await web_search_blueprints_node(base_state)
+        
+        mock_inst.call_with_grounding.assert_called_once()
+        
+    bps = res["new_blueprints"]
+    assert len(bps) == 1
+    for item in bps[0]["cluster_items"]:
+        assert item["article_name"] == "Official Name"
+        assert item["article_description"] == "Official Desc"
+
+@pytest.mark.asyncio
+async def test_web_search_blueprints_node_fallback(base_state):
+    # description is missing in base_state cluster_items, let's just assert fallback to vendor code
+    with patch("src.agents.article_blueprints_agent.nodes.web_search_blueprints_node.LLMClient") as MockClient:
+        mock_inst = MockClient.return_value
+        mock_inst.call_with_grounding = AsyncMock(side_effect=Exception("Timeout"))
+        
+        res = await web_search_blueprints_node(base_state)
+        
+    bps = res["new_blueprints"]
+    assert len(res["warnings"]) == 1
+    for item in bps[0]["cluster_items"]:
+        # fallback is description if exists, else f"{brand} {vendor_code}".strip()
+        # vendor_code is A1, brand is TestBrand
+        # so fallback name is "TestBrand A1"
+        assert item["article_name"] == "TestBrand A1"
+        assert item["article_description"] == ""
 
 @pytest.mark.asyncio
 async def test_synthesize_blueprints_node(base_state, monkeypatch):

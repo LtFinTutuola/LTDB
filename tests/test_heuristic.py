@@ -38,7 +38,7 @@ def test_trigger_heuristic(db_session, monkeypatch):
     async def mock_aexecute(self, input_data):
         return {
             "status": "success",
-            "regex": "^(?P<model_code>[A-Z]+)-.*$",
+            "regex": "-(?P<color_code>[0-9]+)$",
             "explanation": "Test explanation",
             "examples": []
         }
@@ -61,13 +61,13 @@ def test_confirm_heuristic(db_session, monkeypatch):
     from src.models.staging import StagingArea
     import uuid
     job_id = str(uuid.uuid4())
-    job = StagingArea(id=job_id, status=2, data={"regex": ".*", "textual_explanation": "test"}, job_type="HEURISTIC")
+    job = StagingArea(id=job_id, status=2, data={"regex": ".*", "textual_explanation": "test", "brand_id": test_brand.id}, job_type="HEURISTIC")
     db_session.add(job)
     db_session.commit()
     
-    response = client.post(f"/api/v1/brands/{test_brand.id}/heuristic/{job_id}/confirm")
+    response = client.post(f"/api/v1/brands/heuristic/{job_id}/confirm")
     assert response.status_code == 200
-    assert response.json()["status"] == "confirmed"
+    assert response.json()["status"] == "success"
     
     db_session.refresh(test_brand)
     assert test_brand.heuristic_confirmed is True
@@ -82,5 +82,5 @@ def test_confirm_heuristic_missing_job(db_session, monkeypatch):
     
     import uuid
     job_id = str(uuid.uuid4())
-    response = client.post(f"/api/v1/brands/{test_brand.id}/heuristic/{job_id}/confirm")
+    response = client.post(f"/api/v1/brands/heuristic/{job_id}/confirm")
     assert response.status_code == 404

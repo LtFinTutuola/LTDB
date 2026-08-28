@@ -12,15 +12,23 @@ async def test_codes_deduction_agent_success(monkeypatch, agent):
     async def mock_analysis(*args, **kwargs):
         stage = kwargs.get("pipeline_stage", "")
         if "Pattern Analysis" in stage:
-            return '{"pattern_found": true, "analysis": "Prefix separated by dash", "components": [{"name": "model", "type": "alphanumeric"}], "examples": []}'
-        return '{"regex": "^(?P<model_code>[A-Z0-9]+)-.*$", "explanation": "Extracted model"}'
-
+            return '{"pattern_description": "Mask color after hyphen", "color_code_position": "after hyphen", "needs_masking": true}'
+        if "Regex Synthesis" in stage:
+            return '{"regex": "-(?P<color_code>[A-Z]+)$", "explanation": "Masked color"}'
+            
     monkeypatch.setattr("src.agents.llm_client.LLMClient.call", mock_analysis)
     
     # Run the agent
-    res = await agent.aexecute({"brand_name": "TestBrand", "vendor_codes": ["A123-RED", "B456-BLU"]})
+    res = await agent.aexecute({
+        "brand_name": "TestBrand", 
+        "vendor_codes": ["A123-RED", "B456-BLU"],
+        "context_items": [
+            {"vendor_code": "A123-RED", "colors": ["RED"], "description": "Shoe red size 42"},
+            {"vendor_code": "B456-BLU", "colors": ["BLU"], "description": "Hat blue"}
+        ]
+    })
     assert "regex" in res
-    assert res["regex"] == "^(?P<model_code>[A-Z0-9]+)-.*$"
+    assert res["regex"] == "-(?P<color_code>[A-Z]+)$"
 
 @pytest.mark.asyncio
 async def test_codes_deduction_agent_regex_validation_failure(monkeypatch, agent):
@@ -30,11 +38,11 @@ async def test_codes_deduction_agent_regex_validation_failure(monkeypatch, agent
         nonlocal call_count
         stage = kwargs.get("pipeline_stage", "")
         if "Pattern Analysis" in stage:
-            return '{"pattern_found": true, "analysis": "ok", "components": [], "examples": []}'
+            return '{"pattern_description": "Mask color after hyphen", "color_code_position": "after hyphen", "needs_masking": true}'
         if "Regex Synthesis" in stage:
             call_count += 1
             # Return invalid regex (unbalanced parenthesis)
-            return '{"regex": "^(?P<model_code>[A-Z0-9]+$", "explanation": "Bad regex"}'
+            return '{"regex": "-(?P<color_code>[A-Z]+$", "explanation": "Bad regex"}'
             
     monkeypatch.setattr("src.agents.llm_client.LLMClient.call", mock_analysis)
     

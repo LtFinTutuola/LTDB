@@ -45,7 +45,7 @@ _SYSTEM_PROMPT = (
     "Restituisci ESCLUSIVAMENTE un oggetto JSON conforme allo schema fornito."
 )
 
-_MODEL = "gemini-3.5-flash"
+_MODEL = "gemini-3.1-flash-lite"
 
 
 async def _synthesize_single_blueprint(client: LLMClient, bp: dict) -> dict:
