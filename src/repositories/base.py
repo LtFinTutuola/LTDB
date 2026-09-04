@@ -18,7 +18,7 @@ class BaseRepository(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         return db.query(self.model).offset(skip).limit(limit).all()
 
     def create(self, db: Session, *, obj_in: CreateSchemaType, commit_changes: bool = True) -> ModelType:
-        obj_in_data = obj_in.model_dump()
+        obj_in_data = obj_in.model_dump(exclude_unset=True)
         db_obj = self.model(**obj_in_data)
         db.add(db_obj)
         if commit_changes:

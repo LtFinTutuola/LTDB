@@ -31,7 +31,6 @@ class SingleItemExtractionAgent(BaseAgent):
             initial_state = SingleItemExtractionState(
                 brand=input_data["brand"],
                 vendor_code=input_data["vendor_code"],
-                description=input_data["description"],
                 colors=input_data["colors"],
                 barcode=input_data.get("barcode"),
                 quantity=input_data.get("quantity", 1)

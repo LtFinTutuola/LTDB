@@ -14,12 +14,13 @@ from src.models.wms import Article
 
 def _seed_staging_job(db_session) -> str:
     """Helper to seed a brand, category, and a completed staging job with bipartite data."""
-    brand = Brand(
-        name="Test Brand",
-        heuristic_confirmed=True, 
-        brand_code_heuristic=r"^(?P<model_code>.*)$"
-    )
+    brand = Brand(name="Staging Revision Brand")
     db_session.add(brand)
+    db_session.commit()
+    
+    from src.models.pim import BrandHeuristic
+    heuristic = BrandHeuristic(brand_id=brand.id, pattern=r"^(?P<model_code>.*)$")
+    db_session.add(heuristic)
     db_session.commit()
     db_session.refresh(brand)
 

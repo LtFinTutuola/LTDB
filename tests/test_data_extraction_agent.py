@@ -13,7 +13,6 @@ def base_state() -> ExtractionGraphState:
     return ExtractionGraphState(
         file_path="/tmp/test.pdf",
         brand="Gucci",
-        brand_code_heuristic="^[A-Z0-9]+$",
         raw_text="Raw text",
         cleaned_text="Cleaned text",
     )
@@ -21,18 +20,16 @@ def base_state() -> ExtractionGraphState:
 
 class TestStateValidation:
     def test_valid_state(self):
-        state = ExtractionGraphState(file_path="/tmp/test.pdf", brand="Gucci", brand_code_heuristic="^[A-Z0-9]+$")
+        state = ExtractionGraphState(file_path="/tmp/test.pdf", brand="Gucci")
         assert state.file_path == "/tmp/test.pdf"
         assert state.brand == "Gucci"
         assert state.extracted_items == []
 
     def test_missing_required_fields(self):
         with pytest.raises(ValidationError):
-            ExtractionGraphState(brand="Gucci", brand_code_heuristic=".*")
+            ExtractionGraphState(brand="Gucci")
         with pytest.raises(ValidationError):
-            ExtractionGraphState(file_path="/tmp/test.pdf", brand_code_heuristic=".*")
-        with pytest.raises(ValidationError):
-            ExtractionGraphState(file_path="/tmp/test.pdf", brand="Gucci")
+            ExtractionGraphState(file_path="/tmp/test.pdf")
 
 class TestExtractionNode:
     @pytest.mark.asyncio
@@ -91,7 +88,7 @@ class TestDataExtractionAgent:
                 MockClean.return_value.call = AsyncMock(return_value="Cleaned text")
                 MockExt.return_value.call = AsyncMock(return_value=mock_json)
 
-                res = await agent.aexecute({"file_path": "/tmp/test.pdf", "brand": "Gucci", "brand_code_heuristic": "^G\\d+$"})
+                res = await agent.aexecute({"file_path": "/tmp/test.pdf", "brand": "Gucci"})
 
         assert "items" in res
         assert len(res["items"]) == 1

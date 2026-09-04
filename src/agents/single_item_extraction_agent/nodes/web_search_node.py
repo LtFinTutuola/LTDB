@@ -57,27 +57,26 @@ async def web_search_node(state: SingleItemExtractionState) -> dict:
     colors_str = ", ".join(state.colors) if state.colors else "Non specificato"
     prompt = (
         f"Effettua una ricerca sul web per trovare i dati di questo specifico articolo.\n\n"
-        f"ATTENZIONE: La 'Descrizione' fornita è un suggerimento utile per il contesto, ma potrebbe contenere imprecisioni. "
-        f"In caso di risultati contrastanti, usa il 'Codice / Modello (VendorCode)' e il 'Brand' come identificatori principali.\n\n"
         f"--- DATI DI PARTENZA (SUGGERIMENTI) ---\n"
         f"Brand: {state.brand}\n"
         f"Codice / Modello (VendorCode): {state.vendor_code}\n"
-        f"Descrizione indicativa: {state.description}\n"
         f"Colori da mappare: {colors_str}\n\n"
         f"--- QUERY SUGGERITA ---\n"
-        f'"{state.brand} {state.vendor_code} - {state.description}"\n\n'
+        f'"{state.brand} {state.vendor_code}"\n\n'
         f"Estrai <NAME>, <DESCRIPTION>, <OFFICIAL_SHORT_DESC> e <OFFICIAL_COLORS> rispettando le regole di formato."
     )
 
-    fallback_name = state.description if state.description else f"{state.brand} {state.vendor_code}".strip()
-    fallback_desc = state.description
+    fallback_name = f"{state.brand} {state.vendor_code}".strip()
+    fallback_desc = ""
     fallback_colors = state.colors
 
     item_copy = dict(state.extracted_item) if state.extracted_item else {}
     warnings = []
 
     try:
-        raw_text, _ = await client.call_with_grounding(
+        from src.agents.base import AgentException
+        
+        raw_text, extracted_urls = await client.call_with_grounding(
             model_name=_MODEL,
             system_prompt=_SYSTEM_PROMPT,
             prompt=prompt,
@@ -85,6 +84,10 @@ async def web_search_node(state: SingleItemExtractionState) -> dict:
             max_output_tokens=512,
             temperature=0.0,
         )
+        
+        if not extracted_urls:
+            raise AgentException(message=f"Codice '{state.vendor_code}' non trovato online. Estrazione bloccata.", output=None)
+
         name, desc, short_desc, colors = _parse_extraction(raw_text, fallback_name, fallback_desc, fallback_colors)
         
         item_copy["article_name"] = name
@@ -100,6 +103,8 @@ async def web_search_node(state: SingleItemExtractionState) -> dict:
         item_copy["description"] = fallback_desc
         item_copy["colors"] = fallback_colors
         warnings.append(warning)
+        if "AgentException" in str(type(exc)):
+            raise exc
 
     print("[web_search_node] Web search enrichment complete.")
     result = {"extracted_item": item_copy, "warnings": warnings}

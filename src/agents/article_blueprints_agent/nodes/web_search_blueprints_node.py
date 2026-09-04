@@ -65,7 +65,9 @@ async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> 
     fallback_desc = description
 
     try:
-        raw_text, _ = await client.call_with_grounding(
+        from src.agents.base import AgentException
+        
+        raw_text, extracted_urls = await client.call_with_grounding(
             model_name=_MODEL,
             system_prompt=_SYSTEM_PROMPT,
             prompt=prompt,
@@ -73,12 +75,19 @@ async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> 
             max_output_tokens=512,
             temperature=0.0,
         )
+        
+        if not extracted_urls:
+            raise AgentException(message=f"Codice blueprint '{vendor_code}' non trovato online. Estrazione bloccata.", output=None)
+
         name, desc = _parse_name_and_desc(raw_text, fallback_name, fallback_desc)
     except Exception as exc:
         warning = f"[web_search_blueprints_node] Cluster for '{vendor_code}': web search failed ({exc}). Using fallback."
         print(warning)
         name, desc = fallback_name, fallback_desc
         warning_list = [warning]
+        # Propagate AgentException to halt ingestion as per requirements
+        if "AgentException" in str(type(exc)):
+            raise exc
     else:
         warning_list = []
         

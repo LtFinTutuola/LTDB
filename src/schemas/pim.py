@@ -1,18 +1,23 @@
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from src.schemas.base import BaseSchemaWithAudit, BaseSchema
+
+class BrandHeuristicCreate(BaseModel):
+    pattern: str
+    explanation: Optional[str] = None
+
+class BrandHeuristicResponse(BaseSchemaWithAudit):
+    brand_id: str
+    pattern: str
+    explanation: Optional[str]
 
 class BrandCreate(BaseModel):
     name: str
-    brand_code_heuristic: Optional[str] = None
-    brand_code_explanation: Optional[str] = None
-    heuristic_confirmed: bool = False
+    heuristics: Optional[List[BrandHeuristicCreate]] = None
 
 class BrandResponse(BaseSchemaWithAudit):
     name: str
-    brand_code_heuristic: Optional[str] = None
-    brand_code_explanation: Optional[str] = None
-    heuristic_confirmed: bool
+    heuristics: List[BrandHeuristicResponse] = Field(default_factory=list)
 
 class CategoryCreate(BaseModel):
     parent_id: Optional[str] = None

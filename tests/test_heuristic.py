@@ -54,7 +54,7 @@ def test_confirm_heuristic(db_session, monkeypatch):
     app.dependency_overrides[get_db] = lambda: db_session
     
     from src.models.pim import Brand
-    test_brand = Brand(name="Heuristic Confirm Brand", brand_code_heuristic=".*", heuristic_confirmed=False)
+    test_brand = Brand(name="Heuristic Confirm Brand")
     db_session.add(test_brand)
     db_session.commit()
     
@@ -69,14 +69,17 @@ def test_confirm_heuristic(db_session, monkeypatch):
     assert response.status_code == 200
     assert response.json()["status"] == "success"
     
-    db_session.refresh(test_brand)
-    assert test_brand.heuristic_confirmed is True
+    from src.models.pim import BrandHeuristic
+    heuristics = db_session.query(BrandHeuristic).filter(BrandHeuristic.brand_id == test_brand.id).all()
+    assert len(heuristics) == 1
+    assert heuristics[0].pattern == ".*"
+    assert heuristics[0].explanation == "test"
 
 def test_confirm_heuristic_missing_job(db_session, monkeypatch):
     app.dependency_overrides[get_db] = lambda: db_session
     
     from src.models.pim import Brand
-    test_brand = Brand(name="Heuristic Missing", brand_code_heuristic=None, heuristic_confirmed=False)
+    test_brand = Brand(name="Heuristic Missing")
     db_session.add(test_brand)
     db_session.commit()
     

@@ -117,7 +117,7 @@ async def process_heuristic(job_id: str, brand_id: str, file_path: str) -> None:
             deduction_res = await deduction_agent.aexecute({
                 "vendor_codes": vendor_codes,
                 "brand_name": brand_name,
-                "previous_explanation": brand_obj.brand_code_explanation,
+                "previous_explanation": "",
             })
 
             # Group the extracted items using the deduced regex
@@ -243,10 +243,8 @@ def confirm_heuristic(db: Session, job_id: str) -> None:
             detail=f"Brand ID '{target_brand_id}' not found in the database."
         )
 
-    brand.brand_code_heuristic = regex
-    brand.brand_code_explanation = explanation
-    brand.heuristic_confirmed = True
-    db.commit()
+    from src.repositories.pim_repo import heuristic_repo
+    heuristic_repo.create_heuristic(db, brand_id=target_brand_id, pattern=regex, explanation=explanation)
 
     # Clean up staging job
     try:
@@ -326,3 +324,65 @@ def _extract_vendor_codes(items: list) -> List[str]:
             codes.append(code)
             seen.add(code)
     return codes
+
+
+async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, official_name: str) -> None:
+    """
+    Background task: uses LLM to deduce the color-coding regex for a specific unmatched vendor code,
+    based on its official web name. Instantly creates a BrandHeuristic.
+    """
+    with SessionLocal() as db:
+        try:
+            logger.log_execution("heuristic_service", "single_shot_start", "ok", brand_id=brand_id, raw_code=raw_vendor_code)
+            brand_obj = db.query(Brand).filter(Brand.id == brand_id).first()
+            if not brand_obj:
+                return
+
+            from src.agents.llm_client import LLMClient
+            import json
+            
+            client = LLMClient()
+            system_prompt = (
+                "Sei un esperto di codifiche di articoli per magazzini. "
+                "Il tuo scopo è analizzare un codice fornitore (vendor code) e il nome/descrizione ufficiale del prodotto "
+                "per capire se il codice contiene un'indicazione sul colore o sulla variante cromatica."
+            )
+            prompt = (
+                f"Sto processando il vendor code '{raw_vendor_code}' del brand '{brand_obj.name}'.\n"
+                f"Il nome/descrizione ufficiale trovato sul web per questo articolo è: '{official_name}'.\n\n"
+                f"Analizza queste due informazioni ed effettua una ricerca sul web se necessario, per rispondere alla seguente domanda:\n"
+                f"Ci sono dei caratteri all'interno del vendor code che indicano in modo specifico il colore o la variante cromatica del prodotto?\n\n"
+                f"Se sì, deduci una Regular Expression compatibile con Python (re) che "
+                f"CATTURI esplicitamente la parte di codice indicante il colore in un gruppo nominato `(?P<color_code>...)`.\n"
+                f"Esempio: se il codice è 'ABC-123' e '123' indica il colore, la regex sarà `^(?P<model_code>.*)(?P<color_code>-[0-9]+)$`.\n\n"
+                f"RISPONDI ESATTAMENTE CON UN JSON CON IL SEGUENTE FORMATO E NESSUN ALTRO TESTO (non formattare come markdown):\n"
+                f"{{\n"
+                f"  \"has_color\": true/false,\n"
+                f"  \"regex\": \"la_regex_dedotta_oppure_vuoto\",\n"
+                f"  \"explanation\": \"una breve spiegazione del perché hai dedotto questo\"\n"
+                f"}}"
+            )
+            
+            raw_text = await client.call(
+                model_name="gemini-3.1-flash-lite",
+                system_prompt=system_prompt,
+                prompt=prompt,
+                pipeline_stage="Single Shot Deduction",
+                temperature=0.0
+            )
+            
+            match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+            if match:
+                res_dict = json.loads(match.group(0))
+                if res_dict.get("has_color") and res_dict.get("regex"):
+                    from src.repositories.pim_repo import heuristic_repo
+                    heuristic_repo.create_heuristic(db, brand_id=brand_id, pattern=res_dict["regex"], explanation=res_dict.get("explanation"))
+                    logger.log_execution("heuristic_service", "single_shot_success", "ok", brand_id=brand_id, pattern=res_dict["regex"])
+                else:
+                    logger.log_execution("heuristic_service", "single_shot_no_color", "ok", brand_id=brand_id)
+            else:
+                logger.log_execution("heuristic_service", "single_shot_failed_parse", "err", brand_id=brand_id, text=raw_text)
+
+        except Exception as exc:
+            logger.log_execution("heuristic_service", "single_shot_exception", "err", brand_id=brand_id, exc=str(exc))
+

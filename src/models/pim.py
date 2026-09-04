@@ -6,17 +6,24 @@ from src.models.base import Base, UUIDMixin, TimestampMixin
 from src.models.types import LowercaseJSONList
 
 
+class BrandHeuristic(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "brand_heuristics"
+
+    brand_id: Mapped[str] = mapped_column(String(36), ForeignKey("brands.id", ondelete="CASCADE"), nullable=False)
+    pattern: Mapped[str] = mapped_column(String, nullable=False)
+    explanation: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # Relationships
+    brand: Mapped["Brand"] = relationship("Brand", back_populates="heuristics")
+
+
 class Brand(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "brands"
 
     name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
 
-    # Heuristic columns for deterministic SKU matching
-    brand_code_heuristic: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    brand_code_explanation: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    heuristic_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-
     # Relationships
+    heuristics: Mapped[List["BrandHeuristic"]] = relationship("BrandHeuristic", back_populates="brand", cascade="all, delete-orphan")
     blueprints: Mapped[List["ArticleBlueprint"]] = relationship("ArticleBlueprint", back_populates="brand")
     categories: Mapped[List["Category"]] = relationship("Category", secondary="brand_categories", back_populates="brands")
 

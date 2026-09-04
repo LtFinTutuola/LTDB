@@ -80,18 +80,7 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             categories = category_repo.get_brand_hierarchy(db, brand_id)
             logger.log_execution("data_ingestion_service", "categories_fetched", "ok", macro_category_count=len(categories))
 
-            # 2. Check Heuristic Pre-Requisites
-            if not brand_obj.heuristic_confirmed:
-                raise AgentException(
-                    message="Brand heuristic not confirmed. Run heuristic deduction first.",
-                    output=None
-                )
-            
-            regex_pattern = brand_obj.brand_code_heuristic
-            if regex_pattern is None:
-                raise AgentException(message="Brand heuristic missing despite being confirmed.", output=None)
-                
-            compiled_regex = re.compile(regex_pattern) if regex_pattern else None
+            # 2. Removed Heuristic Pre-Requisites (No longer blocking)
 
             # 3. Run DataExtractionAgent
             extraction_agent = DataExtractionAgent()
@@ -99,29 +88,41 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             extraction_res = await extraction_agent.aexecute({
                 "file_path": file_path,
                 "brand": brand_name,
-                "brand_code_heuristic": regex_pattern if regex_pattern is not None else "",
             })
             extracted_items = extraction_res["items"]
             logger.log_execution("data_ingestion_service", "extraction_agent_completed", "ok")
 
             # 4. Deterministic Pre-Resolution
             
+            heuristics = brand_obj.heuristics
+            
             resolved_items = []
             unresolved_items = []
             resolved_blueprints = {}
             heuristic_warnings = []
             
+            import asyncio
+            from src.services.heuristic_service import process_single_shot_deduction
+
             for item in extracted_items:
                 raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
                 raw_code = raw_code.strip().upper()
                 
                 normalized_code = raw_code
-                if compiled_regex:
+                matched = False
+                for h in heuristics:
+                    compiled_regex = re.compile(h.pattern)
                     match = compiled_regex.search(raw_code)
                     if match and "color_code" in match.groupdict() and match.group("color_code") is not None:
                         normalized_code = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
-                    else:
-                        heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
+                        matched = True
+                        break
+                
+                if not matched:
+                    heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
+                    # Trigger single-shot deduction
+                    official_name = item.get("article_name") or ""
+                    asyncio.create_task(process_single_shot_deduction(brand_id, raw_code, official_name))
                 
                 bp = pim_repo.get_blueprint_by_normalized_code(db, brand_id, normalized_code)
                 if bp:
@@ -507,7 +508,6 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
             extraction_res = await extraction_agent.aexecute({
                 "brand": brand_name,
                 "vendor_code": request.vendor_code,
-                "description": request.description,
                 "barcode": request.barcode,
                 "quantity": request.quantity,
                 "colors": request.colors
@@ -515,33 +515,35 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
             extracted_items = extraction_res["items"]
             
             # 3. Deterministic Pre-Resolution
-            if not brand_obj.heuristic_confirmed:
-                raise AgentException(
-                    message="Brand heuristic not confirmed. Run heuristic deduction first.",
-                    output=None
-                )
-            
-            regex_pattern = brand_obj.brand_code_heuristic
-            if not regex_pattern:
-                raise AgentException(message="Brand heuristic missing despite being confirmed.", output=None)
-                
-            compiled_regex = re.compile(regex_pattern)
+            heuristics = brand_obj.heuristics
             
             resolved_items = []
             unresolved_items = []
             resolved_blueprints = {}
             heuristic_warnings = []
             
+            import asyncio
+            from src.services.heuristic_service import process_single_shot_deduction
+
             for item in extracted_items:
                 raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
                 raw_code = raw_code.strip().upper()
+                
                 normalized_code = raw_code
-                if compiled_regex:
+                matched = False
+                for h in heuristics:
+                    compiled_regex = re.compile(h.pattern)
                     match = compiled_regex.search(raw_code)
                     if match and "color_code" in match.groupdict() and match.group("color_code") is not None:
                         normalized_code = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
-                    else:
-                        heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
+                        matched = True
+                        break
+                
+                if not matched:
+                    heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
+                    # Trigger single-shot deduction
+                    official_name = item.get("article_name") or ""
+                    asyncio.create_task(process_single_shot_deduction(request.brand_id, raw_code, official_name))
                 
                 bp = pim_repo.get_blueprint_by_normalized_code(db, request.brand_id, normalized_code)
                 if bp:

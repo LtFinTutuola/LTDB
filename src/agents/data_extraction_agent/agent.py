@@ -46,8 +46,7 @@ class DataExtractionAgent(BaseAgent):
         try:
             initial_state = ExtractionGraphState(
                 file_path=input_data["file_path"],
-                brand=input_data["brand"],
-                brand_code_heuristic=input_data["brand_code_heuristic"],
+                brand=input_data["brand"]
             )
             graph = _build_graph()
         except (KeyError, Exception) as exc:

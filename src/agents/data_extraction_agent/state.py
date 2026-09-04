@@ -24,7 +24,6 @@ class ExtractionGraphState(BaseModel):
     warnings: Annotated[List[str], operator.add] = Field(
         default_factory=list, description="Non-fatal warnings."
     )
-    brand_code_heuristic: str = Field(..., description="The brand's heuristic regex to validate vendor codes")
     validation_passed: bool = Field(default=False)
     extraction_retries: int = Field(default=0)
     extraction_errors: Annotated[List[str], operator.add] = Field(

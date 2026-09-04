@@ -29,9 +29,6 @@ async def extraction_node(state: ExtractionGraphState) -> dict:
     print("[extraction_node] Extracting product JSON from cleaned text...")
     client = LLMClient()
     prompt = f"Analizza e mappa questo testo in JSON:\n\n{state.cleaned_text}\n"
-    if state.brand_code_heuristic:
-        prompt += f"\nREGOLA FONDAMENTALE: Il VendorCode DEVE rispettare questo pattern Regex: `{state.brand_code_heuristic}`.\n"
-        
     if state.extraction_errors:
         prompt += "\nATTENZIONE: Nel tentativo precedente hai commesso il seguente errore di estrazione:\n"
         for err in state.extraction_errors:

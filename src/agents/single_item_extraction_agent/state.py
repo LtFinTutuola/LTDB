@@ -6,7 +6,6 @@ class SingleItemExtractionState(BaseModel):
     # Mandatory Inputs
     brand: str = Field(..., description="Brand name.")
     vendor_code: str = Field(..., description="Vendor code or model.")
-    description: str = Field(..., description="User provided description hint.")
     colors: List[str] = Field(..., description="User provided color hints.")
     
     # Optional Inputs
