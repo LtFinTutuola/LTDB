@@ -85,6 +85,7 @@ class BipartiteIngestionResponse(BaseModel):
 class SingleItemIngestionRequest(BaseModel):
     brand_id: str = Field(..., description="Brand ID for the item")
     vendor_code: NormalizedIdentifier = Field(..., description="Vendor code or model")
+    article_name: Optional[str] = Field(default=None, description="Article name or description")
     barcode: Optional[str] = Field(default=None, description="Barcode or EAN")
     quantity: Optional[int] = Field(default=1, description="Item quantity")
     colors: NormalizedStringList = Field(..., description="Article colors hint for web search")

@@ -47,14 +47,14 @@ async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> 
     # Use the first item to perform the search
     base_item = items[0]
     vendor_code = base_item.get("vendor_code") or base_item.get("VendorCode") or ""
-    description = base_item.get("description") or base_item.get("Description") or ""
+    description = base_item.get("article_name") or base_item.get("description") or base_item.get("Description") or ""
 
     prompt = (
         f"Trova il nome ufficiale e la descrizione del prodotto nel catalogo o e-commerce del brand.\n\n"
         f"--- DATI DI PARTENZA ---\n"
         f"Brand: {brand}\n"
         f"Codice / Modello (VendorCode): {vendor_code}\n"
-        f"Descrizione DDT: {description}\n\n"
+        f"Nome/Descrizione Input: {description}\n\n"
         f"--- QUERY SUGGERITA ---\n"
         f'"{brand} {vendor_code}" OR "{brand} {description}"\n\n'
         f"Analizza i risultati web e restituisci il nome ufficiale dell'articolo all'interno di un tag <NAME>...</NAME> "
@@ -76,9 +76,6 @@ async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> 
             temperature=0.0,
         )
         
-        if not extracted_urls:
-            raise AgentException(message=f"Codice blueprint '{vendor_code}' non trovato online. Estrazione bloccata.", output=None)
-
         name, desc = _parse_name_and_desc(raw_text, fallback_name, fallback_desc)
     except Exception as exc:
         warning = f"[web_search_blueprints_node] Cluster for '{vendor_code}': web search failed ({exc}). Using fallback."

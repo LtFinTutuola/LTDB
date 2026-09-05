@@ -554,7 +554,7 @@ def test_process_single_item_endpoint(db_session, monkeypatch):
             "warnings": []
         }
 
-    monkeypatch.setattr("src.services.data_ingestion_service.SingleItemExtractionAgent.aexecute", mock_extraction_aexecute)
+# Removed SingleItemExtractionAgent monkeypatch
     monkeypatch.setattr("src.services.data_ingestion_service.ArticleBlueprintsAgent.aexecute", mock_blueprints_aexecute)
     monkeypatch.setattr("src.services.data_ingestion_service.category_repo.get_brand_hierarchy", lambda db, brand: {})
     monkeypatch.setattr("src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand", lambda db, brand: [])
@@ -575,7 +575,7 @@ def test_process_single_item_endpoint(db_session, monkeypatch):
         json={
             "brand_id": str(test_brand.id),
             "vendor_code": "SNGL-01",
-            "description": "Hint desc",
+            "article_name": "Hint desc",
             "quantity": 1,
             "colors": ["Rosso"]
         }
@@ -612,7 +612,7 @@ async def test_process_and_stage_single_item_success(db_session, monkeypatch):
             "warnings": []
         }
 
-    monkeypatch.setattr("src.services.data_ingestion_service.SingleItemExtractionAgent.aexecute", mock_extraction_aexecute)
+# Removed SingleItemExtractionAgent monkeypatch
     monkeypatch.setattr("src.services.data_ingestion_service.ArticleBlueprintsAgent.aexecute", mock_blueprints_aexecute)
     monkeypatch.setattr("src.services.data_ingestion_service.category_repo.get_brand_hierarchy", lambda db, brand: {})
     monkeypatch.setattr("src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand", lambda db, brand: [])
@@ -621,7 +621,7 @@ async def test_process_and_stage_single_item_success(db_session, monkeypatch):
     request = SingleItemIngestionRequest(
         brand_id=str(test_brand.id),
         vendor_code="SNGL-02",
-        description="Hint desc",
+        article_name="Hint desc",
         colors=["Rosso"]
     )
     
@@ -650,11 +650,11 @@ async def test_process_and_stage_single_item_failure(db_session, monkeypatch):
     db_session.add(test_heuristic)
     db_session.commit()
 
-    async def mock_extraction_aexecute(self, input_data):
+    async def mock_blueprints_aexecute(self, input_data):
         from src.agents.base import AgentException
         raise AgentException(message="Simulated error", output=None)
 
-    monkeypatch.setattr("src.services.data_ingestion_service.SingleItemExtractionAgent.aexecute", mock_extraction_aexecute)
+    monkeypatch.setattr("src.services.data_ingestion_service.ArticleBlueprintsAgent.aexecute", mock_blueprints_aexecute)
     monkeypatch.setattr("src.services.data_ingestion_service.category_repo.get_brand_hierarchy", lambda db, brand: {})
     monkeypatch.setattr("src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand", lambda db, brand: [])
     
@@ -662,7 +662,7 @@ async def test_process_and_stage_single_item_failure(db_session, monkeypatch):
     request = SingleItemIngestionRequest(
         brand_id=str(test_brand.id),
         vendor_code="ERR-01",
-        description="Hint desc",
+        article_name="Hint desc",
         colors=["Rosso"]
     )
     

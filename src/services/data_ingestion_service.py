@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from src.core.database import SessionLocal
 from src.agents.base import AgentException
 from src.agents.data_extraction_agent import DataExtractionAgent
-from src.agents.single_item_extraction_agent import SingleItemExtractionAgent
 from src.agents.article_blueprints_agent import ArticleBlueprintsAgent
 from src.repositories.pim_repo import pim_repo, category_repo
 from src.schemas.data_ingestion import EnrichedItemSchema, SingleItemIngestionRequest
@@ -80,7 +79,10 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             categories = category_repo.get_brand_hierarchy(db, brand_id)
             logger.log_execution("data_ingestion_service", "categories_fetched", "ok", macro_category_count=len(categories))
 
-            # 2. Removed Heuristic Pre-Requisites (No longer blocking)
+            # 2. Check Heuristic Pre-Requisites (Hard block for DDT)
+            heuristics = brand_obj.heuristics
+            if not heuristics:
+                raise AgentException("Nessuna regola di normalizzazione trovata per questo Brand. Importa prima un singolo articolo manualmente per permettere al sistema di imparare la codifica del Brand.")
 
             # 3. Run DataExtractionAgent
             extraction_agent = DataExtractionAgent()
@@ -501,18 +503,17 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
             # 1. Fetch brand hierarchy
             categories = category_repo.get_brand_hierarchy(db, request.brand_id)
 
-            # 2. Run SingleItemExtractionAgent
-            extraction_agent = SingleItemExtractionAgent()
-            logger.log_execution("data_ingestion_service", "extraction_agent_single_item", "ok", vendor_code=request.vendor_code)
-            
-            extraction_res = await extraction_agent.aexecute({
-                "brand": brand_name,
+            # 2. Map request directly to item
+            extracted_items = [{
+                "item_id": str(uuid.uuid4()),
                 "vendor_code": request.vendor_code,
+                "VendorCode": request.vendor_code,
                 "barcode": request.barcode,
                 "quantity": request.quantity,
-                "colors": request.colors
-            })
-            extracted_items = extraction_res["items"]
+                "colors": request.colors,
+                "article_name": request.article_name
+            }]
+            extraction_res = {"warnings": []}
             
             # 3. Deterministic Pre-Resolution
             heuristics = brand_obj.heuristics
@@ -591,6 +592,7 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
                 blueprints_res = await blueprints_agent.aexecute({
                     "new_blueprints": new_blueprints_input,
                     "categories": categories,
+                    "brand_name": brand_name,
                 })
                 agent_items = blueprints_res["items"]
                 agent_blueprints = blueprints_res["blueprints"]

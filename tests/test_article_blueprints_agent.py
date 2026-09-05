@@ -55,11 +55,11 @@ async def test_web_search_blueprints_node_fallback(base_state):
     bps = res["new_blueprints"]
     assert len(res["warnings"]) == 1
     for item in bps[0]["cluster_items"]:
-        # fallback is description if exists, else f"{brand} {vendor_code}".strip()
-        # vendor_code is A1, brand is TestBrand
-        # so fallback name is "TestBrand A1"
-        assert item["article_name"] == "TestBrand A1"
-        assert item["article_description"] == ""
+        # fallback is description (or article_name) if exists, else f"{brand} {vendor_code}".strip()
+        # vendor_code is A1, brand is TestBrand, article_name is "Test Art 1"
+        # so fallback name is "Test Art 1"
+        assert item["article_name"] == "Test Art 1"
+        assert item["article_description"] == "Test Art 1"
 
 @pytest.mark.asyncio
 async def test_synthesize_blueprints_node(base_state, monkeypatch):
