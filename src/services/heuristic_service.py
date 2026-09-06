@@ -326,7 +326,7 @@ def _extract_vendor_codes(items: list) -> List[str]:
     return codes
 
 
-async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, official_name: str) -> None:
+async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, official_name: str) -> Optional[str]:
     """
     Background task: uses LLM to deduce the color-coding regex for a specific unmatched vendor code,
     based on its official web name. Instantly creates a BrandHeuristic.
@@ -336,7 +336,7 @@ async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, off
             logger.log_execution("heuristic_service", "single_shot_start", "ok", brand_id=brand_id, raw_code=raw_vendor_code)
             brand_obj = db.query(Brand).filter(Brand.id == brand_id).first()
             if not brand_obj:
-                return
+                return None
 
             from src.agents.llm_client import LLMClient
             import json
@@ -359,7 +359,7 @@ async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, off
                 f"{{\n"
                 f"  \"has_color\": true/false,\n"
                 f"  \"regex\": \"la_regex_dedotta_oppure_vuoto\",\n"
-                f"  \"explanation\": \"una breve spiegazione del perché hai dedotto questo\"\n"
+                f"  \"explanation\": \"Fornisci una spiegazione ASTRATTA e GENERICA della regola, valida per l'intero Brand. È SEVERAMENTE VIETATO menzionare il codice specifico o il colore specifico forniti in input. Descrivi solo la struttura generale.\"\n"
                 f"}}"
             )
             
@@ -378,6 +378,7 @@ async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, off
                     from src.repositories.pim_repo import heuristic_repo
                     heuristic_repo.create_heuristic(db, brand_id=brand_id, pattern=res_dict["regex"], explanation=res_dict.get("explanation"))
                     logger.log_execution("heuristic_service", "single_shot_success", "ok", brand_id=brand_id, pattern=res_dict["regex"])
+                    return res_dict["regex"]
                 else:
                     logger.log_execution("heuristic_service", "single_shot_no_color", "ok", brand_id=brand_id)
             else:
@@ -385,4 +386,6 @@ async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, off
 
         except Exception as exc:
             logger.log_execution("heuristic_service", "single_shot_exception", "err", brand_id=brand_id, exc=str(exc))
+
+    return None
 

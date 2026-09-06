@@ -36,8 +36,9 @@ _SYSTEM_PROMPT = (
     "6. Mantieni il regex il più semplice e leggibile possibile.\n\n"
     "Restituisci ESCLUSIVAMENTE un JSON con le seguenti chiavi:\n"
     "- 'regex': l'espressione regolare Python come stringa (oppure stringa vuota se non serve mascherare)\n"
-    "- 'explanation': spiegazione in linguaggio naturale della regola di mascheramento, "
-    "comprensibile da un operatore non tecnico (es. 'I due numeri dopo l'asterisco indicano il colore e verranno ignorati.')"
+    "- 'explanation': spiegazione ASTRATTA e GENERICA della regola di mascheramento, valida per l'intero brand, "
+    "comprensibile da un operatore non tecnico (es. 'I due numeri dopo l'asterisco indicano il colore e verranno ignorati.'). "
+    "È SEVERAMENTE VIETATO menzionare codici specifici o colori puntuali presenti negli esempi."
 )
 
 

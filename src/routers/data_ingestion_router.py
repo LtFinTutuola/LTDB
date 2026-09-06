@@ -117,7 +117,7 @@ def revise_staging(
         )
 
 @router.post("/confirm/{job_id}", status_code=status.HTTP_200_OK)
-def confirm_extraction(
+async def confirm_extraction(
     job_id: str,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
@@ -132,7 +132,7 @@ def confirm_extraction(
     start_time = time.time()
     try:
         data_ingestion_service.check_job_status(db, job_id)
-        data_ingestion_service.confirm_and_persist_staging(db, job_id, background_tasks)
+        await data_ingestion_service.confirm_and_persist_staging(db, job_id, background_tasks)
         response_body = {"status": "success", "message": "Data successfully ingested"}
         latency_ms = int((time.time() - start_time) * 1000)
         logger.log_execution("data_ingestion_router", "response_dispatched", "ok",

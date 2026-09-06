@@ -122,9 +122,6 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
                 
                 if not matched:
                     heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
-                    # Trigger single-shot deduction
-                    official_name = item.get("article_name") or ""
-                    asyncio.create_task(process_single_shot_deduction(brand_id, raw_code, official_name))
                 
                 bp = pim_repo.get_blueprint_by_normalized_code(db, brand_id, normalized_code)
                 if bp:
@@ -309,7 +306,7 @@ def check_job_status(db: Session, job_id: str) -> None:
 
 from fastapi import BackgroundTasks
 
-def confirm_and_persist_staging(
+async def confirm_and_persist_staging(
     db: Session, 
     job_id: str,
     background_tasks: BackgroundTasks,
@@ -364,6 +361,73 @@ def confirm_and_persist_staging(
     brand_id = job.data.get("brand_id") if job.data else None
     if not brand_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Staged job data is missing brand_id")
+
+    # Check for heuristic breaks and deduce new regex if needed BEFORE saving to DB
+    warnings = job.data.get("warnings") or [] if job.data else []
+    heuristic_breaks = [w for w in warnings if isinstance(w, str) and w.startswith("heuristic_break:")]
+    
+    if heuristic_breaks:
+        from src.models.pim import Brand
+        logger.log_execution("data_ingestion_service", "heuristic_break_detected", "warn", job_id=job_id, breaks_count=len(heuristic_breaks))
+        brand = db.query(Brand).filter(Brand.id == brand_id).first()
+        if brand:
+            brand.heuristic_confirmed = False
+            db.commit()
+            
+            # Extract breaking codes
+            breaking_codes = []
+            for w in heuristic_breaks:
+                parts = w.split("'")
+                if len(parts) >= 3:
+                    breaking_codes.append(parts[1])
+
+            if job.job_type == JobType.SINGLE_ITEM_IMPORT.value and len(breaking_codes) == 1:
+                # Dispatch single-shot deduction for single item synchronously
+                raw_code = breaking_codes[0]
+                
+                article_name = ""
+                for item in items:
+                    if item.vendor_code == raw_code or item.normalized_vendor_code == raw_code:
+                        article_name = item.article_name or ""
+                        break
+                
+                from src.services.heuristic_service import process_single_shot_deduction
+                new_regex = await process_single_shot_deduction(
+                    brand_id=brand_id,
+                    raw_vendor_code=raw_code,
+                    official_name=article_name
+                )
+                logger.log_execution("data_ingestion_service", "single_shot_task_dispatched", "ok", brand_id=brand_id)
+
+                # In-memory retroactive normalization for the current staging payload
+                if new_regex:
+                    try:
+                        compiled_regex = re.compile(new_regex)
+                        for item in items:
+                            if item.vendor_code in breaking_codes:
+                                match = compiled_regex.search(item.vendor_code)
+                                if match and "color_code" in match.groupdict() and match.group("color_code") is not None:
+                                    item.normalized_vendor_code = item.vendor_code[:match.start("color_code")] + "#" + item.vendor_code[match.end("color_code"):]
+                    except Exception as e:
+                        print(f"Failed to apply regex {new_regex}: {e}")
+            else:
+                # For DDT imports, we might still dispatch recalculation to background, but for now we won't block
+                # Get historical codes
+                from src.models.wms import Article
+                historical_articles = db.query(Article.supplier_code).filter(Article.brand_id == brand_id).all()
+                historical_codes = [a.supplier_code for a in historical_articles if a.supplier_code]
+                
+                corpus = list(set(historical_codes + breaking_codes))
+                
+                # Dispatch background recalculation
+                from src.services.heuristic_service import process_recalculation
+                background_tasks.add_task(
+                    process_recalculation,
+                    brand_id=brand_id,
+                    vendor_codes_corpus=corpus,
+                    previous_explanation="" # Empty explanation string as fallback
+                )
+                logger.log_execution("data_ingestion_service", "recalculation_task_dispatched", "ok", brand_id=brand_id)
 
     resolved_blueprints: Dict[str, str] = {}
 
@@ -443,42 +507,7 @@ def confirm_and_persist_staging(
     db.commit()
     logger.log_execution("data_ingestion_service", "confirm_staging_commit", "ok", job_id=job_id)
 
-    # Check for heuristic breaks and trigger recalculation if needed
-    warnings = job.data.get("warnings") or [] if job.data else []
-    heuristic_breaks = [w for w in warnings if isinstance(w, str) and w.startswith("heuristic_break:")]
-    
-    if heuristic_breaks:
-        logger.log_execution("data_ingestion_service", "heuristic_break_detected", "warn", job_id=job_id, breaks_count=len(heuristic_breaks))
-        brand = db.query(Brand).filter(Brand.id == brand_id).first()
-        if brand:
-            brand.heuristic_confirmed = False
-            previous_explanation = brand.brand_code_explanation
-            db.commit()
-            
-            # Extract breaking codes
-            breaking_codes = []
-            for w in heuristic_breaks:
-                # Format: "heuristic_break: 'CODE' failed regex validation"
-                parts = w.split("'")
-                if len(parts) >= 3:
-                    breaking_codes.append(parts[1])
-                    
-            # Get historical codes
-            from src.models.wms import Article
-            historical_articles = db.query(Article.supplier_code).filter(Article.brand_id == brand_id).all()
-            historical_codes = [a.supplier_code for a in historical_articles if a.supplier_code]
-            
-            corpus = list(set(historical_codes + breaking_codes))
-            
-            # Dispatch background recalculation
-            from src.services.heuristic_service import process_recalculation
-            background_tasks.add_task(
-                process_recalculation,
-                brand_id=brand_id,
-                vendor_codes_corpus=corpus,
-                previous_explanation=previous_explanation
-            )
-            logger.log_execution("data_ingestion_service", "recalculation_task_dispatched", "ok", brand_id=brand_id)
+
 
     # Delete job from staging area in a separate, isolated transaction
     try:
@@ -542,9 +571,6 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
                 
                 if not matched:
                     heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
-                    # Trigger single-shot deduction
-                    official_name = item.get("article_name") or ""
-                    asyncio.create_task(process_single_shot_deduction(request.brand_id, raw_code, official_name))
                 
                 bp = pim_repo.get_blueprint_by_normalized_code(db, request.brand_id, normalized_code)
                 if bp:
