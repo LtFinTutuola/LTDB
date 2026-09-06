@@ -1,24 +1,13 @@
-from typing import List, Optional, Any
+from typing import List
 from pydantic import BaseModel, Field
 
 
 class BlueprintsGraphState(BaseModel):
     """Shared state for ArticleBlueprintsAgent pipeline."""
     # Input fields
-    items: List[dict] = Field(default_factory=list, description="Extracted items from DataExtractionAgent.")
+    new_blueprints: List[dict] = Field(default_factory=list, description="Newly synthesized blueprint definitions (pre-grouped).")
+    brand_name: str = Field(default="", description="The name of the brand for web search context.")
     categories: dict = Field(default_factory=dict, description="Brand category hierarchy.")
-    db_embeddings_matrix: List[dict] = Field(
-        default_factory=list, description="Existing DB blueprint embeddings for the brand."
-    )
-    db_similarity_threshold: float = Field(default=0.92, description="Cosine similarity threshold for DB matching.")
-    articles_similarity_threshold: float = Field(default=0.88, description="Cosine similarity threshold for intra-DDT clustering.")
-    hallucination_recognition_threshold: float = Field(default=0.95, description="Cosine similarity threshold for LLM hallucination recognition.")
-    candidate_tolerance: float = Field(default=0.04, description="Tolerance subtracted from db_similarity_threshold to form candidate band.")
-
-    # Internal buckets
-    matched_items: List[dict] = Field(default_factory=list, description="Items matched to an existing DB blueprint.")
-    unmatched_items: List[dict] = Field(default_factory=list, description="Items that did not match DB blueprints.")
-    new_blueprints: List[dict] = Field(default_factory=list, description="Newly synthesized blueprint definitions.")
 
     # Output accumulators
     output_items: List[dict] = Field(default_factory=list, description="Final formatted items list linking to blueprints.")

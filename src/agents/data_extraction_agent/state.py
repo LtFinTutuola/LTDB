@@ -24,3 +24,8 @@ class ExtractionGraphState(BaseModel):
     warnings: Annotated[List[str], operator.add] = Field(
         default_factory=list, description="Non-fatal warnings."
     )
+    validation_passed: bool = Field(default=False)
+    extraction_retries: int = Field(default=0)
+    extraction_errors: Annotated[List[str], operator.add] = Field(
+        default_factory=list, description="Errors from the validation node fed back to the extraction node."
+    )

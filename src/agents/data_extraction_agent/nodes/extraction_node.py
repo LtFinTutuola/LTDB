@@ -14,7 +14,8 @@ _SYSTEM_PROMPT = (
     "Il tuo compito è analizzare semanticamente questi dati "
     "e restituire ESCLUSIVAMENTE un array JSON di oggetti normalizzati con le seguenti chiavi: "
     "VendorCode (es. modello/codice prodotto), Barcode (se presente), Description (descrizione del prodotto), "
-    "Color (codice/colore), Quantity (leggendo i dati relativi alle quantità o confezioni associate all'articolo)."
+    "Color (codice/colore), Quantity (leggendo i dati relativi alle quantità o confezioni associate all'articolo). "
+    "ATTENZIONE: Devi identificare il VendorCode corretto rispettando il pattern regex fornito nel prompt."
 )
 
 _MODEL = "gemini-3.1-flash-lite"
@@ -27,8 +28,12 @@ async def extraction_node(state: ExtractionGraphState) -> dict:
     logger.log_agent("extraction_node", "node_entry", "ok", cleaned_text=state.cleaned_text)
     print("[extraction_node] Extracting product JSON from cleaned text...")
     client = LLMClient()
-    prompt = f"Analizza e mappa questo testo in JSON:\n\n{state.cleaned_text}"
-
+    prompt = f"Analizza e mappa questo testo in JSON:\n\n{state.cleaned_text}\n"
+    if state.extraction_errors:
+        prompt += "\nATTENZIONE: Nel tentativo precedente hai commesso il seguente errore di estrazione:\n"
+        for err in state.extraction_errors:
+            prompt += f"- {err}\n"
+        prompt += "Correggi la mappatura delle colonne. Se hai scambiato due colonne (es. Materiale e SKU), invertile in modo che VendorCode corrisponda al pattern richiesto.\n"
     try:
         raw_response = await client.call(
             model_name=_MODEL,

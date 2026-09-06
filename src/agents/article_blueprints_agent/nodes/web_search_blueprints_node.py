@@ -2,7 +2,7 @@ import asyncio
 import re
 
 from src.agents.llm_client import LLMClient
-from src.agents.data_extraction_agent.state import ExtractionGraphState
+from src.agents.article_blueprints_agent.state import BlueprintsGraphState
 from src.core.logger import get_logger
 
 logger = get_logger()
@@ -39,16 +39,22 @@ def _parse_name_and_desc(raw_text: str, fallback_name: str, fallback_desc: str) 
     return name, desc
 
 
-async def _enrich_single_item(item: dict, brand: str, client: LLMClient) -> tuple[dict, list[str]]:
-    vendor_code = item.get("vendor_code") or item.get("VendorCode") or ""
-    description = item.get("description") or item.get("Description") or ""
+async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> tuple[dict, list[str]]:
+    items = bp.get("cluster_items", [])
+    if not items:
+        return bp, []
+
+    # Use the first item to perform the search
+    base_item = items[0]
+    vendor_code = base_item.get("vendor_code") or base_item.get("VendorCode") or ""
+    description = base_item.get("article_name") or base_item.get("description") or base_item.get("Description") or ""
 
     prompt = (
         f"Trova il nome ufficiale e la descrizione del prodotto nel catalogo o e-commerce del brand.\n\n"
         f"--- DATI DI PARTENZA ---\n"
         f"Brand: {brand}\n"
         f"Codice / Modello (VendorCode): {vendor_code}\n"
-        f"Descrizione DDT: {description}\n\n"
+        f"Nome/Descrizione Input: {description}\n\n"
         f"--- QUERY SUGGERITA ---\n"
         f'"{brand} {vendor_code}" OR "{brand} {description}"\n\n'
         f"Analizza i risultati web e restituisci il nome ufficiale dell'articolo all'interno di un tag <NAME>...</NAME> "
@@ -59,7 +65,9 @@ async def _enrich_single_item(item: dict, brand: str, client: LLMClient) -> tupl
     fallback_desc = description
 
     try:
-        raw_text, _ = await client.call_with_grounding(
+        from src.agents.base import AgentException
+        
+        raw_text, extracted_urls = await client.call_with_grounding(
             model_name=_MODEL,
             system_prompt=_SYSTEM_PROMPT,
             prompt=prompt,
@@ -67,48 +75,53 @@ async def _enrich_single_item(item: dict, brand: str, client: LLMClient) -> tupl
             max_output_tokens=512,
             temperature=0.0,
         )
+        
         name, desc = _parse_name_and_desc(raw_text, fallback_name, fallback_desc)
-        item_copy = dict(item)
-        item_copy["vendor_code"] = vendor_code
-        item_copy["quantity"] = item.get("quantity") or item.get("Quantity") or 0
-        item_copy["article_name"] = name
-        item_copy["article_description"] = desc
-        return item_copy, []
     except Exception as exc:
-        warning = f"[web_search_node] Item '{vendor_code}': web search failed ({exc}). Using fallback."
+        warning = f"[web_search_blueprints_node] Cluster for '{vendor_code}': web search failed ({exc}). Using fallback."
         print(warning)
-        item_copy = dict(item)
-        item_copy["vendor_code"] = vendor_code
-        item_copy["quantity"] = item.get("quantity") or item.get("Quantity") or 0
-        item_copy["article_name"] = fallback_name
-        item_copy["article_description"] = fallback_desc
-        return item_copy, [warning]
+        name, desc = fallback_name, fallback_desc
+        warning_list = [warning]
+        # Propagate AgentException to halt ingestion as per requirements
+        if "AgentException" in str(type(exc)):
+            raise exc
+    else:
+        warning_list = []
+        
+    bp_copy = dict(bp)
+    # Apply to all items in the cluster
+    for item in bp_copy.get("cluster_items", []):
+        item["article_name"] = name
+        item["article_description"] = desc
+
+    return bp_copy, warning_list
 
 
-async def web_search_node(state: ExtractionGraphState) -> dict:
+async def web_search_blueprints_node(state: BlueprintsGraphState) -> dict:
     """
-    Perform concurrent web searches (temperature=0.0) for all extracted items to attach canonical article_name and article_description.
+    Perform concurrent web searches (temperature=0.0) for new blueprint clusters to attach canonical article_name and article_description.
     """
-    logger.log_agent("web_search_node", "node_entry", "ok", 
-                     extracted_items=[{k: v for k, v in item.items() if k in ["vendor_code", "description"]} for item in state.extracted_items])
-    print(f"[web_search_node] Running web search (temp=0.0) for {len(state.extracted_items)} item(s)...")
+    logger.log_agent("web_search_blueprints_node", "node_entry", "ok", 
+                     new_blueprints_count=len(state.new_blueprints))
+    print(f"[web_search_blueprints_node] Running web search (temp=0.0) for {len(state.new_blueprints)} cluster(s)...")
+    
+    if not state.new_blueprints:
+        return {"new_blueprints": [], "warnings": []}
+        
     client = LLMClient()
     tasks = [
-        _enrich_single_item(item, state.brand, client)
-        for item in state.extracted_items
+        _enrich_blueprint_cluster(bp, state.brand_name, client)
+        for bp in state.new_blueprints
     ]
     results = await asyncio.gather(*tasks)
 
-    updated_items: list[dict] = []
-    warnings: list[str] = []
-    for item_copy, item_warnings in results:
-        updated_items.append(item_copy)
-        warnings.extend(item_warnings)
+    enriched_blueprints = [res[0] for res in results]
+    warnings = []
+    for res in results:
+        if res[1]:
+            warnings.extend(res[1])
 
-    if updated_items:
-        updated_items[0]["_overwrite"] = True
-
-    print("[web_search_node] Web search enrichment complete.")
-    result = {"extracted_items": updated_items, "warnings": warnings}
-    logger.log_agent("web_search_node", "node_exit", "ok", output=result)
+    print("[web_search_blueprints_node] Web search complete.")
+    result = {"new_blueprints": enriched_blueprints, "warnings": warnings}
+    logger.log_agent("web_search_blueprints_node", "node_exit", "ok", output={"warnings_count": len(warnings)})
     return result

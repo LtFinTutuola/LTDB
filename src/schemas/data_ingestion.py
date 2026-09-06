@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field, model_validator
-from typing import List, Literal, Optional, Any
+from typing import List, Literal, Optional, Any, Dict
 
 from src.schemas.types import NormalizedIdentifier, NormalizedStringList
 
@@ -20,6 +20,7 @@ class CategoryRefSchema(BaseModel):
 class EnrichedItemSchema(BaseModel):
     """Full enriched item schema returned by the DataIngestionAgent."""
     vendor_code: Optional[NormalizedIdentifier] = None
+    normalized_vendor_code: Optional[str] = None
     barcode: Optional[str] = None
     quantity: Optional[int] = None
     category: Optional[CategoryRefSchema] = None
@@ -84,7 +85,7 @@ class BipartiteIngestionResponse(BaseModel):
 class SingleItemIngestionRequest(BaseModel):
     brand_id: str = Field(..., description="Brand ID for the item")
     vendor_code: NormalizedIdentifier = Field(..., description="Vendor code or model")
-    description: str = Field(..., description="Product description hint for web search")
+    article_name: Optional[str] = Field(default=None, description="Article name or description")
     barcode: Optional[str] = Field(default=None, description="Barcode or EAN")
     quantity: Optional[int] = Field(default=1, description="Item quantity")
     colors: NormalizedStringList = Field(..., description="Article colors hint for web search")
@@ -144,3 +145,27 @@ class StagingRevisionResponse(BaseModel):
     """Response body for PUT /api/v1/ingestion/staging/{job_id}."""
     status: str
     data: dict
+
+
+# ---------------------------------------------------------------------------
+# Heuristic Deduction Schemas
+# ---------------------------------------------------------------------------
+
+class HeuristicDeductionRequest(BaseModel):
+    """Request body for POST /api/v1/brands/{brand_id}/heuristic."""
+    file_path: str = Field(..., description="Absolute path to a sample PDF for pattern discovery")
+
+class HeuristicExampleSchema(BaseModel):
+    """A single before/after transformation example."""
+    raw: str
+    normalized: str
+
+class HeuristicProposalResponse(BaseModel):
+    """Proposed heuristic data returned by the deduction agent."""
+    textual_explanation: str
+    grouped_items: Dict[str, List[Dict[str, Any]]]
+
+class HeuristicJobStatusResponse(BaseModel):
+    """Response body for GET /api/v1/brands/{brand_id}/heuristic/{job_id}."""
+    status: str
+    data: Optional[dict] = None

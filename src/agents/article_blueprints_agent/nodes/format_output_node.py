@@ -22,6 +22,7 @@ def _clean_item(item: dict) -> dict:
     return {
         "item_id": item.get("item_id", ""),
         "vendor_code": item.get("vendor_code") or item.get("VendorCode") or "",
+        "normalized_vendor_code": item.get("normalized_vendor_code") or "",
         "barcode": item.get("barcode") or item.get("Barcode") or "",
         "quantity": qty,
         "colors": colors,
@@ -51,18 +52,20 @@ def format_output_node(state: BlueprintsGraphState) -> dict:
     Format final bipartite items and blueprints lists, stripping internal fields.
     """
     logger.log_agent("format_output_node", "node_entry", "ok", 
-                     matched_count=len(state.matched_items), 
-                     unmatched_count=len(state.unmatched_items),
                      new_blueprints_count=len(state.new_blueprints))
     
-    all_raw_items = list(state.matched_items) + list(state.unmatched_items)
-    clean_items = [_clean_item(it) for it in all_raw_items]
-
+    clean_items = []
     seen_bp_ids = set()
     clean_blueprints = []
 
     for bp in list(state.output_blueprints) + list(state.new_blueprints):
         bp_id = bp.get("id")
+        
+        # Extract items from cluster and link them to the new blueprint
+        for it in bp.get("cluster_items", []):
+            it["article_blueprint_id"] = bp_id
+            clean_items.append(_clean_item(it))
+
         if bp_id and bp_id not in seen_bp_ids:
             clean_blueprints.append(_clean_blueprint(bp))
             seen_bp_ids.add(bp_id)

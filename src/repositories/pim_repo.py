@@ -1,7 +1,7 @@
 from typing import Optional
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
-from src.models.pim import ArticleBlueprint, Brand, Category
+from src.models.pim import ArticleBlueprint, Brand, Category, BrandHeuristic
 from src.schemas.pim import ArticleBlueprintCreate, ArticleBlueprintResponse  # placeholder for update schema
 from src.repositories.base import BaseRepository
 from src.core.logger import get_logger
@@ -55,6 +55,22 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
                 db.commit()
             else:
                 db.flush()
+
+    def get_blueprint_by_normalized_code(
+        self, db: Session, brand_id: str, normalized_vendor_code: str
+    ) -> Optional[ArticleBlueprint]:
+        """
+        Deterministic lookup by composite unique key (brand_id, normalized_vendor_code).
+        Returns the ArticleBlueprint or None if not found.
+        """
+        return (
+            db.query(ArticleBlueprint)
+            .filter(
+                ArticleBlueprint.brand_id == brand_id,
+                ArticleBlueprint.normalized_vendor_code == normalized_vendor_code,
+            )
+            .first()
+        )
 
 
 
@@ -129,5 +145,19 @@ class CategoryRepository:
         return hierarchy
 
 
+class BrandHeuristicRepository:
+    def create_heuristic(self, db: Session, brand_id: str, pattern: str, explanation: str = None) -> BrandHeuristic:
+        logger.log_execution("pim_repo", "create_brand_heuristic", "ok", brand_id=brand_id, pattern=pattern)
+        heuristic = BrandHeuristic(brand_id=brand_id, pattern=pattern, explanation=explanation)
+        db.add(heuristic)
+        db.commit()
+        db.refresh(heuristic)
+        return heuristic
+
+    def get_heuristics_by_brand(self, db: Session, brand_id: str) -> list[BrandHeuristic]:
+        return db.query(BrandHeuristic).filter(BrandHeuristic.brand_id == brand_id).all()
+
+
 pim_repo = ArticleBlueprintRepository()
 category_repo = CategoryRepository()
+heuristic_repo = BrandHeuristicRepository()

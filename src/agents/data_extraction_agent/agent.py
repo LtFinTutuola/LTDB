@@ -5,7 +5,13 @@ from src.agents.data_extraction_agent.state import ExtractionGraphState
 from src.agents.data_extraction_agent.nodes.ingestion_node import ingestion_node
 from src.agents.data_extraction_agent.nodes.cleanup_node import cleanup_node
 from src.agents.data_extraction_agent.nodes.extraction_node import extraction_node
-from src.agents.data_extraction_agent.nodes.web_search_node import web_search_node
+from src.agents.data_extraction_agent.nodes.validation_node import validation_node
+
+
+def route_validation(state: ExtractionGraphState) -> str:
+    if state.validation_passed:
+        return END
+    return "extraction_node"
 
 
 def _build_graph() -> StateGraph:
@@ -14,13 +20,16 @@ def _build_graph() -> StateGraph:
     graph.add_node("ingestion_node", ingestion_node)
     graph.add_node("cleanup_node", cleanup_node)
     graph.add_node("extraction_node", extraction_node)
-    graph.add_node("web_search_node", web_search_node)
+    graph.add_node("validation_node", validation_node)
 
     graph.add_edge(START, "ingestion_node")
     graph.add_edge("ingestion_node", "cleanup_node")
     graph.add_edge("cleanup_node", "extraction_node")
-    graph.add_edge("extraction_node", "web_search_node")
-    graph.add_edge("web_search_node", END)
+    graph.add_edge("extraction_node", "validation_node")
+    graph.add_conditional_edges("validation_node", route_validation, {
+        END: END,
+        "extraction_node": "extraction_node"
+    })
 
     return graph.compile()
 
@@ -28,7 +37,7 @@ def _build_graph() -> StateGraph:
 class DataExtractionAgent(BaseAgent):
     """
     Agent responsible for reading a DDT PDF, cleaning text, extracting product items,
-    injecting item_id, and grounding names via web search.
+    and injecting item_id.
     """
     def __init__(self):
         super().__init__()
@@ -37,7 +46,7 @@ class DataExtractionAgent(BaseAgent):
         try:
             initial_state = ExtractionGraphState(
                 file_path=input_data["file_path"],
-                brand=input_data["brand"],
+                brand=input_data["brand"]
             )
             graph = _build_graph()
         except (KeyError, Exception) as exc:

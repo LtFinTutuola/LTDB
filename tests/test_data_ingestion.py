@@ -92,9 +92,13 @@ def test_extract_endpoint(db_session, tmp_path, monkeypatch):
     )
 
     # Seed a brand and category for the test
-    from src.models.pim import Brand, Category
+    from src.models.pim import Brand, Category, BrandHeuristic
     test_brand = Brand(name="Samsonite")
     db_session.add(test_brand)
+    db_session.commit()
+    
+    test_heuristic = BrandHeuristic(brand_id=test_brand.id, pattern=r"^(?P<model_code>.*)$")
+    db_session.add(test_heuristic)
     test_cat = Category(name="Borse", description="Borse da donna")
     db_session.add(test_cat)
     test_sub = Category(name="Tote / Shopper", description="Borsa grande", parent_id=test_cat.id)
@@ -161,10 +165,14 @@ def test_extract_endpoint_fail_fast_category_error(db_session, tmp_path, monkeyp
         lambda db, brand: [],
     )
 
-    from src.models.pim import Brand
+    from src.models.pim import Brand, BrandHeuristic
     from src.agents.base import AgentException
     test_brand = Brand(name="Samsonite Fail")
     db_session.add(test_brand)
+    db_session.commit()
+    
+    test_heuristic = BrandHeuristic(brand_id=test_brand.id, pattern=r"^(?P<model_code>.*)$")
+    db_session.add(test_heuristic)
     db_session.commit()
     brand_id_str = str(test_brand.id)
 
@@ -546,14 +554,18 @@ def test_process_single_item_endpoint(db_session, monkeypatch):
             "warnings": []
         }
 
-    monkeypatch.setattr("src.services.data_ingestion_service.SingleItemExtractionAgent.aexecute", mock_extraction_aexecute)
+# Removed SingleItemExtractionAgent monkeypatch
     monkeypatch.setattr("src.services.data_ingestion_service.ArticleBlueprintsAgent.aexecute", mock_blueprints_aexecute)
     monkeypatch.setattr("src.services.data_ingestion_service.category_repo.get_brand_hierarchy", lambda db, brand: {})
     monkeypatch.setattr("src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand", lambda db, brand: [])
 
-    from src.models.pim import Brand, Category
+    from src.models.pim import Brand, Category, BrandHeuristic
     test_brand = Brand(name="Single Brand")
     db_session.add(test_brand)
+    db_session.commit()
+    
+    test_heuristic = BrandHeuristic(brand_id=test_brand.id, pattern=r"^(?P<model_code>.*)$")
+    db_session.add(test_heuristic)
     test_cat = Category(name="Borse", description="Borse")
     db_session.add(test_cat)
     db_session.commit()
@@ -563,7 +575,7 @@ def test_process_single_item_endpoint(db_session, monkeypatch):
         json={
             "brand_id": str(test_brand.id),
             "vendor_code": "SNGL-01",
-            "description": "Hint desc",
+            "article_name": "Hint desc",
             "quantity": 1,
             "colors": ["Rosso"]
         }
@@ -579,9 +591,13 @@ def test_process_single_item_endpoint(db_session, monkeypatch):
 async def test_process_and_stage_single_item_success(db_session, monkeypatch):
     monkeypatch.setattr("src.services.data_ingestion_service.SessionLocal", lambda: MockSessionLocal(db_session))
     
-    from src.models.pim import Brand, Category
+    from src.models.pim import Brand, Category, BrandHeuristic
     test_brand = Brand(name="Single Brand Service")
     db_session.add(test_brand)
+    db_session.commit()
+    
+    test_heuristic = BrandHeuristic(brand_id=test_brand.id, pattern=r"^(?P<model_code>.*)$")
+    db_session.add(test_heuristic)
     test_cat = Category(name="Borse", description="Borse")
     db_session.add(test_cat)
     db_session.commit()
@@ -596,7 +612,7 @@ async def test_process_and_stage_single_item_success(db_session, monkeypatch):
             "warnings": []
         }
 
-    monkeypatch.setattr("src.services.data_ingestion_service.SingleItemExtractionAgent.aexecute", mock_extraction_aexecute)
+# Removed SingleItemExtractionAgent monkeypatch
     monkeypatch.setattr("src.services.data_ingestion_service.ArticleBlueprintsAgent.aexecute", mock_blueprints_aexecute)
     monkeypatch.setattr("src.services.data_ingestion_service.category_repo.get_brand_hierarchy", lambda db, brand: {})
     monkeypatch.setattr("src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand", lambda db, brand: [])
@@ -605,7 +621,7 @@ async def test_process_and_stage_single_item_success(db_session, monkeypatch):
     request = SingleItemIngestionRequest(
         brand_id=str(test_brand.id),
         vendor_code="SNGL-02",
-        description="Hint desc",
+        article_name="Hint desc",
         colors=["Rosso"]
     )
     
@@ -625,16 +641,20 @@ async def test_process_and_stage_single_item_success(db_session, monkeypatch):
 async def test_process_and_stage_single_item_failure(db_session, monkeypatch):
     monkeypatch.setattr("src.services.data_ingestion_service.SessionLocal", lambda: MockSessionLocal(db_session))
     
-    from src.models.pim import Brand
+    from src.models.pim import Brand, BrandHeuristic
     test_brand = Brand(name="Single Brand Error")
     db_session.add(test_brand)
     db_session.commit()
+    
+    test_heuristic = BrandHeuristic(brand_id=test_brand.id, pattern=r"^(?P<model_code>.*)$")
+    db_session.add(test_heuristic)
+    db_session.commit()
 
-    async def mock_extraction_aexecute(self, input_data):
+    async def mock_blueprints_aexecute(self, input_data):
         from src.agents.base import AgentException
         raise AgentException(message="Simulated error", output=None)
 
-    monkeypatch.setattr("src.services.data_ingestion_service.SingleItemExtractionAgent.aexecute", mock_extraction_aexecute)
+    monkeypatch.setattr("src.services.data_ingestion_service.ArticleBlueprintsAgent.aexecute", mock_blueprints_aexecute)
     monkeypatch.setattr("src.services.data_ingestion_service.category_repo.get_brand_hierarchy", lambda db, brand: {})
     monkeypatch.setattr("src.services.data_ingestion_service.pim_repo.get_embeddings_by_brand", lambda db, brand: [])
     
@@ -642,7 +662,7 @@ async def test_process_and_stage_single_item_failure(db_session, monkeypatch):
     request = SingleItemIngestionRequest(
         brand_id=str(test_brand.id),
         vendor_code="ERR-01",
-        description="Hint desc",
+        article_name="Hint desc",
         colors=["Rosso"]
     )
     
