@@ -356,10 +356,15 @@ async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, off
                 f"CATTURI esplicitamente la parte di codice indicante il colore in un gruppo nominato `(?P<color_code>...)`.\n"
                 f"Esempio: se il codice è 'ABC-123' e '123' indica il colore, la regex sarà `^(?P<model_code>.*)(?P<color_code>-[0-9]+)$`.\n\n"
                 f"RISPONDI ESATTAMENTE CON UN JSON CON IL SEGUENTE FORMATO E NESSUN ALTRO TESTO (non formattare come markdown):\n"
+                f"Se has_color è true:\n"
                 f"{{\n"
-                f"  \"has_color\": true/false,\n"
-                f"  \"regex\": \"la_regex_dedotta_oppure_vuoto\",\n"
+                f"  \"has_color\": true,\n"
+                f"  \"regex\": \"la_regex_dedotta\",\n"
                 f"  \"explanation\": \"Fornisci una spiegazione ASTRATTA e GENERICA della regola, valida per l'intero Brand. È SEVERAMENTE VIETATO menzionare il codice specifico o il colore specifico forniti in input. Descrivi solo la struttura generale.\"\n"
+                f"}}\n"
+                f"Se has_color è false:\n"
+                f"{{\n"
+                f"  \"has_color\": false\n"
                 f"}}"
             )
             
@@ -374,13 +379,17 @@ async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, off
             match = re.search(r"\{.*\}", raw_text, re.DOTALL)
             if match:
                 res_dict = json.loads(match.group(0))
-                if res_dict.get("has_color") and res_dict.get("regex"):
-                    from src.repositories.pim_repo import heuristic_repo
-                    heuristic_repo.create_heuristic(db, brand_id=brand_id, pattern=res_dict["regex"], explanation=res_dict.get("explanation"))
-                    logger.log_execution("heuristic_service", "single_shot_success", "ok", brand_id=brand_id, pattern=res_dict["regex"])
-                    return res_dict["regex"]
-                else:
-                    logger.log_execution("heuristic_service", "single_shot_no_color", "ok", brand_id=brand_id)
+                
+                # Check if it has color or not
+                has_color = res_dict.get("has_color", False)
+                pattern = res_dict.get("regex", "") if has_color else ""
+                explanation = res_dict.get("explanation") if has_color else "I vendor code di questo brand sono univoci per variante e non contengono suffissi o segmenti dedicati al colore."
+                log_event = "single_shot_success" if has_color else "single_shot_no_color"
+
+                from src.repositories.pim_repo import heuristic_repo
+                heuristic_repo.create_heuristic(db, brand_id=brand_id, pattern=pattern, explanation=explanation)
+                logger.log_execution("heuristic_service", log_event, "ok", brand_id=brand_id, pattern=pattern)
+                return pattern
             else:
                 logger.log_execution("heuristic_service", "single_shot_failed_parse", "err", brand_id=brand_id, text=raw_text)
 

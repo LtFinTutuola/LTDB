@@ -113,6 +113,10 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
                 normalized_code = raw_code
                 matched = False
                 for h in heuristics:
+                    if not h.pattern:
+                        matched = True
+                        break
+                        
                     compiled_regex = re.compile(h.pattern)
                     match = compiled_regex.search(raw_code)
                     if match and "color_code" in match.groupdict() and match.group("color_code") is not None:
@@ -562,6 +566,10 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
                 normalized_code = raw_code
                 matched = False
                 for h in heuristics:
+                    if not h.pattern:
+                        matched = True
+                        break
+                        
                     compiled_regex = re.compile(h.pattern)
                     match = compiled_regex.search(raw_code)
                     if match and "color_code" in match.groupdict() and match.group("color_code") is not None:
