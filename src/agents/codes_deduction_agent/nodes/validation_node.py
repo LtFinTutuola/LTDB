@@ -101,13 +101,12 @@ def validation_node(state: CodesDeductionGraphState) -> dict:
 
     for code in state.vendor_codes:
         match = compiled.search(code)
-        if match and "color_code" in match.groupdict():
-            color_code = match.group("color_code")
-            if color_code is not None:
+        if match:
+            if "color_code" in match.groupdict() and match.group("color_code") is not None:
                 normalized_code = code[:match.start("color_code")] + "#" + code[match.end("color_code"):]
                 successes.append({"raw": code, "normalized": normalized_code})
             else:
-                failures.append(code)
+                successes.append({"raw": code, "normalized": code})
         else:
             failures.append(code)
 

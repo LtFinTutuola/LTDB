@@ -352,19 +352,17 @@ async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, off
                 f"Il nome/descrizione ufficiale trovato sul web per questo articolo è: '{official_name}'.\n\n"
                 f"Analizza queste due informazioni ed effettua una ricerca sul web se necessario, per rispondere alla seguente domanda:\n"
                 f"Ci sono dei caratteri all'interno del vendor code che indicano in modo specifico il colore o la variante cromatica del prodotto?\n\n"
-                f"Se sì, deduci una Regular Expression compatibile con Python (re) che "
-                f"CATTURI esplicitamente la parte di codice indicante il colore in un gruppo nominato `(?P<color_code>...)`.\n"
-                f"Esempio: se il codice è 'ABC-123' e '123' indica il colore, la regex sarà `^(?P<model_code>.*)(?P<color_code>-[0-9]+)$`.\n\n"
+                f"Deduci SEMPRE una Regular Expression compatibile con Python (re) che validi l'intera struttura morfologica del codice fornitore (è consigliato usare `^` e `$`).\n"
+                f"1. Se C'E' una variante colore, il regex DEVE contenere un named capture group `(?P<color_code>...)` che catturi ESATTAMENTE E SOLO la parte di codice indicante il colore.\n"
+                f"2. Se NON c'è alcuna variante colore (il codice è univoco), il regex DEVE validare la struttura del codice ma SENZA alcun gruppo `color_code`.\n"
+                f"3. Usa classi generiche (es. `[A-Z]+[0-9]+`) piuttosto che lunghezze fisse strette (es. `[A-Z]{2}[0-9]{5}`) per la struttura base, al fine di evitare overfitting su questo singolo esempio.\n\n"
+                f"Esempio con colore: se il codice è 'ABC-123' e '123' indica il colore, la regex sarà `^(?P<model_code>[A-Z]+)-(?P<color_code>[0-9]+)$`.\n"
+                f"Esempio senza colore: se il codice è univoco 'XYZ987', la regex sarà `^[A-Z]+[0-9]+$`.\n\n"
                 f"RISPONDI ESATTAMENTE CON UN JSON CON IL SEGUENTE FORMATO E NESSUN ALTRO TESTO (non formattare come markdown):\n"
-                f"Se has_color è true:\n"
                 f"{{\n"
-                f"  \"has_color\": true,\n"
-                f"  \"regex\": \"la_regex_dedotta\",\n"
+                f"  \"has_color\": true o false,\n"
+                f"  \"regex\": \"la_regex_dedotta_strutturale\",\n"
                 f"  \"explanation\": \"Fornisci una spiegazione ASTRATTA e GENERICA della regola, valida per l'intero Brand. È SEVERAMENTE VIETATO menzionare il codice specifico o il colore specifico forniti in input. Descrivi solo la struttura generale.\"\n"
-                f"}}\n"
-                f"Se has_color è false:\n"
-                f"{{\n"
-                f"  \"has_color\": false\n"
                 f"}}"
             )
             
@@ -380,10 +378,15 @@ async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, off
             if match:
                 res_dict = json.loads(match.group(0))
                 
-                # Check if it has color or not
                 has_color = res_dict.get("has_color", False)
-                pattern = res_dict.get("regex", "") if has_color else ""
-                explanation = res_dict.get("explanation") if has_color else "I vendor code di questo brand sono univoci per variante e non contengono suffissi o segmenti dedicati al colore."
+                pattern = res_dict.get("regex", "")
+                explanation = res_dict.get("explanation", "Spiegazione non fornita.")
+                
+                # If there's no color and pattern is missing, fallback to raw structural validation
+                if not has_color and not pattern:
+                    pattern = r"^[A-Z0-9\-\.\_]+$"
+                    explanation = "I vendor code di questo brand sono univoci per variante e non contengono suffissi o segmenti dedicati al colore."
+
                 log_event = "single_shot_success" if has_color else "single_shot_no_color"
 
                 from src.repositories.pim_repo import heuristic_repo

@@ -28,16 +28,15 @@ def _get_model() -> str:
 _SYSTEM_PROMPT = (
     "Riceverai un'analisi strutturale di codici prodotto e devi tradurla in un'espressione regolare Python.\n\n"
     "REGOLE OBBLIGATORIE:\n"
-    "1. Il regex DEVE contenere un named capture group chiamato 'color_code'.\n"
-    "2. Il 'color_code' DEVE catturare ESATTAMENTE E SOLO il segmento del codice fornitore che rappresenta le varianti puramente estetiche (colore/finitura).\n"
-    "3. Il regex NON deve necessariamente matchare l'intero codice fornitore. Deve matchare il segmento di colore e sufficiente contesto per individuarlo in modo univoco (es. `\\*(?P<color_code>[0-9]{2})`).\n"
-    "4. Se l'analisi indica che non c'è nessun codice colore da mascherare (ovvero il codice fornitore identifica già univocamente il modello), DEVI restituire una stringa vuota `\"\"` per il regex.\n"
+    "1. Il regex DEVE validare l'intera struttura morfologica del codice fornitore (è consigliato usare `^` e `$`).\n"
+    "2. Se l'analisi indica la presenza di una variante colore, il regex DEVE contenere un named capture group chiamato 'color_code' che catturi ESATTAMENTE E SOLO il segmento colore.\n"
+    "3. Se l'analisi indica che non c'è nessun codice colore, il regex DEVE validare la struttura del codice senza alcun gruppo 'color_code'. Non restituire mai una stringa vuota.\n"
+    "4. Usa classi generiche (es. `[A-Z]+[0-9]+`) piuttosto che lunghezze fisse strette (es. `[A-Z]{2}[0-9]{5}`) per la struttura base, al fine di evitare overfitting, a meno che il pattern non sia palesemente rigido.\n"
     "5. NON usare lookbehind/lookahead complessi che potrebbero causare backtracking catastrofico.\n"
     "6. Mantieni il regex il più semplice e leggibile possibile.\n\n"
     "Restituisci ESCLUSIVAMENTE un JSON con le seguenti chiavi:\n"
-    "- 'regex': l'espressione regolare Python come stringa (oppure stringa vuota se non serve mascherare)\n"
-    "- 'explanation': spiegazione ASTRATTA e GENERICA della regola di mascheramento, valida per l'intero brand, "
-    "comprensibile da un operatore non tecnico (es. 'I due numeri dopo l'asterisco indicano il colore e verranno ignorati.'). "
+    "- 'regex': l'espressione regolare Python\n"
+    "- 'explanation': spiegazione ASTRATTA e GENERICA della regola, valida per l'intero brand. "
     "È SEVERAMENTE VIETATO menzionare codici specifici o colori puntuali presenti negli esempi."
 )
 

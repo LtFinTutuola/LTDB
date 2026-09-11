@@ -114,13 +114,13 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
                 matched = False
                 for h in heuristics:
                     if not h.pattern:
-                        matched = True
-                        break
+                        continue
                         
                     compiled_regex = re.compile(h.pattern)
                     match = compiled_regex.search(raw_code)
-                    if match and "color_code" in match.groupdict() and match.group("color_code") is not None:
-                        normalized_code = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
+                    if match:
+                        if "color_code" in match.groupdict() and match.group("color_code") is not None:
+                            normalized_code = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
                         matched = True
                         break
                 
@@ -567,13 +567,13 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
                 matched = False
                 for h in heuristics:
                     if not h.pattern:
-                        matched = True
-                        break
+                        continue
                         
                     compiled_regex = re.compile(h.pattern)
                     match = compiled_regex.search(raw_code)
-                    if match and "color_code" in match.groupdict() and match.group("color_code") is not None:
-                        normalized_code = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
+                    if match:
+                        if "color_code" in match.groupdict() and match.group("color_code") is not None:
+                            normalized_code = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
                         matched = True
                         break
                 
