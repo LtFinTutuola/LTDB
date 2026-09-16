@@ -1,5 +1,5 @@
 from typing import List, Optional
-from sqlalchemy import String, ForeignKey, JSON, Boolean, UniqueConstraint
+from sqlalchemy import String, ForeignKey, JSON, Boolean, LargeBinary, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, UUIDMixin, TimestampMixin
@@ -79,3 +79,21 @@ class ArticleBlueprint(Base, UUIDMixin, TimestampMixin):
     brand: Mapped["Brand"] = relationship("Brand", back_populates="blueprints")
     category: Mapped[Optional["Category"]] = relationship("Category", back_populates="blueprints")
     articles: Mapped[List["Article"]] = relationship("Article", back_populates="blueprint")
+    photos: Mapped[List["ArticlePhoto"]] = relationship("ArticlePhoto", back_populates="blueprint", cascade="all, delete-orphan")
+
+
+class ArticlePhoto(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "article_photos"
+    __table_args__ = (
+        UniqueConstraint("article_blueprint_id", "canonical_color_name",
+                         name="uq_blueprint_color_photo"),
+    )
+
+    article_blueprint_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("article_blueprints.id", ondelete="CASCADE"), nullable=False
+    )
+    canonical_color_name: Mapped[str] = mapped_column(String, nullable=False)
+    photo_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+
+    # Relationships
+    blueprint: Mapped["ArticleBlueprint"] = relationship("ArticleBlueprint", back_populates="photos")

@@ -23,6 +23,91 @@ class InvalidFileFormatException(ValueError):
     """Raised when an unsupported or invalid file format is provided."""
     pass
 
+def _resolve_items_with_photos(db: Session, brand_id: str, extracted_items: list, heuristics: list):
+    from src.repositories.photo_repo import photo_repo
+    from src.repositories.wms_repo import wms_repo
+    
+    resolved_items = []
+    unresolved_items = []
+    resolved_blueprints = {}
+    heuristic_warnings = []
+    photo_only_items = []
+    
+    for item in extracted_items:
+        raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
+        raw_code = raw_code.strip().upper()
+        
+        normalized_code = raw_code
+        matched = False
+        color_code_extracted = None
+        for h in heuristics:
+            if not h.pattern:
+                continue
+                
+            compiled_regex = re.compile(h.pattern)
+            match = compiled_regex.search(raw_code)
+            if match:
+                if "color_code" in match.groupdict() and match.group("color_code") is not None:
+                    color_code_extracted = match.group("color_code")
+                    normalized_code = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
+                matched = True
+                break
+        
+        if not matched:
+            heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
+        
+        bp = pim_repo.get_blueprint_by_normalized_code(db, brand_id, normalized_code)
+        if bp:
+            item["article_blueprint_id"] = str(bp.id)
+            item["normalized_vendor_code"] = normalized_code
+            
+            # --- PHOTO AWARE RESOLUTION ---
+            photo_found = None
+            
+            # Caso A
+            if color_code_extracted:
+                existing_article = wms_repo.get_article_by_supplier_code_and_brand(db, brand_id, raw_code)
+                if existing_article and existing_article.colors:
+                    photo_found = photo_repo.get_photo_by_blueprint_and_color(db, str(bp.id), existing_article.colors[0])
+            else:
+                # Caso B
+                colors = item.get("colors") or item.get("Color") or []
+                if isinstance(colors, str):
+                    colors = [colors] if colors.strip() else []
+                if colors:
+                    photo_found = photo_repo.get_photo_by_blueprint_and_color(db, str(bp.id), colors[0])
+            
+            if photo_found:
+                item["existing_photo_id"] = str(photo_found.id)
+                resolved_items.append(item)
+            else:
+                item["needs_photo_only"] = True
+                photo_only_items.append(item)
+                resolved_items.append(item)
+
+            if str(bp.id) not in resolved_blueprints:
+                cat_dict = None
+                if bp.category:
+                    cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
+                    
+                resolved_blueprints[str(bp.id)] = {
+                    "id": str(bp.id),
+                    "is_new": False,
+                    "article_name": bp.article_name,
+                    "description": bp.description,
+                    "category": cat_dict,
+                    "sub_category": None,
+                    "extended_description": bp.extended_description,
+                    "tags": bp.tags,
+                    "materials": bp.materials,
+                    "dimensions": bp.dimensions
+                }
+        else:
+            item["normalized_vendor_code"] = normalized_code
+            unresolved_items.append(item)
+            
+    return resolved_items, unresolved_items, resolved_blueprints, heuristic_warnings, photo_only_items
+
 def accept_job(db: Session, file_path: str) -> str:
     """
     Validates file, checks if a job exists for the given file path in ACCEPTED status.
@@ -95,63 +180,11 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             logger.log_execution("data_ingestion_service", "extraction_agent_completed", "ok")
 
             # 4. Deterministic Pre-Resolution
-            
             heuristics = brand_obj.heuristics
             
-            resolved_items = []
-            unresolved_items = []
-            resolved_blueprints = {}
-            heuristic_warnings = []
-            
-            import asyncio
-            from src.services.heuristic_service import process_single_shot_deduction
-
-            for item in extracted_items:
-                raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
-                raw_code = raw_code.strip().upper()
-                
-                normalized_code = raw_code
-                matched = False
-                for h in heuristics:
-                    if not h.pattern:
-                        continue
-                        
-                    compiled_regex = re.compile(h.pattern)
-                    match = compiled_regex.search(raw_code)
-                    if match:
-                        if "color_code" in match.groupdict() and match.group("color_code") is not None:
-                            normalized_code = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
-                        matched = True
-                        break
-                
-                if not matched:
-                    heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
-                
-                bp = pim_repo.get_blueprint_by_normalized_code(db, brand_id, normalized_code)
-                if bp:
-                    item["article_blueprint_id"] = str(bp.id)
-                    item["normalized_vendor_code"] = normalized_code
-                    resolved_items.append(item)
-                    if str(bp.id) not in resolved_blueprints:
-                        cat_dict = None
-                        if bp.category:
-                            cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
-                            
-                        resolved_blueprints[str(bp.id)] = {
-                            "id": str(bp.id),
-                            "is_new": False,
-                            "article_name": bp.article_name,
-                            "description": bp.description,
-                            "category": cat_dict,
-                            "sub_category": None,
-                            "extended_description": bp.extended_description,
-                            "tags": bp.tags,
-                            "materials": bp.materials,
-                            "dimensions": bp.dimensions
-                        }
-                else:
-                    item["normalized_vendor_code"] = normalized_code
-                    unresolved_items.append(item)
+            resolved_items, unresolved_items, resolved_blueprints, heuristic_warnings, photo_only_items = _resolve_items_with_photos(
+                db, brand_id, extracted_items, heuristics
+            )
                     
             # Group unresolved_items into new_blueprints
             clusters = {}
@@ -170,22 +203,25 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
                                  resolved=len(resolved_items), unresolved=len(unresolved_items),
                                  new_clusters=len(new_blueprints_input))
 
-            # 4. Run ArticleBlueprintsAgent ONLY IF there are unresolved items
-            if new_blueprints_input:
+            # 4. Run ArticleBlueprintsAgent ONLY IF there are unresolved items or photo_only_items
+            if new_blueprints_input or photo_only_items:
                 blueprints_agent = ArticleBlueprintsAgent()
-                logger.log_execution("data_ingestion_service", "blueprints_agent_dispatched", "ok", input_summary={"clusters_count": len(new_blueprints_input)})
+                logger.log_execution("data_ingestion_service", "blueprints_agent_dispatched", "ok", input_summary={"clusters_count": len(new_blueprints_input), "photo_only_count": len(photo_only_items)})
                 blueprints_res = await blueprints_agent.aexecute({
                     "new_blueprints": new_blueprints_input,
+                    "photo_only_items": photo_only_items,
                     "categories": categories,
                     "brand_name": brand_name,
                 })
                 agent_items = blueprints_res["items"]
                 agent_blueprints = blueprints_res["blueprints"]
+                agent_photo_proposals = blueprints_res.get("photo_proposals", [])
                 agent_warnings = blueprints_res.get("warnings", [])
                 logger.log_execution("data_ingestion_service", "blueprints_agent_completed", "ok")
             else:
                 agent_items = []
                 agent_blueprints = []
+                agent_photo_proposals = []
                 agent_warnings = []
                 
             # Merge outputs
@@ -213,6 +249,24 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             
             output_items = [_clean_item(it) for it in resolved_items] + agent_items
             output_blueprints = list(resolved_blueprints.values()) + agent_blueprints
+
+            # Combine photo_proposals (DB ones + Agent ones)
+            photo_proposals_db = []
+            for it in resolved_items:
+                if it.get("existing_photo_id"):
+                    colors = it.get("colors") or it.get("Color") or []
+                    if isinstance(colors, str):
+                        colors = [colors] if colors.strip() else []
+                    
+                    photo_proposals_db.append({
+                        "item_id": it.get("item_id"),
+                        "photo_url": f"/api/v1/ingestion/photos/{it['existing_photo_id']}",
+                        "photo_source": "db_existing",
+                        "canonical_color_candidate": colors[0].lower() if colors else "unknown",
+                        "retry_count": 0,
+                        "_photo_search_ctx": []
+                    })
+            all_photo_proposals = photo_proposals_db + agent_photo_proposals
 
             # 4. Fail-fast category validation and resolution for new blueprints
             from sqlalchemy import func
@@ -246,6 +300,7 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
             result = {
                 "items": output_items,
                 "blueprints": output_blueprints,
+                "photo_proposals": all_photo_proposals,
                 "warnings": extraction_res.get("warnings", []) + heuristic_warnings + agent_warnings,
                 "job_id": job_id,
                 "brand_id": brand_id,
@@ -434,8 +489,9 @@ async def confirm_and_persist_staging(
                 logger.log_execution("data_ingestion_service", "recalculation_task_dispatched", "ok", brand_id=brand_id)
 
     resolved_blueprints: Dict[str, str] = {}
+    item_photo_context = {}
 
-    for item in items:
+    for item, raw_it_dict in zip(items, merged_items):
         bp_group_key = item.blueprint_group_id or item.article_name or f"{item.product_short_description}"
         is_new = True
         if bp_group_key in bp_map:
@@ -492,6 +548,12 @@ async def confirm_and_persist_staging(
                             pim_repo.save_embedding(db, blueprint_id, emb, commit_changes=False)
                         except Exception as exc:
                             print(f"[confirm_and_persist_staging] Warning: Failed to generate embedding for blueprint {blueprint_id}: {exc}")
+                            
+        # Map item_id to blueprint and color for photo download
+        if raw_it_dict.get("item_id"):
+            colors = item.colors or []
+            color_name = colors[0].lower() if colors else "unknown"
+            item_photo_context[raw_it_dict["item_id"]] = {"blueprint_id": blueprint_id, "color_name": color_name}
 
         # 2. Register warehouse movement
         if item.quantity and item.quantity > 0:
@@ -510,6 +572,31 @@ async def confirm_and_persist_staging(
     # Ensure all ingestion changes (blueprints, articles, movements) are committed FIRST
     db.commit()
     logger.log_execution("data_ingestion_service", "confirm_staging_commit", "ok", job_id=job_id)
+
+    # 3. Download and save photos from photo_proposals
+    photo_proposals = job.data.get("photo_proposals") or []
+    if photo_proposals:
+        from src.services.photo_service import download_and_save_photo
+        for proposal in photo_proposals:
+            p_source = proposal.get("photo_source")
+            if p_source == "db_existing":
+                continue
+                
+            it_id = proposal.get("item_id")
+            photo_url = proposal.get("photo_url")
+            
+            if not photo_url or not it_id or it_id not in item_photo_context:
+                continue
+                
+            bp_id = item_photo_context[it_id]["blueprint_id"]
+            color_name = item_photo_context[it_id]["color_name"]
+            
+            try:
+                download_and_save_photo(db, bp_id, color_name, photo_url, commit_changes=False)
+            except Exception as exc:
+                logger.log_execution("data_ingestion_service", "photo_download_failed", "warn",
+                                     photo_url=photo_url, exc=str(exc))
+        db.commit()
 
 
 
@@ -551,60 +638,9 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
             # 3. Deterministic Pre-Resolution
             heuristics = brand_obj.heuristics
             
-            resolved_items = []
-            unresolved_items = []
-            resolved_blueprints = {}
-            heuristic_warnings = []
-            
-            import asyncio
-            from src.services.heuristic_service import process_single_shot_deduction
-
-            for item in extracted_items:
-                raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
-                raw_code = raw_code.strip().upper()
-                
-                normalized_code = raw_code
-                matched = False
-                for h in heuristics:
-                    if not h.pattern:
-                        continue
-                        
-                    compiled_regex = re.compile(h.pattern)
-                    match = compiled_regex.search(raw_code)
-                    if match:
-                        if "color_code" in match.groupdict() and match.group("color_code") is not None:
-                            normalized_code = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
-                        matched = True
-                        break
-                
-                if not matched:
-                    heuristic_warnings.append(f"heuristic_break: '{raw_code}' failed regex validation")
-                
-                bp = pim_repo.get_blueprint_by_normalized_code(db, request.brand_id, normalized_code)
-                if bp:
-                    item["article_blueprint_id"] = str(bp.id)
-                    item["normalized_vendor_code"] = normalized_code
-                    resolved_items.append(item)
-                    if str(bp.id) not in resolved_blueprints:
-                        cat_dict = None
-                        if bp.category:
-                            cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
-                            
-                        resolved_blueprints[str(bp.id)] = {
-                            "id": str(bp.id),
-                            "is_new": False,
-                            "article_name": bp.article_name,
-                            "description": bp.description,
-                            "category": cat_dict,
-                            "sub_category": None,
-                            "extended_description": bp.extended_description,
-                            "tags": bp.tags,
-                            "materials": bp.materials,
-                            "dimensions": bp.dimensions
-                        }
-                else:
-                    item["normalized_vendor_code"] = normalized_code
-                    unresolved_items.append(item)
+            resolved_items, unresolved_items, resolved_blueprints, heuristic_warnings, photo_only_items = _resolve_items_with_photos(
+                db, request.brand_id, extracted_items, heuristics
+            )
             # Group unresolved_items into new_blueprints
             clusters = {}
             for item in unresolved_items:
@@ -619,21 +655,24 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
                 
             new_blueprints_input = list(clusters.values())
 
-            # 4. Run ArticleBlueprintsAgent ONLY IF there are unresolved items
-            if new_blueprints_input:
+            # 4. Run ArticleBlueprintsAgent ONLY IF there are unresolved items or photo_only_items
+            if new_blueprints_input or photo_only_items:
                 blueprints_agent = ArticleBlueprintsAgent()
                 logger.log_execution("data_ingestion_service", "blueprints_agent_single_item", "ok")
                 blueprints_res = await blueprints_agent.aexecute({
                     "new_blueprints": new_blueprints_input,
+                    "photo_only_items": photo_only_items,
                     "categories": categories,
                     "brand_name": brand_name,
                 })
                 agent_items = blueprints_res["items"]
                 agent_blueprints = blueprints_res["blueprints"]
+                agent_photo_proposals = blueprints_res.get("photo_proposals", [])
                 agent_warnings = blueprints_res.get("warnings", [])
             else:
                 agent_items = []
                 agent_blueprints = []
+                agent_photo_proposals = []
                 agent_warnings = []
 
             # Merge outputs
@@ -661,6 +700,24 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
             
             output_items = [_clean_item(it) for it in resolved_items] + agent_items
             output_blueprints = list(resolved_blueprints.values()) + agent_blueprints
+
+            # Combine photo_proposals (DB ones + Agent ones)
+            photo_proposals_db = []
+            for it in resolved_items:
+                if it.get("existing_photo_id"):
+                    colors = it.get("colors") or it.get("Color") or []
+                    if isinstance(colors, str):
+                        colors = [colors] if colors.strip() else []
+                    
+                    photo_proposals_db.append({
+                        "item_id": it.get("item_id"),
+                        "photo_url": f"/api/v1/ingestion/photos/{it['existing_photo_id']}",
+                        "photo_source": "db_existing",
+                        "canonical_color_candidate": colors[0].lower() if colors else "unknown",
+                        "retry_count": 0,
+                        "_photo_search_ctx": []
+                    })
+            all_photo_proposals = photo_proposals_db + agent_photo_proposals
 
             # 4. Fail-fast category validation for new blueprints
             from sqlalchemy import func
@@ -690,6 +747,7 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
             result = {
                 "items": output_items,
                 "blueprints": output_blueprints,
+                "photo_proposals": all_photo_proposals,
                 "warnings": extraction_res.get("warnings", []) + heuristic_warnings + agent_warnings,
                 "job_id": job_id,
                 "brand_id": request.brand_id,

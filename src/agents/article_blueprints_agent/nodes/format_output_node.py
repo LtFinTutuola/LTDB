@@ -74,6 +74,7 @@ def format_output_node(state: BlueprintsGraphState) -> dict:
     result = {
         "output_items": clean_items,
         "output_blueprints": clean_blueprints,
+        "photo_proposals": state.photo_proposals,
     }
     logger.log_agent("format_output_node", "node_exit", "ok", output=result)
     return result

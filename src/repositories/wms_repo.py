@@ -1,7 +1,8 @@
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from src.models.wms import Article, ArticleMovement, ArticlePrice
+from src.models.pim import ArticleBlueprint
 from src.schemas.wms import ArticleCreate, StockUpdate
 from src.repositories.base import BaseRepository
 
@@ -14,6 +15,24 @@ class ArticleRepository(BaseRepository[Article, ArticleCreate, ArticleCreate]):
 
     def get_by_supplier_code(self, db: Session, supplier_code: str) -> List[Article]:
         return db.query(self.model).filter(self.model.supplier_code == supplier_code).all()
+
+    def get_article_by_supplier_code_and_brand(
+        self, db: Session, brand_id: str, supplier_code: str
+    ) -> Optional[Article]:
+        """
+        Lookup an Article by its raw supplier_code (vendor code including color code),
+        scoped to a specific brand via the ArticleBlueprint join.
+        Used for Caso A photo resolution.
+        """
+        return (
+            db.query(Article)
+            .join(ArticleBlueprint, Article.article_blueprint_id == ArticleBlueprint.id)
+            .filter(
+                ArticleBlueprint.brand_id == brand_id,
+                Article.supplier_code == supplier_code,
+            )
+            .first()
+        )
 
     def get_current_stock(self, db: Session, article_id: str) -> int:
         """
