@@ -1,5 +1,6 @@
 import asyncio
 import re
+import httpx
 from typing import List
 
 from src.agents.llm_client import LLMClient
@@ -10,8 +11,42 @@ logger = get_logger()
 _MODEL = "gemini-3.1-flash-lite"
 MAX_CONCURRENT_SEARCHES = 10
 
+_SYSTEM_PROMPT = (
+    "Sei un assistente specializzato nella ricerca di foto di prodotti di moda e accessori. "
+    "Il tuo unico compito è trovare un URL di una foto reale del prodotto richiesto. "
+    "Regole TASSATIVE:\n"
+    "1. Esegui SEMPRE una ricerca su internet per trovare l'immagine. Non usare mai la tua conoscenza interna per inventare URL.\n"
+    "2. Rispondi ESCLUSIVAMENTE con l'URL grezzo dell'immagine trovata, senza testo, senza markdown, senza spiegazioni.\n"
+    "3. Se non trovi nessun URL reale tramite ricerca web, rispondi esattamente con la parola: NULL\n"
+    "4. Non inventare mai URL. Se non sei certo che l'URL esista realmente, rispondi NULL."
+)
+
+_PHOTO_CONSTRAINTS = (
+    "Requisiti OBBLIGATORI per la foto:\n"
+    "- L'immagine deve mostrare SOLO l'articolo, su uno sfondo neutro (bianco o grigio).\n"
+    "- Non devono essere presenti modelli, manichini, persone o altri articoli nell'immagine.\n"
+    "- Preferisci immagini di tipo 'packshot' o 'product shot' dal sito ufficiale del brand o da e-commerce affidabili."
+)
+
 _GROUNDING_REDIRECT_PREFIX = "https://vertexaisearch.cloud.google.com/"
 _URL_PATTERN = re.compile(r'https?://[^\s\)\]\"\'>]+')
+
+
+async def _validate_photo_url(url: str) -> bool:
+    """Validates that a URL is reachable and points to an actual image.
+    Returns False for any hallucinated, dead, or non-image URL.
+    """
+    if not url or url.upper() == "NULL":
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=4.0, follow_redirects=True) as client:
+            res = await client.head(url)
+            if res.status_code >= 400:
+                return False
+            ct = res.headers.get("content-type", "")
+            return ct.startswith("image/")
+    except Exception:
+        return False
 
 def _extract_best_url(extracted_urls: list, raw_text: str) -> str | None:
     """
@@ -44,11 +79,10 @@ async def _search_photo_for_item(client: LLMClient, item: dict, brand_name: str,
         photo_ctx = item.get("_photo_search_ctx", [])
         
         prompt = (
-            f"Cerca un'immagine del prodotto {brand_name} {item.get('article_name', '')} "
-            f"nel colore {color_str}.\n"
-            f"Rispondi ESCLUSIVAMENTE con l'URL diretto dell'immagine più rappresentativa del prodotto, "
-            f"senza testo aggiuntivo, senza markdown, senza spiegazioni. "
-            f"Restituisci solo l'URL grezzo, ad esempio: https://example.com/image.jpg"
+            f"Esegui una ricerca su internet e trova una foto reale del prodotto: "
+            f"{brand_name} {item.get('article_name', '')} nel colore {color_str}.\n"
+            f"{_PHOTO_CONSTRAINTS}\n"
+            f"Restituisci SOLO l'URL grezzo dell'immagine trovata. Se non trovi nessun risultato reale, rispondi: NULL"
         )
         
         if photo_ctx:
@@ -59,24 +93,30 @@ async def _search_photo_for_item(client: LLMClient, item: dict, brand_name: str,
         try:
             raw_res, extracted_urls = await client.call_with_grounding(
                 model_name=_MODEL,
-                system_prompt=(
-                    "Sei un assistente specializzato nella ricerca di foto di prodotti. "
-                    "Rispondi sempre e solo con l'URL grezzo dell'immagine, senza aggiungere altro testo."
-                ),
+                system_prompt=_SYSTEM_PROMPT,
                 prompt=prompt,
                 pipeline_stage="Stage 5 - Photo Search",
                 temperature=0.2,
             )
             
-            photo_url = _extract_best_url(extracted_urls, raw_res)
+            raw_res_stripped = raw_res.strip()
+            
+            # URL Guard: extract best candidate then validate it
+            candidate_url = None if raw_res_stripped.upper() == "NULL" else _extract_best_url(extracted_urls, raw_res_stripped)
+            if candidate_url:
+                is_valid = await _validate_photo_url(candidate_url)
+                if not is_valid:
+                    logger.log_agent("color_photo_search_node", "url_guard_rejected", "warn",
+                                     rejected_url=candidate_url, item_id=item.get("item_id"))
+                    candidate_url = None
             
             new_ctx = list(photo_ctx)
             new_ctx.append({"role": "user", "content": prompt})
-            new_ctx.append({"role": "model", "content": raw_res})
+            new_ctx.append({"role": "model", "content": raw_res_stripped})
             
             return {
                 "item_id": item.get("item_id"),
-                "photo_url": photo_url,
+                "photo_url": candidate_url,
                 "photo_source": "web_search",
                 "canonical_color_candidate": color_str.lower(),
                 "retry_count": len(photo_ctx) // 2,

@@ -7,6 +7,12 @@ from src.repositories.photo_repo import photo_repo
 from src.models.pim import Brand
 from src.schemas.data_ingestion import PhotoRetryRequest
 from src.agents.llm_client import LLMClient
+from src.agents.article_blueprints_agent.nodes.color_photo_search_node import (
+    _extract_best_url,
+    _validate_photo_url,
+    _SYSTEM_PROMPT,
+    _PHOTO_CONSTRAINTS,
+)
 
 logger = get_logger()
 
@@ -59,8 +65,14 @@ async def retry_photo_search(db: Session, job_id: str, request: PhotoRetryReques
         feedback += f"Il modello/prodotto nell'immagine non è corretto. Devi cercare '{brand_name} {item.get('article_name', '')}'. "
     if not request.color_ok:
         feedback += f"Il colore dell'articolo nell'immagine non è corretto. Deve essere '{proposal.get('canonical_color_candidate')}'. "
+    if request.user_feedback:
+        feedback += f"Inoltre, l'utente ha fornito questo feedback aggiuntivo: '{request.user_feedback}'. "
         
-    feedback += "Per favore, riprova con un URL di immagine diverso che rispetti rigorosamente questi vincoli."
+    feedback += (
+        f"Per favore, esegui una NUOVA ricerca su internet e trova un'immagine diversa che rispetti rigorosamente questi vincoli.\n"
+        f"{_PHOTO_CONSTRAINTS}\n"
+        f"Restituisci SOLO l'URL grezzo dell'immagine trovata. Se non trovi nessun risultato reale, rispondi: NULL"
+    )
     
     client = LLMClient()
     new_ctx = list(ctx)
@@ -71,17 +83,31 @@ async def retry_photo_search(db: Session, job_id: str, request: PhotoRetryReques
     
     raw_res, extracted_urls = await client.call_with_grounding(
         model_name="gemini-3.1-flash-lite",
-        system_prompt="Sei un assistente che cerca foto di articoli di abbigliamento.",
+        system_prompt=_SYSTEM_PROMPT,
         prompt=full_prompt,
         pipeline_stage="Stage 5 - Photo Retry",
         temperature=0.4, # Slightly higher temperature for retry
     )
     
-    photo_url = extracted_urls[0] if extracted_urls else None
+    raw_res_stripped = raw_res.strip()
     
-    new_ctx.append({"role": "model", "content": raw_res})
+    # URL Guard: extract best candidate then validate it
+    candidate_url = None if raw_res_stripped.upper() == "NULL" else _extract_best_url(extracted_urls, raw_res_stripped)
+    if candidate_url:
+        is_valid = await _validate_photo_url(candidate_url)
+        if not is_valid:
+            logger.log_execution("photo_service", "url_guard_rejected", "warn",
+                                  rejected_url=candidate_url, item_id=request.item_id)
+            candidate_url = None
     
-    proposal["photo_url"] = photo_url
+    photo_url = candidate_url
+    new_ctx.append({"role": "model", "content": raw_res_stripped})
+    
+    # Only overwrite photo_url if the new candidate passed the guard.
+    # If the guard rejected the URL (candidate_url is None), preserve the
+    # previous value so the user still sees the last accepted photo.
+    if candidate_url is not None:
+        proposal["photo_url"] = candidate_url
     proposal["retry_count"] = retry_count + 1
     proposal["_photo_search_ctx"] = new_ctx
     
