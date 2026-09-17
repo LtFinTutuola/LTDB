@@ -1,9 +1,9 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Body
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Body, Response
 from sqlalchemy.orm import Session
 from src.core.database import get_db
-from src.schemas.data_ingestion import ExtractionRequest, JobStatusResponse, SingleItemIngestionRequest, StagingRevisionRequest, StagingRevisionResponse
-from src.services import data_ingestion_service, staging_revision_service
+from src.schemas.data_ingestion import ExtractionRequest, JobStatusResponse, SingleItemIngestionRequest, StagingRevisionRequest, StagingRevisionResponse, PhotoRetryRequest
+from src.services import data_ingestion_service, staging_revision_service, photo_service
 from src.core.logger import get_logger
 import time
 
@@ -189,6 +189,40 @@ async def process_single_item(
         db.rollback()
         logger.log_execution("data_ingestion_router", "exception_caught", "err",
                              exc=e, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e) if str(e).strip() else "unknown server error"
+        )
+
+
+@router.post("/photo-retry/{job_id}", status_code=status.HTTP_200_OK)
+async def retry_photo(job_id: str, request: PhotoRetryRequest, db: Session = Depends(get_db)):
+    """
+    Retries photo search for a specific item, or sets a manual URL.
+    """
+    try:
+        updated_proposal = await photo_service.retry_photo_search(db, job_id, request)
+        return {"status": "success", "data": updated_proposal}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e) if str(e).strip() else "unknown server error"
+        )
+
+
+@router.get("/photos/{photo_id}", response_class=Response)
+def serve_photo(photo_id: str, db: Session = Depends(get_db)):
+    """
+    Serves a photo from the database.
+    """
+    try:
+        return photo_service.serve_photo(db, photo_id)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e) if str(e).strip() else "unknown server error"

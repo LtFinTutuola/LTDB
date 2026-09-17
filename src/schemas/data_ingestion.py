@@ -146,6 +146,12 @@ class StagingRevisionResponse(BaseModel):
     status: str
     data: dict
 
+class PhotoRetryRequest(BaseModel):
+    """Request body for POST /api/v1/ingestion/photo-retry/{job_id}."""
+    item_id: str = Field(..., description="ID dell'item per cui ritentare la ricerca foto")
+    user_feedback: Optional[str] = Field(default=None, description="Feedback testuale dell'utente")
+    new_url: Optional[str] = Field(default=None, description="Short-circuit: URL diretto fornito dall'utente. Bypassa l'agente.")
+
 
 # ---------------------------------------------------------------------------
 # Heuristic Deduction Schemas

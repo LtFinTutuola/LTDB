@@ -1,5 +1,6 @@
 from typing import Optional
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from src.models.staging import StagingArea
 from src.core.logger import get_logger
 
@@ -48,6 +49,10 @@ def update_job_data(db: Session, job_id: str, data: dict) -> Optional[StagingAre
     db_obj = get_job(db, job_id)
     if db_obj:
         db_obj.data = data
+        # flag_modified is required because SQLAlchemy does not detect in-place
+        # mutations of JSON/dict fields — without it, the ORM considers the field
+        # unchanged and skips the UPDATE even after commit().
+        flag_modified(db_obj, "data")
         db_obj.revision_count = (db_obj.revision_count or 0) + 1
         db.commit()
         db.refresh(db_obj)
