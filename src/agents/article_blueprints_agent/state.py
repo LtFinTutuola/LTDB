@@ -8,6 +8,7 @@ class BlueprintsGraphState(BaseModel):
     new_blueprints: List[dict] = Field(default_factory=list, description="Newly synthesized blueprint definitions (pre-grouped).")
     brand_name: str = Field(default="", description="The name of the brand for web search context.")
     categories: dict = Field(default_factory=dict, description="Brand category hierarchy.")
+    resolved_blueprints: dict = Field(default_factory=dict, description="Existing blueprints fetched from DB.")
 
     # Output accumulators
     output_items: List[dict] = Field(default_factory=list, description="Final formatted items list linking to blueprints.")

@@ -11,21 +11,32 @@ logger = get_logger()
 _MODEL = "gemini-3.1-flash-lite"
 MAX_CONCURRENT_SEARCHES = 10
 
-_SYSTEM_PROMPT = (
-    "Sei un assistente specializzato nella ricerca di foto di prodotti di moda e accessori. "
-    "Il tuo unico compito è trovare un URL di una foto reale del prodotto richiesto. "
-    "Regole TASSATIVE:\n"
-    "1. Esegui SEMPRE una ricerca su internet per trovare l'immagine. Non usare mai la tua conoscenza interna per inventare URL.\n"
-    "2. Rispondi ESCLUSIVAMENTE con l'URL grezzo dell'immagine trovata, senza testo, senza markdown, senza spiegazioni.\n"
-    "3. Se non trovi nessun URL reale tramite ricerca web, rispondi esattamente con la parola: NULL\n"
-    "4. Non inventare mai URL. Se non sei certo che l'URL esista realmente, rispondi NULL."
+_SYSTEM_PROMPT_QUERY_GEN = (
+    "Sei un esperto SEO e specialista nell'estrazione di immagini di prodotti e-commerce tramite motori di ricerca. "
+    "Il tuo unico compito è generare la stringa di ricerca perfetta per trovare la foto di un prodotto, partendo dai suoi dati anagrafici.\n\n"
+    "REGOLE TASSATIVE:\n"
+    "1. Analizza i dettagli forniti e seleziona SOLO i termini essenziali per identificare il prodotto univocamente.\n"
+    "2. DEVI SEMPRE INCLUDERE il Vendor Code (codice articolo) fornito, in quanto è l'identificativo primario per la ricerca.\n"
+    "3. Seleziona il brand, il nome articolo e il colore di riferimento. Ignora descrizioni lunghe o concetti astratti.\n"
+    "4. Aggiungi keyword di contesto come 'packshot', 'product shot' o 'white background' per favorire risultati da e-commerce puliti.\n"
+    "5. Non usare alcun saluto, spiegazione o testo introduttivo.\n"
+    "6. Non formattare la risposta in markdown (niente grassetto, niente virgolette o backticks).\n"
+    "7. La risposta deve contenere ESCLUSIVAMENTE la stringa di ricerca grezza, pronta per essere immessa su Google."
 )
 
-_PHOTO_CONSTRAINTS = (
-    "Requisiti OBBLIGATORI per la foto:\n"
-    "- L'immagine deve mostrare SOLO l'articolo, su uno sfondo neutro (bianco o grigio).\n"
-    "- Non devono essere presenti modelli, manichini, persone o altri articoli nell'immagine.\n"
-    "- Preferisci immagini di tipo 'packshot' o 'product shot' dal sito ufficiale del brand o da e-commerce affidabili."
+_SYSTEM_PROMPT_SEARCH = (
+    "Sei un agente autonomo specializzato nella ricerca di immagini (packshot/product shot) di articoli di moda e lusso su e-commerce. "
+    "Riceverai in input una query di ricerca ottimizzata. Il tuo unico scopo è eseguire una ricerca web tramite i tuoi tool e restituire l'URL "
+    "di un'immagine ad alta risoluzione che rispetti rigorosamente determinati vincoli visivi.\n\n"
+    "REGOLE TASSATIVE DI COMPORTAMENTO:\n"
+    "1. Usa la tua funzionalità di web search per trovare le immagini. NON inventare MAI URL basandoti sulla tua conoscenza interna.\n"
+    "2. Rispondi ESCLUSIVAMENTE con l'URL grezzo dell'immagine trovata (es. https://sito.com/foto.jpg), senza testo extra, markdown o saluti.\n"
+    "3. Se non trovi nessun risultato reale che rispetti le regole sottostanti, rispondi ESATTAMENTE con la parola: NULL.\n\n"
+    "VINCOLI VISIVI OBBLIGATORI (L'IMMAGINE SARÀ SCARTATA SE NON LI RISPETTA):\n"
+    "- Sfondo Neutro: L'immagine deve avere uno sfondo bianco, grigio chiaro o comunque neutro (stile e-commerce/still-life).\n"
+    "- Soggetto Singolo: Deve essere presente SOLO l'articolo cercato. Non ammettere bundle o composizioni miste.\n"
+    "- Nessun Modello/Indossato: Sono ASSOLUTAMENTE VIETATE foto con modelli umani, manichini, parti del corpo (es. mani che tengono una borsa), o foto in stile editoriale/streetwear.\n"
+    "- Affidabilità: Privilegia immagini provenienti dal sito ufficiale del brand o da e-commerce riconosciuti (Farfetch, Zalando, Giglio, Luisaviaroma, ecc.). Evita marketplace dubbi."
 )
 
 _GROUNDING_REDIRECT_PREFIX = "https://vertexaisearch.cloud.google.com/"
@@ -38,13 +49,14 @@ async def _validate_photo_url(url: str) -> bool:
     """
     if not url or url.upper() == "NULL":
         return False
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     try:
-        async with httpx.AsyncClient(timeout=4.0, follow_redirects=True) as client:
-            res = await client.head(url)
-            if res.status_code >= 400:
-                return False
-            ct = res.headers.get("content-type", "")
-            return ct.startswith("image/")
+        async with httpx.AsyncClient(headers=headers, timeout=4.0, follow_redirects=True) as client:
+            async with client.stream("GET", url) as res:
+                if res.status_code >= 400:
+                    return False
+                ct = res.headers.get("content-type", "")
+                return ct.startswith("image/")
     except Exception:
         return False
 
@@ -70,32 +82,42 @@ def _extract_best_url(extracted_urls: list, raw_text: str) -> str | None:
     return extracted_urls[0] if extracted_urls else None
 
 
-async def _search_photo_for_item(client: LLMClient, item: dict, brand_name: str, sem: asyncio.Semaphore) -> dict:
+async def _search_photo_for_item(client: LLMClient, item: dict, blueprint: dict, brand_name: str, sem: asyncio.Semaphore) -> dict:
     async with sem:
         colors = item.get("colors", [])
         color_str = colors[0] if colors else "unknown"
         
-        # Check context
         photo_ctx = item.get("_photo_search_ctx", [])
         
-        prompt = (
-            f"Esegui una ricerca su internet e trova una foto reale del prodotto: "
-            f"{brand_name} {item.get('article_name', '')} nel colore {color_str}.\n"
-            f"{_PHOTO_CONSTRAINTS}\n"
-            f"Restituisci SOLO l'URL grezzo dell'immagine trovata. Se non trovi nessun risultato reale, rispondi: NULL"
+        # --- Stage 1: Query Generation (No Grounding) ---
+        bp_info = (
+            f"Brand: {brand_name}\n"
+            f"Article Name: {blueprint.get('article_name', item.get('article_name', ''))}\n"
+            f"Vendor Code: {item.get('vendor_code', '')}\n"
+            f"Color: {color_str}\n"
+            f"Description: {blueprint.get('description', '')}"
         )
         
-        if photo_ctx:
-            # We are in retry
-            context_str = "\n".join(f"{msg.get('role')}: {msg.get('content')}" for msg in photo_ctx)
-            prompt = f"Previous context:\n{context_str}\n\n{prompt}"
-            
+        query_prompt = f"Genera la query di ricerca ottimizzata per trovare la foto di questo prodotto. Devi assolutamente includere il Vendor Code nella stringa finale.\n\nDati Articolo:\n{bp_info}"
+        
         try:
+            generated_query = await client.call(
+                model_name=_MODEL,
+                system_prompt=_SYSTEM_PROMPT_QUERY_GEN,
+                prompt=query_prompt,
+                pipeline_stage="Stage 5 - Photo Query Gen",
+                temperature=0.1
+            )
+            generated_query = generated_query.strip()
+            
+            # --- Stage 2: Grounded Search ---
+            search_prompt = f"Esegui una ricerca su internet e trova una foto reale del prodotto usando questa query:\n{generated_query}"
+            
             raw_res, extracted_urls = await client.call_with_grounding(
                 model_name=_MODEL,
-                system_prompt=_SYSTEM_PROMPT,
-                prompt=prompt,
-                pipeline_stage="Stage 5 - Photo Search",
+                system_prompt=_SYSTEM_PROMPT_SEARCH,
+                prompt=search_prompt,
+                pipeline_stage="Stage 5 - Photo Search Grounded",
                 temperature=0.2,
             )
             
@@ -111,8 +133,8 @@ async def _search_photo_for_item(client: LLMClient, item: dict, brand_name: str,
                     candidate_url = None
             
             new_ctx = list(photo_ctx)
-            new_ctx.append({"role": "user", "content": prompt})
-            new_ctx.append({"role": "model", "content": raw_res_stripped})
+            new_ctx.append({"role": "user", "content": query_prompt})
+            new_ctx.append({"role": "model", "content": generated_query})
             
             return {
                 "item_id": item.get("item_id"),
@@ -141,21 +163,29 @@ async def color_photo_search_node(state: BlueprintsGraphState) -> dict:
     client = LLMClient()
     sem = asyncio.Semaphore(MAX_CONCURRENT_SEARCHES)
     
-    # gather all items that need photo
+    # Build a blueprint lookup map
+    bp_map = {}
+    for bp in state.new_blueprints:
+        bp_map[bp.get("id")] = bp
+    for bp_id, bp in state.resolved_blueprints.items():
+        bp_map[bp_id] = bp
+        
     items_to_process = []
     
     # 1. New blueprints items
     for bp in state.new_blueprints:
         for item in bp.get("cluster_items", []):
-            items_to_process.append(item)
+            items_to_process.append((item, bp))
             
     # 2. Photo only items
     for item in state.photo_only_items:
-        items_to_process.append(item)
+        bp_id = item.get("article_blueprint_id")
+        bp = bp_map.get(bp_id, {})
+        items_to_process.append((item, bp))
         
     tasks = [
-        _search_photo_for_item(client, item, state.brand_name, sem)
-        for item in items_to_process
+        _search_photo_for_item(client, item, bp, state.brand_name, sem)
+        for item, bp in items_to_process
     ]
     
     proposals = await asyncio.gather(*tasks)

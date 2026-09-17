@@ -212,6 +212,7 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
                     "photo_only_items": photo_only_items,
                     "categories": categories,
                     "brand_name": brand_name,
+                    "resolved_blueprints": resolved_blueprints,
                 })
                 agent_items = blueprints_res["items"]
                 agent_blueprints = blueprints_res["blueprints"]
@@ -594,8 +595,12 @@ async def confirm_and_persist_staging(
             try:
                 download_and_save_photo(db, bp_id, color_name, photo_url, commit_changes=False)
             except Exception as exc:
-                logger.log_execution("data_ingestion_service", "photo_download_failed", "warn",
+                logger.log_execution("data_ingestion_service", "photo_download_failed", "error",
                                      photo_url=photo_url, exc=str(exc))
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Impossibile scaricare la foto per blueprint '{bp_id}' (colore: {color_name}): {exc}"
+                )
         db.commit()
 
 
@@ -664,6 +669,7 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
                     "photo_only_items": photo_only_items,
                     "categories": categories,
                     "brand_name": brand_name,
+                    "resolved_blueprints": resolved_blueprints,
                 })
                 agent_items = blueprints_res["items"]
                 agent_blueprints = blueprints_res["blueprints"]

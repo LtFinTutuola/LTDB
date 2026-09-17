@@ -54,6 +54,7 @@ class ArticleBlueprintsAgent(BaseAgent):
                 photo_only_items=input_data.get("photo_only_items", []),
                 categories=input_data.get("categories", {}),
                 brand_name=input_data.get("brand_name", ""),
+                resolved_blueprints=input_data.get("resolved_blueprints", {}),
             )
         except Exception as exc:
             raise AgentException(

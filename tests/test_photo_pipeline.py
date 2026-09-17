@@ -162,17 +162,24 @@ async def test_retry_with_new_url_short_circuit(db_session, monkeypatch):
         headers = {"content-type": "image/jpeg"}
         
     class MockAsyncClient:
+        def __init__(self, **kwargs):
+            pass
         async def __aenter__(self):
             return self
         async def __aexit__(self, exc_type, exc_val, exc_tb):
             pass
-        async def head(self, url, **kwargs):
-            return MockResponse()
+        def stream(self, method, url, **kwargs):
+            class MockStreamContext:
+                async def __aenter__(self):
+                    return MockResponse()
+                async def __aexit__(self, exc_type, exc_val, exc_tb):
+                    pass
+            return MockStreamContext()
             
     import httpx
     monkeypatch.setattr(httpx, "AsyncClient", MockAsyncClient)
     
-    req = PhotoRetryRequest(item_id="item1", model_ok=True, color_ok=True, new_url="https://via.placeholder.com/1")
+    req = PhotoRetryRequest(item_id="item1", new_url="https://via.placeholder.com/1")
     
     res = await retry_photo_search(db_session, job_id, req)
     
@@ -232,9 +239,19 @@ async def test_url_guard_preserves_previous_url_on_rejection():
     mock_httpx_client = AsyncMock()
     mock_httpx_client.__aenter__ = AsyncMock(return_value=mock_httpx_client)
     mock_httpx_client.__aexit__ = AsyncMock(return_value=False)
-    mock_httpx_client.head = AsyncMock(return_value=mock_response_404)
+    class MockStreamContext:
+        async def __aenter__(self):
+            return mock_response_404
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
 
-    req = PhotoRetryRequest(item_id="item_x", model_ok=True, color_ok=False)
+    mock_httpx_client.stream = MagicMock(return_value=MockStreamContext())
+
+    mock_llm_client.call = AsyncMock(
+        return_value="test query"
+    )
+
+    req = PhotoRetryRequest(item_id="item_x", user_feedback="wrong color")
 
     with patch("src.services.photo_service.LLMClient", return_value=mock_llm_client), \
          patch("src.agents.article_blueprints_agent.nodes.color_photo_search_node.httpx.AsyncClient", return_value=mock_httpx_client):
@@ -261,7 +278,13 @@ async def test_url_guard_rejects_hallucinated_url():
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.head = AsyncMock(return_value=mock_response)
+    class MockStreamContext:
+        async def __aenter__(self):
+            return mock_response
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    mock_client.stream = MagicMock(return_value=MockStreamContext())
 
     with patch("src.agents.article_blueprints_agent.nodes.color_photo_search_node.httpx.AsyncClient", return_value=mock_client):
         result = await _validate_photo_url("https://img.giglio.com/images/prodotti/FAKEURL_1.jpg")
@@ -280,7 +303,13 @@ async def test_url_guard_accepts_valid_image_url():
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.head = AsyncMock(return_value=mock_response)
+    class MockStreamContext:
+        async def __aenter__(self):
+            return mock_response
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    mock_client.stream = MagicMock(return_value=MockStreamContext())
 
     with patch("src.agents.article_blueprints_agent.nodes.color_photo_search_node.httpx.AsyncClient", return_value=mock_client):
         result = await _validate_photo_url("https://assets.armani.com/real_product.jpg")

@@ -10,8 +10,8 @@ from src.agents.llm_client import LLMClient
 from src.agents.article_blueprints_agent.nodes.color_photo_search_node import (
     _extract_best_url,
     _validate_photo_url,
-    _SYSTEM_PROMPT,
-    _PHOTO_CONSTRAINTS,
+    _SYSTEM_PROMPT_QUERY_GEN,
+    _SYSTEM_PROMPT_SEARCH,
 )
 
 logger = get_logger()
@@ -30,14 +30,15 @@ async def retry_photo_search(db: Session, job_id: str, request: PhotoRetryReques
     proposal = proposals[proposal_idx]
     
     if request.new_url:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
         try:
-            async with httpx.AsyncClient() as client:
-                res = await client.head(request.new_url, timeout=5.0, follow_redirects=True)
-                if res.status_code >= 400:
-                    raise HTTPException(status_code=422, detail="URL provided is not reachable")
-                ct = res.headers.get("content-type", "")
-                if not ct.startswith("image/"):
-                    raise HTTPException(status_code=422, detail="URL provided does not point to an image")
+            async with httpx.AsyncClient(headers=headers, timeout=5.0, follow_redirects=True) as client:
+                async with client.stream("GET", request.new_url) as res:
+                    if res.status_code >= 400:
+                        raise HTTPException(status_code=422, detail="URL provided is not reachable")
+                    ct = res.headers.get("content-type", "")
+                    if not ct.startswith("image/"):
+                        raise HTTPException(status_code=422, detail="URL provided does not point to an image")
         except httpx.RequestError:
             raise HTTPException(status_code=422, detail="URL provided is not reachable")
             
@@ -58,35 +59,51 @@ async def retry_photo_search(db: Session, job_id: str, request: PhotoRetryReques
     if not item:
         raise HTTPException(status_code=404, detail="Item reference not found")
         
+    # Get blueprint for context
+    blueprints = job.data.get("blueprints", [])
+    blueprint = next((bp for bp in blueprints if bp.get("id") == item.get("article_blueprint_id")), {})
+    
     # Build feedback prompt
     ctx = proposal.get("_photo_search_ctx", [])
-    feedback = f"Sbagliato. L'utente dice: "
-    if not request.model_ok:
-        feedback += f"Il modello/prodotto nell'immagine non è corretto. Devi cercare '{brand_name} {item.get('article_name', '')}'. "
-    if not request.color_ok:
-        feedback += f"Il colore dell'articolo nell'immagine non è corretto. Deve essere '{proposal.get('canonical_color_candidate')}'. "
-    if request.user_feedback:
-        feedback += f"Inoltre, l'utente ha fornito questo feedback aggiuntivo: '{request.user_feedback}'. "
-        
-    feedback += (
-        f"Per favore, esegui una NUOVA ricerca su internet e trova un'immagine diversa che rispetti rigorosamente questi vincoli.\n"
-        f"{_PHOTO_CONSTRAINTS}\n"
-        f"Restituisci SOLO l'URL grezzo dell'immagine trovata. Se non trovi nessun risultato reale, rispondi: NULL"
+    
+    bp_info = (
+        f"Brand: {brand_name}\n"
+        f"Article Name: {blueprint.get('article_name', item.get('article_name', ''))}\n"
+        f"Vendor Code: {item.get('vendor_code', '')}\n"
+        f"Color: {proposal.get('canonical_color_candidate', '')}\n"
+        f"Description: {blueprint.get('description', '')}"
     )
+    
+    feedback = f"Sbagliato. L'utente ha fornito questo feedback:\n'{request.user_feedback}'\n\n"
+    feedback += f"Usa queste informazioni sull'articolo per generare una NUOVA query corretta:\n{bp_info}"
     
     client = LLMClient()
     new_ctx = list(ctx)
     new_ctx.append({"role": "user", "content": feedback})
     
     context_str = "\n".join(f"{msg.get('role')}: {msg.get('content')}" for msg in new_ctx)
-    full_prompt = f"Previous context:\n{context_str}\n\nRitenta la ricerca."
+    full_prompt = f"Previous context:\n{context_str}\n\nGenera la query di ricerca."
+    
+    # Stage 1: Generate Query
+    generated_query = await client.call(
+        model_name="gemini-3.1-flash-lite",
+        system_prompt=_SYSTEM_PROMPT_QUERY_GEN,
+        prompt=full_prompt,
+        pipeline_stage="Stage 5 - Photo Retry Query Gen",
+        temperature=0.4, # Slightly higher temperature for retry
+    )
+    
+    generated_query = generated_query.strip()
+    
+    # Stage 2: Grounded Search
+    search_prompt = f"Esegui una ricerca su internet e trova una foto reale del prodotto usando questa query:\n{generated_query}"
     
     raw_res, extracted_urls = await client.call_with_grounding(
         model_name="gemini-3.1-flash-lite",
-        system_prompt=_SYSTEM_PROMPT,
-        prompt=full_prompt,
-        pipeline_stage="Stage 5 - Photo Retry",
-        temperature=0.4, # Slightly higher temperature for retry
+        system_prompt=_SYSTEM_PROMPT_SEARCH,
+        prompt=search_prompt,
+        pipeline_stage="Stage 5 - Photo Retry Grounded",
+        temperature=0.2,
     )
     
     raw_res_stripped = raw_res.strip()
@@ -101,7 +118,7 @@ async def retry_photo_search(db: Session, job_id: str, request: PhotoRetryReques
             candidate_url = None
     
     photo_url = candidate_url
-    new_ctx.append({"role": "model", "content": raw_res_stripped})
+    new_ctx.append({"role": "model", "content": generated_query})
     
     # Only overwrite photo_url if the new candidate passed the guard.
     # If the guard rejected the URL (candidate_url is None), preserve the
@@ -135,7 +152,8 @@ def download_and_save_photo(db: Session, blueprint_id: str, color_name: str, pho
         return
         
     try:
-        with httpx.Client(timeout=5.0, follow_redirects=True) as client:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        with httpx.Client(headers=headers, timeout=5.0, follow_redirects=True) as client:
             resp = client.get(photo_url)
             resp.raise_for_status()
             
