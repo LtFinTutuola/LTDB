@@ -72,6 +72,63 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
             .first()
         )
 
+    def get_all_embeddings(self, db: Session) -> list[dict]:
+        """
+        Retrieve lightweight dict list of ALL blueprints (cross-brand) where embedding is not null.
+        Used for cross-brand similarity search.
+
+        Note: Uses both SQL and Python-level filtering because SQLite JSON columns
+        may not respond reliably to .isnot(None) for JSON-typed NULL values.
+        """
+        blueprints = (
+            db.query(
+                ArticleBlueprint.id,
+                ArticleBlueprint.embedding,
+                ArticleBlueprint.category_id,
+                ArticleBlueprint.article_name,
+                ArticleBlueprint.description,
+                ArticleBlueprint.dimensions,
+            )
+            .filter(ArticleBlueprint.embedding.isnot(None))
+            .all()
+        )
+        result = [
+            {
+                "id": str(bp.id),
+                "embedding": bp.embedding,
+                "category_id": str(bp.category_id) if bp.category_id else None,
+                "article_name": bp.article_name,
+                "description": bp.description,
+                "dimensions": bp.dimensions,
+            }
+            for bp in blueprints
+            if bp.embedding is not None  # Python-level safety net for SQLite JSON null quirk
+        ]
+        logger.log_execution("pim_repo", "db_all_embeddings_fetched", "ok", count=len(result))
+        return result
+
+    def search_by_filters(self, db: Session, filters: dict) -> list[ArticleBlueprint]:
+        """
+        Dynamic filter-based query on ArticleBlueprint.
+        Supported filter keys: brand_name (ilike), category_name (ilike).
+        Additional JSON-field filtering (colors, tags, status) is handled
+        in Python by the search_service layer after this call.
+        """
+        from src.models.pim import Brand, Category  # local import to avoid circularity
+
+        query = db.query(ArticleBlueprint).join(Brand, ArticleBlueprint.brand_id == Brand.id)
+
+        brand_name = filters.get("brand_name")
+        if brand_name:
+            query = query.filter(Brand.name.ilike(f"%{brand_name}%"))
+
+        category_name = filters.get("category_name")
+        if category_name:
+            query = query.join(Category, ArticleBlueprint.category_id == Category.id).filter(
+                Category.name.ilike(f"%{category_name}%")
+            )
+
+        return query.limit(200).all()
 
 
 class CategoryRepository:

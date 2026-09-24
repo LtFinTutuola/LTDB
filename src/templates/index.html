@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LTDB</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <!-- Top Bar -->
+    <header class="top-bar">
+        <div class="profile-chip">admin</div>
+    </header>
+
+    <!-- Main Canvas: chat (left) + detail (right) -->
+    <main id="canvas" class="canvas canvas--chat">
+
+        <!-- Left panel: Chat -->
+        <section id="chat-panel" class="chat-panel">
+            <div id="chat-messages" class="chat-messages">
+                <div class="chat-message chat-message--system chat-message--welcome">
+                    Benvenuto in LTDB. Cerca articoli nel catalogo oppure importa nuovi dati con il tasto +.
+                </div>
+            </div>
+            <!-- Input area -->
+            <div class="chat-input-area">
+                <div class="chat-input-wrapper">
+                    <button id="btn-plus" class="btn-plus" title="Azioni">+</button>
+                    
+                    <div id="import-form-container" style="display: none; flex: 1;"></div>
+                    
+                    <input id="chat-input" class="chat-input" type="text"
+                           placeholder="Cerca nel catalogo...">
+                           
+                    <button id="btn-send" class="btn-send">Invia</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right panel: Staging / Search Results (hidden in chat mode) -->
+        <section id="detail-panel" class="detail-panel"></section>
+
+    </main>
+
+    <!-- Brand list injected server-side for immediate dropdown availability -->
+    <script>
+        window.__LTDB_BRANDS__ = {{ brands_json | safe }};
+    </script>
+    <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

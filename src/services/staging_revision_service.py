@@ -200,12 +200,16 @@ def _apply_update_blueprint(
     new_cat_id = None
     if "category" in op.fields:
         cat_ref = op.fields["category"]
-        if not cat_ref or not isinstance(cat_ref, dict) or "id" not in cat_ref:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Operation {op_index} (update_blueprint): 'category' must contain an 'id'")
+        if not cat_ref or not isinstance(cat_ref, dict) or ("id" not in cat_ref and "description" not in cat_ref):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Operation {op_index} (update_blueprint): 'category' must contain an 'id' or 'description'")
         
-        cat = db.query(Category).filter_by(id=cat_ref["id"]).first()
+        if "id" in cat_ref:
+            cat = db.query(Category).filter_by(id=cat_ref["id"]).first()
+        else:
+            cat = db.query(Category).filter_by(name=cat_ref["description"], parent_id=None).first()
+
         if not cat:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Operation {op_index} (update_blueprint): category '{cat_ref['id']}' not found in database")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Operation {op_index} (update_blueprint): category not found in database")
         
         new_cat_id = cat.id
         op.fields["category"] = {"id": str(cat.id), "description": cat.name}
@@ -219,15 +223,22 @@ def _apply_update_blueprint(
         if sub_ref is None:
             pass # allow clearing
         else:
-            if not isinstance(sub_ref, dict) or "id" not in sub_ref:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Operation {op_index} (update_blueprint): 'sub_category' must contain an 'id' or be null")
+            if not isinstance(sub_ref, dict) or ("id" not in sub_ref and "description" not in sub_ref):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Operation {op_index} (update_blueprint): 'sub_category' must contain an 'id' or 'description' or be null")
             
-            sub_cat = db.query(Category).filter_by(id=sub_ref["id"]).first()
+            if "id" in sub_ref:
+                sub_cat = db.query(Category).filter_by(id=sub_ref["id"]).first()
+            else:
+                query = db.query(Category).filter_by(name=sub_ref["description"])
+                if parent_cat_id:
+                    query = query.filter_by(parent_id=parent_cat_id)
+                sub_cat = query.first()
+
             if not sub_cat:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Operation {op_index} (update_blueprint): sub_category '{sub_ref['id']}' not found in database")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Operation {op_index} (update_blueprint): sub_category not found in database")
             
             if parent_cat_id and str(sub_cat.parent_id) != str(parent_cat_id):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Operation {op_index} (update_blueprint): sub_category '{sub_ref['id']}' does not belong to category '{parent_cat_id}'")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Operation {op_index} (update_blueprint): sub_category '{sub_cat.id}' does not belong to category '{parent_cat_id}'")
             
             op.fields["sub_category"] = {"id": str(sub_cat.id), "description": sub_cat.name}
     else:

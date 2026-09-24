@@ -474,7 +474,8 @@ async def confirm_and_persist_staging(
                 # For DDT imports, we might still dispatch recalculation to background, but for now we won't block
                 # Get historical codes
                 from src.models.wms import Article
-                historical_articles = db.query(Article.supplier_code).filter(Article.brand_id == brand_id).all()
+                from src.models.pim import ArticleBlueprint
+                historical_articles = db.query(Article.supplier_code).join(ArticleBlueprint, Article.article_blueprint_id == ArticleBlueprint.id).filter(ArticleBlueprint.brand_id == brand_id).all()
                 historical_codes = [a.supplier_code for a in historical_articles if a.supplier_code]
                 
                 corpus = list(set(historical_codes + breaking_codes))
