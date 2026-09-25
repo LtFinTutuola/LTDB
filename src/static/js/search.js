@@ -32,10 +32,23 @@ export async function executeSearch(query) {
     }
 }
 
+let _lastResults = [];
+let _activeSearchItem = null;
+
 export function renderSearchResults(results) {
+    _lastResults = results || [];
+    if (_lastResults.length === 1) {
+        _activeSearchItem = _lastResults[0];
+    } else {
+        _activeSearchItem = null;
+    }
+    _doRender();
+}
+
+function _doRender() {
     const panel = getDetailPanel();
 
-    if (!results || results.length === 0) {
+    if (!_lastResults || _lastResults.length === 0) {
         panel.innerHTML = `
             <div class="detail-panel__header">
                 <div class="detail-panel__header-title-box">
@@ -54,28 +67,49 @@ export function renderSearchResults(results) {
         return;
     }
 
-    const grid = results.map(_buildResultCard).join('');
+    const grid = _lastResults.map(_buildResultCard).join('');
+
+    let extendedHtml = '';
+    if (_activeSearchItem) {
+        extendedHtml = _buildExtendedCard(_activeSearchItem);
+    }
 
     panel.innerHTML = `
         <div class="detail-panel__header">
             <div class="detail-panel__header-title-box">
                 <h2 class="detail-panel__title">Risultati ricerca</h2>
-                <span style="font-size:12px;color:var(--text-muted)">${results.length} articoli</span>
+                <span style="font-size:12px;color:var(--text-muted)">${_lastResults.length} articoli</span>
             </div>
             <button class="btn-close-panel" title="Chiudi">✕</button>
         </div>
         <div class="detail-panel__content">
+            ${extendedHtml}
             <div class="results-grid">${grid}</div>
         </div>`;
 
     panel.querySelector('.btn-close-panel').addEventListener('click', exitSplitScreen);
 
+    // Attach click listeners to result cards
+    panel.querySelectorAll('.result-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('.result-card__edit-btn')) return;
+            const data = JSON.parse(card.dataset.item);
+            _activeSearchItem = data;
+            _doRender();
+        });
+    });
+
     // Attach edit button listeners
-    panel.querySelectorAll('.result-card__edit-btn').forEach(btn => {
+    panel.querySelectorAll('.result-card__edit-btn, .btn-edit-extended').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            const card = btn.closest('.result-card');
-            const data = JSON.parse(card.dataset.item);
+            const card = btn.closest('.result-card') || btn.closest('.blueprint-card');
+            let data;
+            if (card.classList.contains('result-card')) {
+                data = JSON.parse(card.dataset.item);
+            } else {
+                data = _activeSearchItem;
+            }
             _openEditPopup(data, card);
         });
     });
@@ -112,6 +146,47 @@ function _buildResultCard(item) {
             <span class="stock-badge stock-badge--${stockClass}">${stockLabel}</span>
         </div>
         <button class="result-card__edit-btn" title="Modifica articolo">✏️</button>
+    </div>`;
+}
+
+function _buildExtendedCard(item) {
+    const photoHtml = item.photo_id
+        ? `<img src="${api.getPhotoUrl(item.photo_id)}" alt="${_esc(item.article_name)}"
+               onerror="this.style.display='none'" style="cursor:zoom-in;" onclick="if(window._openImageModal) window._openImageModal(this.src)">`
+        : `<div class="photo-placeholder" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:32px;">🖼</div>`;
+
+    const tagsHtml = (item.tags || []).map(t => `<span class="chip-tag"><span class="tag-text">${_esc(t)}</span></span>`).join('');
+    
+    return `
+    <div class="blueprint-card" style="margin-bottom: var(--space-xl); border: 2px solid var(--border-focus); cursor: default;">
+        <div class="blueprint-card__row-top">
+            <div class="blueprint-card__photo-col">
+                ${photoHtml}
+            </div>
+            <div class="blueprint-card__info-col">
+                <div style="display:flex; justify-content:space-between;">
+                    <span class="chip chip--small">${_esc(item.brand_name || 'Brand')}</span>
+                    <button class="btn-edit-extended" style="background:transparent;border:none;cursor:pointer;font-size:18px;" title="Modifica articolo">✏️</button>
+                </div>
+                <div class="blueprint-card__name">
+                    <span>${_esc(item.article_name || '')}</span>
+                </div>
+                <div>
+                    <span style="font-size:var(--font-size-sm);color:var(--text-secondary);">${_esc(item.category_name || 'Nessuna categoria')}</span>
+                </div>
+                <div class="blueprint-card__desc">
+                    <span>${_esc(item.description || '')}</span>
+                </div>
+                <div class="blueprint-card__meta">
+                    ${tagsHtml}
+                </div>
+                <div style="margin-top:auto; font-size:var(--font-size-sm); color:var(--text-secondary);">
+                    Giacenza: <strong style="color:var(--text-primary);">${item.stock}</strong> | 
+                    Materiali: ${_esc((item.materials || []).join(', ') || '-')} |
+                    Colori: ${_esc((item.colors || []).join(', ') || '-')}
+                </div>
+            </div>
+        </div>
     </div>`;
 }
 
@@ -190,8 +265,14 @@ function _openEditPopup(item, cardEl) {
             }
             // Update cached data
             Object.assign(item, fields);
-            try { cardEl.dataset.item = JSON.stringify(item); } catch {}
+            try { if (cardEl) cardEl.dataset.item = JSON.stringify(item); } catch {}
             overlay.remove();
+            
+            // Re-render to update the grid and the extended view
+            if (_activeSearchItem && _activeSearchItem.blueprint_id === item.blueprint_id) {
+                Object.assign(_activeSearchItem, fields);
+            }
+            _doRender();
         } catch (err) {
             errorEl.textContent = err.message;
             errorEl.classList.add('visible');

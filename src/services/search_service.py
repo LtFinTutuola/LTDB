@@ -50,6 +50,7 @@ Examples:
 """
 
 _MAX_RESULTS = 20
+_SIMILARITY_THRESHOLD = 0.65
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +68,12 @@ async def execute_semantic_search(db: Session, query: str) -> dict:
 
     # Step 1 — LLM routing
     interpretation = await _interpret_query(query)
+
+    # Step 1.5 — Anti-empty fallback for filter mode
+    if interpretation.mode == "filter":
+        if not interpretation.brand_name and not interpretation.category_name and \
+           not interpretation.colors and not interpretation.status and not interpretation.tags:
+            interpretation.mode = "similarity"
 
     # Step 2 — Execute search
     if interpretation.mode == "filter":
@@ -171,7 +178,8 @@ async def _similarity_search(db: Session, free_text: str) -> list[dict]:
         if not stored:
             continue
         score = _cosine_similarity(query_embedding, stored)
-        scored.append((score, bp_data["id"]))
+        if score >= _SIMILARITY_THRESHOLD:
+            scored.append((score, bp_data["id"]))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     top_ids = [bp_id for _, bp_id in scored[:_MAX_RESULTS]]
