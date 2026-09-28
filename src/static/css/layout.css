@@ -1,0 +1,28 @@
+/* ============================================================
+   MAIN CANVAS & LAYOUT ENGINE (CSS Grid layout 3 columns)
+   ============================================================ */
+
+/*
+   The layout is a 3-column grid:
+   [sidebar] | [chat] | [detail panel]
+*/
+
+#app-shell {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+}
+
+.canvas {
+    flex: 1;
+    display: grid;
+    /* Default: Chat takes all remaining space, detail panel is 0px */
+    grid-template-columns: 1fr 0px;
+    height: 100vh;
+    transition: grid-template-columns 0.45s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.canvas--split {
+    grid-template-columns: 1fr 2fr;
+}

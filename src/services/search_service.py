@@ -103,7 +103,7 @@ async def _interpret_query(query: str) -> SearchInterpretation:
     try:
         client = LLMClient()
         raw = await client.call(
-            model_name="gemini-2.0-flash-lite",
+            model_name="gemini-3.5-flash-lite",
             system_prompt=_SEARCH_SYSTEM_PROMPT,
             prompt=query,
             pipeline_stage="search_interpretation",

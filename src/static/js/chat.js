@@ -1,6 +1,7 @@
 /**
  * chat.js
  * Handles the import flow: plus menu, form rendering, submission, and polling.
+ * Generates Artifact Boxes for background jobs.
  */
 import * as api from './api.js';
 import {
@@ -14,9 +15,47 @@ import * as staging from './staging.js';
 let _plusMenuEl = null;
 let _activeForm = null; // { type: 'ddt'|'single' }
 
+// Track job data for artifact boxes
+const _jobDataMap = new Map();
+
 // ---- Init ----
 export function init() {
-    // nothing async needed at init
+    // Listen for panel closed event to make artifact box clickable
+    document.addEventListener('detail:closed', () => {
+        document.querySelectorAll('.artifact-box').forEach(box => {
+            const jid = box.dataset.jobId;
+            if (_jobDataMap.has(jid)) {
+                box.classList.add('artifact-box--clickable');
+            }
+        });
+    });
+
+    // Quando l'importazione viene confermata definitivamente
+    document.addEventListener('ingestionDone', async (e) => {
+        const jobId = e.detail?.jobId;
+        if (!jobId) return;
+
+        // Async polling: 3 attempts, 1 sec interval
+        for (let i = 0; i < 3; i++) {
+            try {
+                await new Promise(r => setTimeout(r, 1000));
+                await api.pollJobStatus(jobId);
+                // If it succeeds (returns status), the job is still there. Wait for the next loop.
+            } catch (err) {
+                // If it fails (e.g. 404), the job was deleted!
+                const box = document.querySelector(`.artifact-box[data-job-id="${jobId}"]`);
+                if (box) {
+                    box.classList.remove('artifact-box--clickable');
+                    const icon = box.querySelector('.artifact-box__open-icon');
+                    if (icon) icon.remove();
+                    updateArtifactBoxStatus(jobId, '✅ Completato');
+                }
+                _jobDataMap.delete(jobId);
+                return;
+            }
+        }
+        console.warn(`Job ${jobId} not removed from staging after 3 attempts. Box remains active.`);
+    });
 }
 
 // ---- Plus Menu ----
@@ -27,8 +66,12 @@ export function togglePlusMenu() {
     _plusMenuEl = document.createElement('div');
     _plusMenuEl.className = 'plus-menu';
     _plusMenuEl.innerHTML = `
-        <div class="plus-menu__item" data-action="ddt">📄 Importa DDT</div>
-        <div class="plus-menu__item" data-action="single">📦 Importa Articolo</div>
+        <div class="plus-menu__item" data-action="ddt">
+            <span class="material-symbols-rounded">description</span> Importa DDT
+        </div>
+        <div class="plus-menu__item" data-action="single">
+            <span class="material-symbols-rounded">inventory_2</span> Importa Articolo
+        </div>
     `;
     _plusMenuEl.addEventListener('click', (e) => {
         const action = e.target.closest('[data-action]')?.dataset.action;
@@ -117,6 +160,47 @@ function _showFormSingle() {
 
 function _val(id) { return document.getElementById(id)?.value?.trim() ?? ''; }
 
+// ---- Artifact Box ----
+function emitArtifactBox(title, jobId, type) {
+    const box = document.createElement('div');
+    box.className = 'artifact-box';
+    box.dataset.jobId = jobId;
+
+    const icon = type === 'ddt' ? 'description' : 'inventory_2';
+
+    box.innerHTML = `
+        <span class="material-symbols-rounded artifact-box__icon">${icon}</span>
+        <div class="artifact-box__body">
+            <span class="artifact-box__title">${title}</span>
+            <span class="artifact-box__status"><span class="spinner"></span>In elaborazione...</span>
+        </div>
+        <span class="material-symbols-rounded artifact-box__open-icon">open_in_full</span>
+    `;
+
+    box.addEventListener('click', () => {
+        if (box.classList.contains('artifact-box--clickable') && _jobDataMap.has(jobId)) {
+            enterSplitScreen();
+            staging.renderStagingPanel(_jobDataMap.get(jobId), jobId);
+            setMode(Mode.STAGING);
+            box.classList.remove('artifact-box--clickable');
+        }
+    });
+
+    addMessage(box, 'system');
+}
+
+function updateArtifactBoxStatus(jobId, status, isError = false) {
+    const box = document.querySelector(`.artifact-box[data-job-id="${jobId}"]`);
+    if (!box) return;
+    const statusEl = box.querySelector('.artifact-box__status');
+    if (statusEl) {
+        statusEl.innerHTML = status;
+        if (isError) statusEl.style.color = 'var(--error)';
+        else statusEl.style.color = 'var(--success)';
+    }
+}
+
+
 // ---- Form submissions (called by main.js handleSend) ----
 export async function submitDDTForm() {
     const brandId = _val('f-brand');
@@ -131,7 +215,7 @@ export async function submitDDTForm() {
     try {
         const { job_id } = await api.extractDDT(filePath, brandId);
         appState.currentJobId = job_id;
-        addMessage('⏳ DDT in elaborazione...', 'system');
+        emitArtifactBox('Importazione DDT', job_id, 'ddt');
         _startPolling(job_id);
     } catch (err) {
         addMessage(`❌ Errore: ${err.message}`, 'error');
@@ -170,7 +254,7 @@ export async function submitSingleItemForm() {
     try {
         const { job_id } = await api.ingestSingleItem(payload);
         appState.currentJobId = job_id;
-        addMessage('⏳ Articolo in elaborazione...', 'system');
+        emitArtifactBox('Importazione Articolo', job_id, 'single');
         _startPolling(job_id);
     } catch (err) {
         addMessage(`❌ Errore: ${err.message}`, 'error');
@@ -195,7 +279,8 @@ async function _pollOnce(jobId) {
         if (result.status === 'COMPLETED') {
             clearInterval(appState.pollingTimer);
             appState.pollingTimer = null;
-            addMessage('✅ Dati pronti per la revisione.', 'success');
+            updateArtifactBoxStatus(jobId, '✅ Da confermare');
+            _jobDataMap.set(jobId, result.data);
             enterSplitScreen();
             staging.renderStagingPanel(result.data, jobId);
             setMode(Mode.STAGING);
@@ -203,6 +288,7 @@ async function _pollOnce(jobId) {
             clearInterval(appState.pollingTimer);
             appState.pollingTimer = null;
             const errMsg = result.data?.error || 'errore sconosciuto';
+            updateArtifactBoxStatus(jobId, '❌ Elaborazione fallita', true);
             addMessage(`❌ Elaborazione fallita: ${errMsg}`, 'error');
             _resetToIdle();
         }
@@ -210,6 +296,7 @@ async function _pollOnce(jobId) {
     } catch (err) {
         clearInterval(appState.pollingTimer);
         appState.pollingTimer = null;
+        updateArtifactBoxStatus(jobId, '❌ Errore', true);
         addMessage(`❌ Errore polling: ${err.message}`, 'error');
         _resetToIdle();
     }

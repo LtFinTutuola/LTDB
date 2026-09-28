@@ -106,8 +106,8 @@ function _render() {
     const btnClass = hasChanges ? 'btn-apply-changes' : 'btn-confirm-import';
 
     html += `
-        <div class="detail-panel__footer" style="padding: var(--space-md); border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; background: var(--bg-primary);">
-            <button class="${btnClass} primary-btn" style="padding: 10px 20px; border-radius: var(--border-radius); border: none; font-weight: 600; cursor: pointer; background: ${hasChanges ? 'var(--warning)' : 'var(--success)'}; color: #fff;">${btnText}</button>
+        <div class="detail-panel__footer" style="padding: var(--space-md) var(--space-lg); display: flex; justify-content: flex-end;">
+            <button class="${btnClass} primary-btn" style="padding: 10px 20px; border-radius: var(--radius-pill); border: none; font-weight: 600; cursor: pointer; background: ${hasChanges ? 'var(--warning)' : 'var(--success)'}; color: #fff;">${btnText}</button>
         </div>
     `;
 
@@ -267,9 +267,9 @@ function _buildPhotoCarousel(bpId, items, photoProposals) {
     if (items.length > 1) {
         navHtml = `
             <div class="photo-carousel-nav" style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
-                <button class="btn-prev-photo" data-bp-id="${_esc(bpId)}" style="background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--text-primary);">◀</button>
+                <button class="btn-prev-photo" data-bp-id="${_esc(bpId)}" style="background:var(--bg-elevated);border:1px solid var(--border-color);border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--text-primary);">◀</button>
                 <span style="font-size:12px;font-weight:600;color:var(--text-secondary);text-align:center;flex:1;">${_esc(colorLabel)}<br><span style="font-weight:normal;">(${currentIndex + 1}/${items.length})</span></span>
-                <button class="btn-next-photo" data-bp-id="${_esc(bpId)}" style="background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--text-primary);">▶</button>
+                <button class="btn-next-photo" data-bp-id="${_esc(bpId)}" style="background:var(--bg-elevated);border:1px solid var(--border-color);border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--text-primary);">▶</button>
             </div>
         `;
     }
@@ -631,7 +631,7 @@ async function _handleConfirm() {
     try {
         await api.confirmIngestion(_jobId);
         addMessage('✅ Dati importati con successo nel catalogo.', 'success');
-        document.dispatchEvent(new CustomEvent('ingestionDone'));
+        document.dispatchEvent(new CustomEvent('ingestionDone', { detail: { jobId: _jobId } }));
     } catch (err) {
         addMessage(`❌ Conferma fallita: ${err.message}`, 'error');
         if (btn) btn.disabled = false;

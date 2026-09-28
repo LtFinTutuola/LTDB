@@ -1,0 +1,35 @@
+<aside id="sidebar" class="sidebar">
+  <!-- Expanded header: logo + brand name + toggle -->
+  <div class="sidebar__header">
+    <div class="sidebar__brand">
+      <img src="/static/assets/logo.png" alt="La Triestina" class="sidebar__logo-img">
+      <span class="sidebar__logo-text">La Triestina</span>
+    </div>
+    <button id="btn-sidebar-toggle" class="sidebar__toggle" title="Comprimi">
+      <span class="material-symbols-rounded">menu</span>
+      <img src="/static/assets/logo.png" alt="La Triestina" class="sidebar__toggle-logo">
+    </button>
+  </div>
+
+  <!-- Navigation -->
+  <div class="sidebar__top">
+    <nav class="sidebar__nav">
+      <button class="sidebar__nav-item" data-action="brands">
+        <span class="material-symbols-rounded">style</span>
+        <span class="sidebar__nav-label">Brands</span>
+      </button>
+      <button class="sidebar__nav-item" data-action="categories">
+        <span class="material-symbols-rounded">category</span>
+        <span class="sidebar__nav-label">Categorie</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- Bottom: admin chip + settings -->
+  <div class="sidebar__bottom">
+    <div class="chip chip--admin">admin</div>
+    <button class="sidebar__settings-btn" title="Impostazioni">
+      <span class="material-symbols-rounded">settings</span>
+    </button>
+  </div>
+</aside>

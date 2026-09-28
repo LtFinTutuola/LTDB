@@ -49,6 +49,13 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
             detail="No fields provided for update."
         )
 
+    # --- Prevent description loss ---
+    if "description" in update_data and not update_data["description"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Il campo 'description' non può essere vuoto o nullo durante un aggiornamento."
+        )
+
     # --- Validate lists ---
     if "tags" in update_data and not update_data["tags"]:
         raise HTTPException(

@@ -35,7 +35,7 @@ class SearchResultItem(BaseModel):
     article_name: str
     brand_name: str
     category_name: Optional[str] = None
-    description: str
+    description: Optional[str] = None
     photo_id: Optional[str] = None
     colors: List[str] = Field(default_factory=list)
     tags: List[str] = Field(default_factory=list)

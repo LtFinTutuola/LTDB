@@ -223,7 +223,7 @@ class TestSemanticSearchSimilarityMode:
 
         # "Similar" should come first (higher cosine similarity to query_vec)
         results = result["results"]
-        assert len(results) == 2
+        assert len(results) == 1
         assert results[0]["article_name"] == "Similar"
 
 

@@ -2,7 +2,9 @@
  * search.js
  * Handles the semantic search flow:
  *  - Submits a natural language query to POST /catalog/search/semantic
- *  - Renders results as an e-commerce-style grid in the detail panel
+ *  - Emits an Artifact Box in the chat flow (Punto 5)
+ *  - Renders results as a list in the detail panel
+ *  - In-place expansion of selected result (Punto 6): A, A, B, A, A pattern
  *  - Opens a popup for quick inline edits via PATCH /catalog/{blueprint_id}
  */
 import * as api from './api.js';
@@ -12,38 +14,95 @@ import {
     getDetailPanel, _esc,
 } from './main.js';
 
+// ---- Module state ----
+let _lastResults = [];
+let _lastQuery = '';
+let _expandedIndex = null; // index of the currently expanded result card
+let _currentArtifactBox = null;
+
 // ---- Public API ----
 
 export async function executeSearch(query) {
     setMode(Mode.SEARCH);
-    const loadingMsg = addMessage('<span class="spinner"></span>Ricerca in corso...', 'system');
-    loadingMsg.innerHTML = '<span class="spinner"></span>Ricerca in corso...';
+    _lastQuery = query;
+    _expandedIndex = null;
+
+    // Punto 5 refactored: create the artifact box immediately (like chat.js does for imports)
+    const box = _emitSearchArtifactBox(query, -1, []);
 
     try {
         const result = await api.semanticSearch(query);
-        loadingMsg.remove();
+        const count = (result.results || []).length;
+        _lastResults = result.results || [];
+
+        // Update the existing artifact box with the results
+        _updateSearchArtifactBox(box, query, count, _lastResults);
+
+        // Auto-open the detail panel
         enterSplitScreen();
-        addMessage(result.message, 'system');
-        renderSearchResults(result.results || []);
+        _doRender();
+
+        setMode(Mode.SEARCH);
     } catch (err) {
-        loadingMsg.remove();
+        _updateSearchArtifactBox(box, query, -2, [], err.message);
         addMessage(`❌ Ricerca fallita: ${err.message}`, 'error');
         setMode(Mode.IDLE);
     }
 }
 
-let _lastResults = [];
-let _activeSearchItem = null;
+// ---- Artifact Box (Punto 5) ----
 
-export function renderSearchResults(results) {
-    _lastResults = results || [];
-    if (_lastResults.length === 1) {
-        _activeSearchItem = _lastResults[0];
-    } else {
-        _activeSearchItem = null;
-    }
-    _doRender();
+function _emitSearchArtifactBox(query, count, results) {
+    const box = document.createElement('div');
+    box.className = 'artifact-box'; // Initially not clickable while loading
+    
+    // Initial loading state
+    box.innerHTML = `
+        <span class="material-symbols-rounded artifact-box__icon">search</span>
+        <div class="artifact-box__body">
+            <span class="artifact-box__title">Ricerca &ldquo;${_esc(query)}&rdquo;</span>
+            <span class="artifact-box__status" data-status-target><span class="spinner"></span>Ricerca in corso...</span>
+        </div>
+        <span class="material-symbols-rounded artifact-box__open-icon">open_in_full</span>
+    `;
+
+    // Usa addMessage() — lo stesso pattern di chat.js
+    addMessage(box, 'system');
+    return box;
 }
+
+function _updateSearchArtifactBox(box, query, count, results, errorMsg = null) {
+    let subtitle = '';
+    if (count === -2) {
+        subtitle = `Errore: ${errorMsg}`;
+    } else if (count === 0) {
+        subtitle = 'Nessun risultato trovato';
+    } else if (count === 1) {
+        subtitle = 'Trovato 1 risultato corrispondente';
+    } else {
+        subtitle = `Trovati ${count} risultati corrispondenti`;
+    }
+
+    const statusEl = box.querySelector('[data-status-target]');
+    if (statusEl) {
+        statusEl.innerHTML = subtitle;
+        if (count === -2) statusEl.style.color = 'var(--error)';
+        else statusEl.style.color = 'var(--success)';
+    }
+
+    if (count >= 0) {
+        box.classList.add('artifact-box--clickable');
+        box.addEventListener('click', () => {
+            _lastQuery = query;
+            _lastResults = results;
+            _expandedIndex = null;
+            enterSplitScreen();
+            _doRender();
+        });
+    }
+}
+
+// ---- Rendering (Punto 6: in-place expansion) ----
 
 function _doRender() {
     const panel = getDetailPanel();
@@ -53,6 +112,7 @@ function _doRender() {
             <div class="detail-panel__header">
                 <div class="detail-panel__header-title-box">
                     <h2 class="detail-panel__title">Risultati ricerca</h2>
+                    <span style="font-size:12px;color:var(--text-muted)">0 articoli</span>
                 </div>
                 <button class="btn-close-panel" title="Chiudi">✕</button>
             </div>
@@ -61,63 +121,56 @@ function _doRender() {
                     <span class="empty-state__icon">🔍</span>
                     <p class="empty-state__text">Nessun risultato trovato</p>
                 </div>
-                </div>
             </div>`;
-        panel.querySelector('.btn-close-panel').addEventListener('click', exitSplitScreen);
+        panel.querySelector('.btn-close-panel').addEventListener('click', _closePanel);
         return;
     }
 
-    const grid = _lastResults.map(_buildResultCard).join('');
-
-    let extendedHtml = '';
-    if (_activeSearchItem) {
-        extendedHtml = _buildExtendedCard(_activeSearchItem);
-    }
-
-    panel.innerHTML = `
-        <div class="detail-panel__header">
-            <div class="detail-panel__header-title-box">
-                <h2 class="detail-panel__title">Risultati ricerca</h2>
-                <span style="font-size:12px;color:var(--text-muted)">${_lastResults.length} articoli</span>
-            </div>
-            <button class="btn-close-panel" title="Chiudi">✕</button>
+    // Build the header
+    const header = document.createElement('div');
+    header.className = 'detail-panel__header';
+    header.innerHTML = `
+        <div class="detail-panel__header-title-box">
+            <h2 class="detail-panel__title">Risultati ricerca</h2>
+            <span style="font-size:12px;color:var(--text-muted)">${_lastResults.length} articoli</span>
         </div>
-        <div class="detail-panel__content">
-            ${extendedHtml}
-            <div class="results-grid">${grid}</div>
-        </div>`;
+        <button class="btn-close-panel" title="Chiudi">✕</button>`;
+    header.querySelector('.btn-close-panel').addEventListener('click', _closePanel);
 
-    panel.querySelector('.btn-close-panel').addEventListener('click', exitSplitScreen);
+    // Build content as a list, with in-place expansion (Punto 6)
+    const content = document.createElement('div');
+    content.className = 'detail-panel__content';
 
-    // Attach click listeners to result cards
-    panel.querySelectorAll('.result-card').forEach(card => {
-        card.addEventListener('click', (e) => {
-            if (e.target.closest('.result-card__edit-btn')) return;
-            const data = JSON.parse(card.dataset.item);
-            _activeSearchItem = data;
-            _doRender();
-        });
+    const list = document.createElement('div');
+    list.className = 'search-results-list';
+
+    _lastResults.forEach((item, idx) => {
+        if (_expandedIndex === idx) {
+            // Template B: expanded card in-place
+            const expanded = _buildExpandedCard(item, idx);
+            list.appendChild(expanded);
+        } else {
+            // Template A: compact preview card
+            const preview = _buildPreviewCard(item, idx);
+            list.appendChild(preview);
+        }
     });
 
-    // Attach edit button listeners
-    panel.querySelectorAll('.result-card__edit-btn, .btn-edit-extended').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const card = btn.closest('.result-card') || btn.closest('.blueprint-card');
-            let data;
-            if (card.classList.contains('result-card')) {
-                data = JSON.parse(card.dataset.item);
-            } else {
-                data = _activeSearchItem;
-            }
-            _openEditPopup(data, card);
-        });
-    });
+    content.appendChild(list);
+
+    // Replace panel content
+    panel.innerHTML = '';
+    panel.appendChild(header);
+    panel.appendChild(content);
 }
 
-// ---- Card builder ----
+// ---- Template A: Compact Preview Card ----
 
-function _buildResultCard(item) {
+function _buildPreviewCard(item, idx) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'search-preview-card';
+    wrapper.dataset.idx = idx;
+
     const stockClass =
         item.stock > 5  ? 'available' :
         item.stock > 0  ? 'low' : 'zero';
@@ -126,68 +179,103 @@ function _buildResultCard(item) {
 
     const photoHtml = item.photo_id
         ? `<img src="${api.getPhotoUrl(item.photo_id)}" alt="${_esc(item.article_name)}"
-               onerror="this.parentElement.innerHTML='<span class=&quot;result-card__photo-placeholder&quot;>🖼</span>'">`
-        : `<span class="result-card__photo-placeholder">🖼</span>`;
+               onerror="this.parentElement.innerHTML='<span class=\\"preview-card__photo-placeholder\\">🖼</span>'">`
+        : `<span class="preview-card__photo-placeholder">🖼</span>`;
 
-    const tags = (item.tags || []).slice(0, 3)
+    const tags = (item.tags || []).slice(0, 2)
         .map(t => `<span class="chip chip--small">${_esc(t)}</span>`).join('');
 
-    // Encode item data for the popup
-    const dataAttr = _esc(JSON.stringify(item));
-
-    return `
-    <div class="result-card" data-item="${dataAttr}">
-        <div class="result-card__photo">${photoHtml}</div>
-        <div class="result-card__info">
-            <div class="result-card__name" title="${_esc(item.article_name)}">${_esc(item.article_name)}</div>
-            <span class="result-card__brand">${_esc(item.brand_name)}</span>
-            ${item.category_name ? `<span class="result-card__cat">${_esc(item.category_name)}</span>` : ''}
-            <div class="result-card__tags">${tags}</div>
+    wrapper.innerHTML = `
+        <div class="preview-card__photo">${photoHtml}</div>
+        <div class="preview-card__info">
+            <div class="preview-card__name" title="${_esc(item.article_name)}">${_esc(item.article_name)}</div>
+            <span class="preview-card__brand">${_esc(item.brand_name)}</span>
+            ${item.category_name ? `<span class="preview-card__cat">${_esc(item.category_name)}</span>` : ''}
+            <div class="preview-card__tags">${tags}</div>
             <span class="stock-badge stock-badge--${stockClass}">${stockLabel}</span>
         </div>
-        <button class="result-card__edit-btn" title="Modifica articolo">✏️</button>
-    </div>`;
+        <span class="material-symbols-rounded preview-card__chevron">chevron_right</span>
+    `;
+
+    wrapper.addEventListener('click', (e) => {
+        if (e.target.closest('.preview-card__edit-btn')) return;
+        _expandedIndex = idx;
+        _doRender();
+        // Scroll expanded card into view
+        setTimeout(() => {
+            const panel = getDetailPanel();
+            const content = panel.querySelector('.detail-panel__content');
+            const expandedEl = panel.querySelector('.search-expanded-card');
+            if (expandedEl && content) {
+                expandedEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }, 50);
+    });
+
+    return wrapper;
 }
 
-function _buildExtendedCard(item) {
+// ---- Template B: Expanded Card in-place ----
+
+function _buildExpandedCard(item, idx) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'search-expanded-card';
+    wrapper.dataset.idx = idx;
+
     const photoHtml = item.photo_id
         ? `<img src="${api.getPhotoUrl(item.photo_id)}" alt="${_esc(item.article_name)}"
-               onerror="this.style.display='none'" style="cursor:zoom-in;" onclick="if(window._openImageModal) window._openImageModal(this.src)">`
-        : `<div class="photo-placeholder" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:32px;">🖼</div>`;
+               onerror="this.style.display='none'" style="cursor:zoom-in;"
+               onclick="if(window._openImageModal) window._openImageModal(this.src)">`
+        : `<div class="expanded-card__photo-placeholder">🖼</div>`;
 
-    const tagsHtml = (item.tags || []).map(t => `<span class="chip-tag"><span class="tag-text">${_esc(t)}</span></span>`).join('');
-    
-    return `
-    <div class="blueprint-card" style="margin-bottom: var(--space-xl); border: 2px solid var(--border-focus); cursor: default;">
-        <div class="blueprint-card__row-top">
-            <div class="blueprint-card__photo-col">
-                ${photoHtml}
-            </div>
-            <div class="blueprint-card__info-col">
-                <div style="display:flex; justify-content:space-between;">
-                    <span class="chip chip--small">${_esc(item.brand_name || 'Brand')}</span>
-                    <button class="btn-edit-extended" style="background:transparent;border:none;cursor:pointer;font-size:18px;" title="Modifica articolo">✏️</button>
-                </div>
-                <div class="blueprint-card__name">
-                    <span>${_esc(item.article_name || '')}</span>
-                </div>
-                <div>
-                    <span style="font-size:var(--font-size-sm);color:var(--text-secondary);">${_esc(item.category_name || 'Nessuna categoria')}</span>
-                </div>
-                <div class="blueprint-card__desc">
-                    <span>${_esc(item.description || '')}</span>
-                </div>
-                <div class="blueprint-card__meta">
-                    ${tagsHtml}
-                </div>
-                <div style="margin-top:auto; font-size:var(--font-size-sm); color:var(--text-secondary);">
-                    Giacenza: <strong style="color:var(--text-primary);">${item.stock}</strong> | 
-                    Materiali: ${_esc((item.materials || []).join(', ') || '-')} |
-                    Colori: ${_esc((item.colors || []).join(', ') || '-')}
+    const tagsHtml = (item.tags || []).map(t =>
+        `<span class="chip chip--small">${_esc(t)}</span>`
+    ).join('');
+
+    const stockClass =
+        item.stock > 5  ? 'available' :
+        item.stock > 0  ? 'low' : 'zero';
+
+    wrapper.innerHTML = `
+        <div class="expanded-card__header">
+            <button class="expanded-card__collapse-btn" title="Comprimi">
+                <span class="material-symbols-rounded">expand_less</span>
+            </button>
+            <button class="expanded-card__edit-btn" title="Modifica">
+                <span class="material-symbols-rounded">edit</span>
+            </button>
+        </div>
+        <div class="expanded-card__body">
+            <div class="expanded-card__photo">${photoHtml}</div>
+            <div class="expanded-card__info">
+                <div class="expanded-card__brand">${_esc(item.brand_name)}</div>
+                <div class="expanded-card__name">${_esc(item.article_name)}</div>
+                ${item.category_name ? `<div class="expanded-card__cat">${_esc(item.category_name)}</div>` : ''}
+                ${item.description ? `<div class="expanded-card__desc">${_esc(item.description)}</div>` : ''}
+                <div class="expanded-card__tags">${tagsHtml}</div>
+                <div class="expanded-card__meta">
+                    <span class="stock-badge stock-badge--${stockClass}">Giacenza: ${item.stock}</span>
+                    ${(item.colors || []).length ? `<span style="font-size:var(--font-size-sm);color:var(--text-secondary);">Colori: ${_esc(item.colors.join(', '))}</span>` : ''}
+                    ${(item.materials || []).length ? `<span style="font-size:var(--font-size-sm);color:var(--text-secondary);">Materiali: ${_esc(item.materials.join(', '))}</span>` : ''}
                 </div>
             </div>
         </div>
-    </div>`;
+    `;
+
+    // Collapse back to preview
+    wrapper.querySelector('.expanded-card__collapse-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        _expandedIndex = null;
+        _doRender();
+    });
+
+    // Edit popup
+    wrapper.querySelector('.expanded-card__edit-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        _openEditPopup(item, wrapper);
+    });
+
+    return wrapper;
 }
 
 // ---- Edit Popup ----
@@ -233,7 +321,6 @@ function _openEditPopup(item, cardEl) {
         saveBtn.disabled = true;
         saveBtn.textContent = 'Salvataggio...';
 
-        // Build changed fields only
         const getVal = (name) => overlay.querySelector(`[name="${name}"]`)?.value?.trim() ?? '';
         const normalizeList = (raw) => raw ? raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : [];
 
@@ -245,10 +332,8 @@ function _openEditPopup(item, cardEl) {
 
         if (name !== item.article_name) fields.article_name = name;
         if (desc !== item.description)  fields.description  = desc;
-        const tagsChanged = JSON.stringify(tags) !== JSON.stringify(item.tags || []);
-        const matsChanged = JSON.stringify(mats) !== JSON.stringify(item.materials || []);
-        if (tagsChanged) fields.tags = tags;
-        if (matsChanged) fields.materials = mats;
+        if (JSON.stringify(tags) !== JSON.stringify(item.tags || [])) fields.tags = tags;
+        if (JSON.stringify(mats) !== JSON.stringify(item.materials || [])) fields.materials = mats;
 
         if (Object.keys(fields).length === 0) {
             overlay.remove();
@@ -258,20 +343,8 @@ function _openEditPopup(item, cardEl) {
         try {
             await api.patchCatalogItem(item.blueprint_id, fields);
             addMessage(`✅ Articolo "${item.article_name}" aggiornato.`, 'success');
-            // Update card in place
-            if (fields.article_name) {
-                const nameEl = cardEl?.querySelector('.result-card__name');
-                if (nameEl) nameEl.textContent = fields.article_name;
-            }
-            // Update cached data
             Object.assign(item, fields);
-            try { if (cardEl) cardEl.dataset.item = JSON.stringify(item); } catch {}
             overlay.remove();
-            
-            // Re-render to update the grid and the extended view
-            if (_activeSearchItem && _activeSearchItem.blueprint_id === item.blueprint_id) {
-                Object.assign(_activeSearchItem, fields);
-            }
             _doRender();
         } catch (err) {
             errorEl.textContent = err.message;
@@ -280,4 +353,10 @@ function _openEditPopup(item, cardEl) {
             saveBtn.textContent = 'Salva';
         }
     });
+}
+
+// ---- Close panel ----
+function _closePanel() {
+    _expandedIndex = null;
+    exitSplitScreen();
 }

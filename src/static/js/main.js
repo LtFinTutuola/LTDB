@@ -23,6 +23,7 @@ export const appState = {
     currentMode: Mode.IDLE,
     currentJobId: null,
     pollingTimer: null,
+    sidebarCollapsed: false,
 };
 
 // ---- DOM references ----
@@ -33,18 +34,31 @@ const detailPanel = document.getElementById('detail-panel');
 const chatInput   = document.getElementById('chat-input');
 const btnPlus     = document.getElementById('btn-plus');
 const btnSend     = document.getElementById('btn-send');
+const btnSidebarToggle = document.getElementById('btn-sidebar-toggle');
 
 // ---- Layout ----
 export function enterSplitScreen() {
-    canvas.classList.remove('canvas--chat');
     canvas.classList.add('canvas--split');
 }
 
 export function exitSplitScreen() {
-    canvas.classList.add('canvas--chat');
     canvas.classList.remove('canvas--split');
+    // Notifica l'artifact box che il panel è stato chiuso
+    document.dispatchEvent(new CustomEvent('detail:closed'));
     // Allow the grid transition to finish before clearing innerHTML
     setTimeout(() => { detailPanel.innerHTML = ''; }, 400);
+}
+
+export function toggleSidebar() {
+    appState.sidebarCollapsed = !appState.sidebarCollapsed;
+    if (appState.sidebarCollapsed) {
+        canvas.classList.add('canvas--sidebar-collapsed');
+        document.getElementById('sidebar').classList.add('sidebar--collapsed');
+    } else {
+        canvas.classList.remove('canvas--sidebar-collapsed');
+        document.getElementById('sidebar').classList.remove('sidebar--collapsed');
+    }
+    localStorage.setItem('ltdb_sidebar_collapsed', appState.sidebarCollapsed);
 }
 
 // ---- Mode management ----
@@ -54,23 +68,24 @@ export function setMode(mode) {
 }
 
 function _updateSendButton(mode) {
+    // The button now uses icons, we just update the title and disabled state
     switch (mode) {
         case Mode.IDLE:
         case Mode.SEARCH:
-            btnSend.textContent = 'Invia';
+            btnSend.title = 'Invia';
             btnSend.disabled = false;
             break;
         case Mode.FORM_DDT:
         case Mode.FORM_SINGLE:
-            btnSend.textContent = 'Importa';
+            btnSend.title = 'Importa';
             btnSend.disabled = false;
             break;
         case Mode.POLLING:
-            btnSend.textContent = 'Elaborazione...';
+            btnSend.title = 'Elaborazione...';
             btnSend.disabled = true;
             break;
         case Mode.STAGING:
-            btnSend.textContent = 'Applica modifiche';
+            btnSend.title = 'Applica modifiche';
             btnSend.disabled = false;
             break;
     }
@@ -80,7 +95,12 @@ function _updateSendButton(mode) {
 export function addMessage(text, type = 'system') {
     const div = document.createElement('div');
     div.className = `chat-message chat-message--${type}`;
-    div.textContent = text;
+    // If it's a DOM element (from artifact box), append it, else textContent
+    if (typeof text === 'string') {
+        div.innerHTML = text; // allowing HTML for spinners
+    } else {
+        div.appendChild(text);
+    }
     chatMsgs.appendChild(div);
     chatMsgs.scrollTop = chatMsgs.scrollHeight;
     return div;
@@ -119,10 +139,10 @@ export function showChatInput(show) {
     formCont.style.display = show ? 'none' : '';
     
     if (show) {
-        btnPlus.textContent = '+';
+        btnPlus.innerHTML = '<span class="material-symbols-rounded">add_circle</span>';
         btnPlus.title = 'Azioni';
     } else {
-        btnPlus.textContent = '←';
+        btnPlus.innerHTML = '<span class="material-symbols-rounded">arrow_back</span>';
         btnPlus.title = 'Indietro';
     }
 }
@@ -149,6 +169,7 @@ async function handleSend() {
         if (!query) return;
         addMessage(query, 'user');
         chatInput.value = '';
+        chatInput.style.height = 'auto'; // reset height
         setChatInputLocked(true);
         await search.executeSearch(query);
         setChatInputLocked(false);
@@ -175,6 +196,15 @@ async function handleSend() {
 function init() {
     chat.init();
 
+    // Restore sidebar state
+    if (localStorage.getItem('ltdb_sidebar_collapsed') === 'true') {
+        toggleSidebar(); // it starts false, so this makes it true
+    }
+    
+    if (btnSidebarToggle) {
+        btnSidebarToggle.addEventListener('click', toggleSidebar);
+    }
+
     btnPlus.addEventListener('click', (e) => {
         e.stopPropagation();
         if (appState.currentMode === Mode.FORM_DDT || appState.currentMode === Mode.FORM_SINGLE) {
@@ -191,6 +221,10 @@ function init() {
     btnSend.addEventListener('click', handleSend);
     chatInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+    });
+    chatInput.addEventListener('input', () => {
+        chatInput.style.height = 'auto';
+        chatInput.style.height = (chatInput.scrollHeight) + 'px';
     });
 
     // Restore to idle after ingestion confirmation

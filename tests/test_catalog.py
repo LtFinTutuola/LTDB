@@ -187,6 +187,36 @@ class TestUpdateBlueprint:
             )
         assert exc_info.value.status_code == 400
 
+    def test_update_description_empty_raises_400(self, db_session):
+        from fastapi import HTTPException
+        brand = _make_brand(db_session)
+        bp = _make_blueprint(db_session, brand.id)
+        from src.services import catalog_service
+        with pytest.raises(HTTPException) as exc_info:
+            catalog_service.update_blueprint(
+                db_session, bp.id, CatalogUpdateRequest(description="")
+            )
+        assert exc_info.value.status_code == 400
+        assert "non può essere vuoto o nullo" in exc_info.value.detail
+
+    def test_update_description_null_raises_400(self, db_session):
+        from fastapi import HTTPException
+        brand = _make_brand(db_session)
+        bp = _make_blueprint(db_session, brand.id)
+        from src.services import catalog_service
+        # Simulate payload parsing where description is explicitly set to None
+        req = CatalogUpdateRequest()
+        req.description = None
+        # In pydantic v2, setting an attribute explicitly might not add it to __fields_set__
+        # if using assignment without proper model construction.
+        # But for CatalogUpdateRequest(description=None), it will be in model_dump(exclude_unset=True)
+        with pytest.raises(HTTPException) as exc_info:
+            catalog_service.update_blueprint(
+                db_session, bp.id, CatalogUpdateRequest(description=None)
+            )
+        assert exc_info.value.status_code == 400
+        assert "non può essere vuoto o nullo" in exc_info.value.detail
+
     def test_update_blueprint_not_found_raises_404(self, db_session):
         from fastapi import HTTPException
         from src.services import catalog_service

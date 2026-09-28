@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}LTDB{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <div id="app-shell">
+    {% include 'partials/sidebar.html' %}
+    <main id="canvas" class="canvas">
+      {% include 'partials/chat.html' %}
+      {% include 'partials/workspace.html' %}
+    </main>
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

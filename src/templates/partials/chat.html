@@ -1,0 +1,25 @@
+<!-- Left panel: Chat -->
+<section id="chat-panel" class="chat-panel">
+    <div id="chat-messages" class="chat-messages">
+        <div class="chat-message chat-message--system chat-message--welcome">
+            Benvenuto in LTDB. Cerca articoli nel catalogo oppure importa nuovi dati con il tasto +.
+        </div>
+    </div>
+    <!-- Input area -->
+    <div class="chat-input-area">
+        <div class="chat-input-wrapper">
+            <button id="btn-plus" class="btn-plus" title="Azioni">
+                <span class="material-symbols-rounded">add_circle</span>
+            </button>
+            
+            <div id="import-form-container" style="display: none; flex: 1;"></div>
+            
+            <textarea id="chat-input" class="chat-input" rows="1"
+                   placeholder="Cerca nel catalogo..."></textarea>
+                   
+            <button id="btn-send" class="btn-send" title="Invia">
+                <span class="material-symbols-rounded">send</span>
+            </button>
+        </div>
+    </div>
+</section>
