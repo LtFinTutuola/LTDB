@@ -227,3 +227,71 @@ def test_get_pending_sales(db_session):
     # Check default today (should be 0 since we only added for past dates)
     res3 = get_pending_sales(db_session)
     assert len(res3) == 0
+
+def test_find_candidates_by_ean(db_session):
+    blueprint1_id, batch_id = create_base_data(db_session)
+    
+    a1 = Article(article_blueprint_id=blueprint1_id, batch_id=batch_id, supplier_code="VEND-ABC", ean="1234567890123", colors=["Red"], status=ArticleStatus.AVAILABLE)
+    db_session.add(a1)
+    db_session.commit()
+    db_session.refresh(a1)
+    
+    candidates = find_candidates(db_session, search_code="1234567890123", is_exchange=False)
+    assert len(candidates) == 1
+    assert candidates[0]["article_id"] == str(a1.id)
+
+def test_ingest_captures_raw_code(db_session, monkeypatch):
+    from src.core.config import settings
+    monkeypatch.setattr(settings, "EXCEL_CODE_COLUMN", "N") # Zero based index 13
+    
+    rows_data = [
+        # A      B     C     D     E     F     G     H     I     J     K     L     M     N
+        [100.0, 90.0, None, None, None, None, None, None, None, None, None, None, None, "1234567890123"]
+    ]
+    
+    file_path = create_mock_excel(rows_data, has_headers_at_699=False)
+    target_date = date(2023, 11, 1)
+    
+    try:
+        inserted_ids = ingest_daily_sales(db_session, file_path, target_date)
+        assert len(inserted_ids) == 1
+        
+        records = excel_synchronization_repo.get_pending_records(db_session, target_date=target_date)
+        assert len(records) == 1
+        assert records[0].raw_article_code == "1234567890123"
+        assert records[0].status == ExcelSaleStatus.ORPHAN
+    finally:
+        os.remove(file_path)
+
+def test_ingest_no_raw_code_column(db_session, monkeypatch):
+    from src.core.config import settings
+    monkeypatch.setattr(settings, "EXCEL_CODE_COLUMN", "")
+    
+    rows_data = [
+        # A      B     C     D     E     F     G     H     I     J     K     L     M     N
+        [100.0, 90.0, None, None, None, None, None, None, None, None, None, None, None, "1234567890123"]
+    ]
+    
+    file_path = create_mock_excel(rows_data, has_headers_at_699=False)
+    target_date = date(2023, 11, 2)
+    
+    try:
+        inserted_ids = ingest_daily_sales(db_session, file_path, target_date)
+        assert len(inserted_ids) == 1
+        
+        records = excel_synchronization_repo.get_pending_records(db_session, target_date=target_date)
+        assert len(records) == 1
+        assert records[0].raw_article_code is None
+        assert records[0].status == ExcelSaleStatus.ORPHAN
+    finally:
+        os.remove(file_path)
+
+def test_pending_sales_includes_raw_code(db_session):
+    sale_in = ExcelSaleCreate(date=date(2023, 11, 3), excel_row_index=1, status=ExcelSaleStatus.ORPHAN, is_exchange=False, raw_article_code="VEND-XYZ")
+    excel_synchronization_repo.create(db_session, obj_in=sale_in)
+    
+    from src.services.excel_synchronization_service import get_pending_sales
+    res = get_pending_sales(db_session, target_date=date(2023, 11, 3))
+    assert len(res) == 1
+    assert res[0]["raw_article_code"] == "VEND-XYZ"
+

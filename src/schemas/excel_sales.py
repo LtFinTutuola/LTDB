@@ -18,6 +18,7 @@ class ExcelSaleBase(BaseModel):
     starting_price: Optional[float] = None
     selling_price: Optional[float] = None
     is_exchange: bool = False
+    raw_article_code: Optional[str] = None
     article_id: Optional[str] = None
 
 

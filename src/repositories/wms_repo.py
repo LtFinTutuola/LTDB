@@ -62,15 +62,19 @@ class ArticleRepository(BaseRepository[Article, ArticleCreate, ArticleCreate]):
         else:
             db.flush()
         return db_movement
-    def get_reconciliation_candidates(self, db: Session, supplier_code: str, is_exchange: bool) -> List[Article]:
+    def get_reconciliation_candidates(self, db: Session, search_code: str, is_exchange: bool) -> List[Article]:
         from src.models.wms import ArticleStatus
+        from sqlalchemy import or_
         
         target_status = ArticleStatus.SOLD if is_exchange else ArticleStatus.AVAILABLE
         
         return (
             db.query(self.model)
             .filter(
-                self.model.supplier_code == supplier_code,
+                or_(
+                    self.model.supplier_code == search_code,
+                    self.model.ean == search_code
+                ),
                 self.model.status == target_status
             )
             .order_by(self.model.created_at.asc())

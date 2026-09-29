@@ -66,7 +66,7 @@ def get_pending_sales(
 
 @router.get("/reconciliation-candidates", status_code=status.HTTP_200_OK)
 def get_reconciliation_candidates(
-    supplier_code: str,
+    search_code: str,
     is_exchange: bool = False,
     db: Session = Depends(get_db)
 ):
@@ -74,7 +74,7 @@ def get_reconciliation_candidates(
     Gets reconciliation candidates grouped by color (FIFO order).
     """
     try:
-        candidates = excel_synchronization_service.find_candidates(db, supplier_code, is_exchange)
+        candidates = excel_synchronization_service.find_candidates(db, search_code, is_exchange)
         if not candidates:
             raise HTTPException(status_code=404, detail="No reconciliation candidates found")
         return {"status": "success", "data": candidates}

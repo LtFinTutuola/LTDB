@@ -5,7 +5,8 @@ api_host: "0.0.0.0"
 api_port: 8000
 
 excel_file_path: "/Users/lucasarti/LTDB/_working_files/Stat € B.xlsx"
-excel_polling_interval: 60 #seconds
+excel_polling_interval: 20 #seconds
+excel_code_column: "N"
 
 logging:
   logs_dir: "data/logs"

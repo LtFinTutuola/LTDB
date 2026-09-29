@@ -44,9 +44,19 @@ def ingest_daily_sales(db: Session, file_path: str, target_date: date) -> List[s
         logger.log_execution("excel_synchronization_service", "ingest_open_error", "err", exc=e)
         raise e
 
-    # 3. Read only new rows
+    # 3. Determine max_col based on settings
+    code_col_idx = None
+    max_col_to_read = 12
+    if settings.EXCEL_CODE_COLUMN:
+        try:
+            code_col_idx = ord(settings.EXCEL_CODE_COLUMN.upper()) - ord('A')
+            max_col_to_read = max(12, code_col_idx + 1)
+        except TypeError:
+            logger.error(f"Invalid EXCEL_CODE_COLUMN: {settings.EXCEL_CODE_COLUMN}")
+
+    # 4. Read only new rows
     sales_to_insert = []
-    for row_idx, row in enumerate(sheet.iter_rows(min_row=min_row, max_row=698, min_col=1, max_col=12), start=min_row):
+    for row_idx, row in enumerate(sheet.iter_rows(min_row=min_row, max_row=698, min_col=1, max_col=max_col_to_read), start=min_row):
         # A row is empty if all cells in A to I are None
         if all(cell.value is None for cell in row[0:9]):
             break
@@ -81,6 +91,13 @@ def ingest_daily_sales(db: Session, file_path: str, target_date: date) -> List[s
         if val_l is not None and str(val_l).strip().upper() == "X":
             is_exchange = True
 
+        # Parse raw_article_code
+        raw_article_code = None
+        if code_col_idx is not None and code_col_idx < len(row):
+            val_code = row[code_col_idx].value
+            if val_code is not None:
+                raw_article_code = str(val_code).strip()
+
         sale_in = ExcelSaleCreate(
             date=target_date,
             excel_row_index=row_idx,
@@ -88,7 +105,8 @@ def ingest_daily_sales(db: Session, file_path: str, target_date: date) -> List[s
             status=status,
             starting_price=starting_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None,
             selling_price=selling_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None,
-            is_exchange=is_exchange
+            is_exchange=is_exchange,
+            raw_article_code=raw_article_code
         )
         sales_to_insert.append(sale_in)
         
@@ -117,12 +135,12 @@ def ingest_daily_sales(db: Session, file_path: str, target_date: date) -> List[s
 from sqlalchemy import func
 from src.models.pim import ArticlePhoto
 
-def find_candidates(db: Session, supplier_code: str, is_exchange: bool) -> List[Dict[str, Any]]:
+def find_candidates(db: Session, search_code: str, is_exchange: bool) -> List[Dict[str, Any]]:
     """
-    Finds reconciliation candidates for a given vendor code and transaction type.
+    Finds reconciliation candidates for a given search code (vendor code or EAN) and transaction type.
     Groups results by color and returns the oldest (FIFO) article for each color variant.
     """
-    articles = wms_repo.get_reconciliation_candidates(db, supplier_code, is_exchange)
+    articles = wms_repo.get_reconciliation_candidates(db, search_code, is_exchange)
     
     # Group by color string
     grouped = {}
@@ -182,7 +200,8 @@ def get_pending_sales(db: Session, target_date: Optional[date] = None) -> List[D
             "status": r.status.value,
             "starting_price": float(r.starting_price) if r.starting_price is not None else None,
             "selling_price": float(r.selling_price) if r.selling_price is not None else None,
-            "is_exchange": r.is_exchange
+            "is_exchange": r.is_exchange,
+            "raw_article_code": r.raw_article_code
         })
     return results
 

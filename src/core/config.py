@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # Staging Storage
     EXCEL_FILE_PATH: str = yaml_config.get("excel_file_path", "").replace("{BASE_DIR}", str(BASE_DIR))
     EXCEL_POLLING_INTERVAL: int = int(yaml_config.get("excel_polling_interval", 60))
+    EXCEL_CODE_COLUMN: str = yaml_config.get("excel_code_column", "")
     
     # Logging Config
     LOGS_DIR: str = logging_config.get("logs_dir", "data/logs/execution").replace("{BASE_DIR}", str(BASE_DIR))
