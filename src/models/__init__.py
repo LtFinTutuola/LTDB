@@ -1,1 +1,1 @@
-from . import pim, wms, sales, staging
+from . import pim, wms, sales, staging, excel_sales

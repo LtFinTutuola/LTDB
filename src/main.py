@@ -12,7 +12,20 @@ from src.routers.frontend_router import router as frontend_router
 # Initialize the logger at startup
 logger = get_logger()
 
-app = FastAPI(title=settings.PROJECT_NAME)
+from contextlib import asynccontextmanager
+from src.services.excel_polling_service import start_polling, stop_polling
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.log_execution("main", "startup", "ok", message="Starting up application services...")
+    start_polling()
+    yield
+    # Shutdown
+    logger.log_execution("main", "shutdown", "ok", message="Shutting down application services...")
+    stop_polling()
+
+app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 
 # Static files (JS, CSS)
 _STATIC_DIR = Path(__file__).resolve().parent / "static"

@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     SQLITE_URL: str = yaml_config.get("db_connection_string", "").replace("{BASE_DIR}", str(BASE_DIR))
     
     # Staging Storage
-    STAGING_DIRECTORY: str = yaml_config.get("staging_directory", "").replace("{BASE_DIR}", str(BASE_DIR))
+    EXCEL_FILE_PATH: str = yaml_config.get("excel_file_path", "").replace("{BASE_DIR}", str(BASE_DIR))
+    EXCEL_POLLING_INTERVAL: int = int(yaml_config.get("excel_polling_interval", 60))
     
     # Logging Config
     LOGS_DIR: str = logging_config.get("logs_dir", "data/logs/execution").replace("{BASE_DIR}", str(BASE_DIR))
