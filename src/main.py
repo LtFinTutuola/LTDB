@@ -8,6 +8,7 @@ from src.routers.data_ingestion_router import router as data_ingestion_router
 from src.routers.heuristic_router import router as heuristic_router
 from src.routers.catalog_router import router as catalog_router
 from src.routers.frontend_router import router as frontend_router
+from src.routers.excel_synchronization_router import router as excel_synchronization_router
 
 # Initialize the logger at startup
 logger = get_logger()
@@ -35,6 +36,7 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(data_ingestion_router)
 app.include_router(heuristic_router)
 app.include_router(catalog_router)
+app.include_router(excel_synchronization_router)
 
 # Frontend SPA (catch-all GET /)
 app.include_router(frontend_router)
