@@ -14,7 +14,7 @@ from src.routers.excel_synchronization_router import router as excel_synchroniza
 logger = get_logger()
 
 from contextlib import asynccontextmanager
-from src.services.excel_polling_service import start_polling, stop_polling
+from src.services.excel_synchronization_service import start_polling, stop_polling
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

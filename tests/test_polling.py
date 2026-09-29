@@ -2,11 +2,11 @@ import pytest
 import threading
 from unittest.mock import patch
 from datetime import date
-from src.services.excel_polling_service import _polling_loop, start_polling, stop_polling
+from src.services.excel_synchronization_service import _polling_loop, start_polling, stop_polling
 
-@patch("src.services.excel_polling_service.ingest_daily_sales")
-@patch("src.services.excel_polling_service.SessionLocal")
-@patch("src.services.excel_polling_service.settings")
+@patch("src.services.excel_synchronization_service.ingest_daily_sales")
+@patch("src.services.excel_synchronization_service.SessionLocal")
+@patch("src.services.excel_synchronization_service.settings")
 def test_polling_execution(mock_settings, mock_session, mock_ingest):
     """Test that the polling loop successfully instantiates a session and calls ingestion."""
     mock_settings.EXCEL_FILE_PATH = "dummy_path.xlsx"
@@ -28,9 +28,9 @@ def test_polling_execution(mock_settings, mock_session, mock_ingest):
     assert mock_ingest.called
 
 
-@patch("src.services.excel_polling_service.ingest_daily_sales")
-@patch("src.services.excel_polling_service.SessionLocal")
-@patch("src.services.excel_polling_service.settings")
+@patch("src.services.excel_synchronization_service.ingest_daily_sales")
+@patch("src.services.excel_synchronization_service.SessionLocal")
+@patch("src.services.excel_synchronization_service.settings")
 def test_polling_exception_handling(mock_settings, mock_session, mock_ingest):
     """Test that an exception during ingestion does not crash the polling loop."""
     mock_settings.EXCEL_FILE_PATH = "dummy_path.xlsx"

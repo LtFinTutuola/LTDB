@@ -35,10 +35,13 @@ class ExcelSaleRepository(BaseRepository[ExcelSale, ExcelSaleCreate, ExcelSaleCr
             
         return db_sales
 
-    def get_pending_records(self, db: Session) -> List[ExcelSale]:
-        """Returns records that need attention (ORPHAN or UNPROCESSABLE)."""
-        return db.query(self.model).filter(
+    def get_pending_records(self, db: Session, target_date: date = None) -> List[ExcelSale]:
+        """Returns records that need attention (ORPHAN or UNPROCESSABLE) for a specific date."""
+        query = db.query(self.model).filter(
             self.model.status.in_([ExcelSaleStatus.ORPHAN, ExcelSaleStatus.UNPROCESSABLE])
-        ).all()
+        )
+        if target_date:
+            query = query.filter(self.model.date == target_date)
+        return query.order_by(self.model.excel_row_index.asc()).all()
 
-excel_sales_repo = ExcelSaleRepository()
+excel_synchronization_repo = ExcelSaleRepository()

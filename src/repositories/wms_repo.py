@@ -62,5 +62,19 @@ class ArticleRepository(BaseRepository[Article, ArticleCreate, ArticleCreate]):
         else:
             db.flush()
         return db_movement
+    def get_reconciliation_candidates(self, db: Session, supplier_code: str, is_exchange: bool) -> List[Article]:
+        from src.models.wms import ArticleStatus
+        
+        target_status = ArticleStatus.SOLD if is_exchange else ArticleStatus.AVAILABLE
+        
+        return (
+            db.query(self.model)
+            .filter(
+                self.model.supplier_code == supplier_code,
+                self.model.status == target_status
+            )
+            .order_by(self.model.created_at.asc())
+            .all()
+        )
 
 wms_repo = ArticleRepository()
