@@ -6,3 +6,19 @@
 @import url('/static/css/sidebar.css');
 @import url('/static/css/chat.css');
 @import url('/static/css/workspace.css');
+
+/* Badge per Notifiche Pulsante + */
+.btn-plus.has-badge {
+    position: relative;
+}
+.btn-plus.has-badge::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 8px;
+    height: 8px;
+    background-color: var(--error, #e53e3e);
+    border-radius: 50%;
+    border: 2px solid var(--surface);
+}

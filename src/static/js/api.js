@@ -103,3 +103,33 @@ export async function patchCatalogItem(blueprintId, fields) {
     });
     return _handleResponse(res);
 }
+
+// --- Excel Synchronization ---
+
+export async function getPendingSales(targetDate = null) {
+    let url = `${API_BASE}/excel-synchronization/pending-sales`;
+    if (targetDate) url += `?target_date=${encodeURIComponent(targetDate)}`;
+    const res = await fetch(url);
+    return _handleResponse(res);
+}
+
+export async function getReconciliationCandidates(searchCode, isExchange = false) {
+    const res = await fetch(`${API_BASE}/excel-synchronization/reconciliation-candidates?search_code=${encodeURIComponent(searchCode)}&is_exchange=${isExchange}`);
+    return _handleResponse(res);
+}
+
+export async function reconcileSale(saleId, articleId) {
+    const res = await fetch(`${API_BASE}/excel-synchronization/reconcile/${encodeURIComponent(saleId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ article_id: articleId }),
+    });
+    return _handleResponse(res);
+}
+
+export async function pollExcelRows() {
+    const res = await fetch(`${API_BASE}/excel-synchronization/poll-rows`, {
+        method: 'POST',
+    });
+    return _handleResponse(res);
+}

@@ -6,6 +6,7 @@
 import * as chat from './chat.js';
 import * as staging from './staging.js';
 import * as search from './search.js';
+import * as api from './api.js';
 
 // ---- Mode constants ----
 export const Mode = {
@@ -15,6 +16,7 @@ export const Mode = {
     POLLING:     'polling',
     STAGING:     'staging',
     SEARCH:      'search',
+    RECONCILIATION: 'reconciliation',
 };
 
 // ---- App state ----
@@ -37,8 +39,14 @@ const btnSend     = document.getElementById('btn-send');
 const btnSidebarToggle = document.getElementById('btn-sidebar-toggle');
 
 // ---- Layout ----
+let _clearPanelTimeout = null;
+
 export function enterSplitScreen() {
     canvas.classList.add('canvas--split');
+    if (_clearPanelTimeout) {
+        clearTimeout(_clearPanelTimeout);
+        _clearPanelTimeout = null;
+    }
 }
 
 export function exitSplitScreen() {
@@ -46,7 +54,13 @@ export function exitSplitScreen() {
     // Notifica l'artifact box che il panel è stato chiuso
     document.dispatchEvent(new CustomEvent('detail:closed'));
     // Allow the grid transition to finish before clearing innerHTML
-    setTimeout(() => { detailPanel.innerHTML = ''; }, 400);
+    if (_clearPanelTimeout) {
+        clearTimeout(_clearPanelTimeout);
+    }
+    _clearPanelTimeout = setTimeout(() => { 
+        detailPanel.innerHTML = ''; 
+        _clearPanelTimeout = null;
+    }, 400);
 }
 
 export function toggleSidebar() {
@@ -87,6 +101,10 @@ function _updateSendButton(mode) {
         case Mode.STAGING:
             btnSend.title = 'Applica modifiche';
             btnSend.disabled = false;
+            break;
+        case Mode.RECONCILIATION:
+            btnSend.title = 'Riconciliazione in corso...';
+            btnSend.disabled = true;
             break;
     }
 }
@@ -192,8 +210,53 @@ async function handleSend() {
     }
 }
 
+// ---- Background Polling per Orfani ----
+let _lastOrphanCount = 0;
+let _isFirstPoll = true;
+async function _pollOrphans() {
+    try {
+        const res = await api.getPendingSales();
+        const orphans = res.data.filter(r => r.status === 'ORPHAN');
+        const count = orphans.length;
+        if (count > _lastOrphanCount || (_isFirstPoll && count > 0)) {
+            const diff = count > _lastOrphanCount ? count - _lastOrphanCount : count;
+            if (Notification.permission === 'granted' && appState.currentMode !== Mode.RECONCILIATION) {
+                new Notification(`Ci sono ${diff} nuove vendite da riconciliare!`, {
+                    body: `Totale vendite in sospeso: ${count}`
+                });
+            }
+            btnPlus.classList.add('has-badge'); // CSS da aggiungere
+        } else if (count === 0) {
+            btnPlus.classList.remove('has-badge');
+        }
+        _lastOrphanCount = count;
+        _isFirstPoll = false;
+        
+        // Se siamo in RECONCILIATION, aggiorniamo il badge per sicurezza
+        if (appState.currentMode === Mode.RECONCILIATION && count === 0) {
+            btnPlus.classList.remove('has-badge');
+        }
+    } catch (e) {
+        console.warn('Errore polling orfani:', e);
+    }
+}
+
+export function getOrphanCount() {
+    return _lastOrphanCount;
+}
+
+export function forceOrphansRefresh() {
+    _pollOrphans();
+}
+
+async function startOrphansPollingDaemon() {
+    _pollOrphans(); // first check
+    setInterval(_pollOrphans, 60000); // every 60s
+}
+
 // ---- Init ----
 function init() {
+    startOrphansPollingDaemon();
     chat.init();
 
     // Restore sidebar state
@@ -205,7 +268,10 @@ function init() {
         btnSidebarToggle.addEventListener('click', toggleSidebar);
     }
 
-    btnPlus.addEventListener('click', (e) => {
+    btnPlus.addEventListener('click', async (e) => {
+        if ('Notification' in window && Notification.permission === 'default') {
+            await Notification.requestPermission();
+        }
         e.stopPropagation();
         if (appState.currentMode === Mode.FORM_DDT || appState.currentMode === Mode.FORM_SINGLE) {
             showChatInput(true);

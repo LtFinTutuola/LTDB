@@ -8,7 +8,7 @@ import {
     appState, Mode, setMode,
     addMessage, enterSplitScreen,
     showChatInput, clearFormContainer, getFormContainer,
-    getDetailPanel, setChatInputLocked, _esc,
+    getDetailPanel, setChatInputLocked, _esc, getOrphanCount
 } from './main.js';
 import * as staging from './staging.js';
 
@@ -65,6 +65,10 @@ export function togglePlusMenu() {
     const inputArea = document.querySelector('.chat-input-area');
     _plusMenuEl = document.createElement('div');
     _plusMenuEl.className = 'plus-menu';
+    const orphanCount = getOrphanCount();
+    const isReconDisabled = orphanCount === 0;
+    const reconBadgeHTML = orphanCount > 0 ? ` <span class="badge" style="background: var(--error); color: white; border-radius: 50%; padding: 2px 6px; font-size: 10px; margin-left: auto;">${orphanCount}</span>` : '';
+
     _plusMenuEl.innerHTML = `
         <div class="plus-menu__item" data-action="ddt">
             <span class="material-symbols-rounded">description</span> Importa DDT
@@ -72,11 +76,19 @@ export function togglePlusMenu() {
         <div class="plus-menu__item" data-action="single">
             <span class="material-symbols-rounded">inventory_2</span> Importa Articolo
         </div>
+        <div class="plus-menu__item" data-action="reconciliation" ${isReconDisabled ? 'data-disabled="true" style="opacity: 0.5; cursor: not-allowed;"' : 'style="display: flex; align-items: center;"'}>
+            <span class="material-symbols-rounded">point_of_sale</span> Riconciliazione vendite ${reconBadgeHTML}
+        </div>
     `;
     _plusMenuEl.addEventListener('click', (e) => {
-        const action = e.target.closest('[data-action]')?.dataset.action;
+        const item = e.target.closest('[data-action]');
+        if (!item || item.dataset.disabled === "true") return;
+        const action = item.dataset.action;
         if (action === 'ddt') _showFormDDT();
         if (action === 'single') _showFormSingle();
+        if (action === 'reconciliation') {
+            import('./reconciliation.js').then(mod => mod.startSession());
+        }
         closePlusMenu();
     });
     inputArea.appendChild(_plusMenuEl);
