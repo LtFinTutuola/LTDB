@@ -34,5 +34,17 @@ def index(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={"brands_json": brands_json},
+        context={"brands_json": brands_json, "active_page": "dashboard"},
+    )
+
+
+@router.get("/vendite", include_in_schema=False)
+def vendite_page(request: Request):
+    """
+    Serve the Sales Reconciliation tabular page.
+    """
+    return templates.TemplateResponse(
+        request=request,
+        name="vendite.html",
+        context={"active_page": "vendite"},
     )

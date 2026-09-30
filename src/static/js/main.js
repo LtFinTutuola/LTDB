@@ -8,6 +8,30 @@ import * as staging from './staging.js';
 import * as search from './search.js';
 import * as api from './api.js';
 
+window._openImageModal = function(url) {
+    let overlay = document.getElementById('image-zoom-modal');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'image-zoom-modal';
+        overlay.className = 'image-modal-overlay';
+        overlay.innerHTML = `
+            <div class="image-modal-content">
+                <button class="btn-close-modal">✕</button>
+                <img id="image-zoom-img" src="" alt="zoom">
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay || e.target.classList.contains('btn-close-modal')) {
+                overlay.classList.remove('open');
+            }
+        });
+    }
+    document.getElementById('image-zoom-img').src = url;
+    overlay.classList.add('open');
+};
+
 // ---- Mode constants ----
 export const Mode = {
     IDLE:        'idle',

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Vendite - La Triestina{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/sales_table.css">
+{% endblock %}
+
+{% block content %}
+<div class="sales-page">
+    <div class="sales-page__main">
+        <div class="sales-page__wrapper">
+            <div class="sales-page__header">
+                <div class="sales-page__header-left">
+                    <button id="btn-today" class="btn-add-recon" style="width: auto; padding: 0 14px; font-size: 13px;"
+                        title="Seleziona oggi">Statistiche</button>
+                    <input type="date" id="date-picker" class="form-control form-control--sm" title="Seleziona data">
+                </div>
+                <div class="sales-page__header-right">
+                    <button id="btn-ask-gemini" class="btn-primary"
+                        style="background: var(--accent); border-color: var(--accent);">Chiedi a GeminI</button>
+                </div>
+            </div>
+
+            <div class="sales-page__table-container">
+                <table class="sales-table" id="sales-table">
+                    <thead>
+                        <tr>
+                            <th class="col-status">#</th>
+                            <th class="col-price">PL</th>
+                            <th class="col-cat">B</th>
+                            <th class="col-cat">Sam/AT</th>
+                            <th class="col-cat">V</th>
+                            <th class="col-cat">PP</th>
+                            <th class="col-cat">C</th>
+                            <th class="col-cat">CAR</th>
+                            <th class="col-cat">BORSELLI</th>
+                            <th class="col-cat">O+A</th>
+                            <th class="col-recon">Articolo</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sales-tbody">
+                        <!-- JS populate -->
+                    </tbody>
+                </table>
+                <div id="loading-indicator" class="loading-state">
+                    <span class="spinner"></span> Caricamento vendite...
+                </div>
+                <div id="empty-state" class="empty-state" style="display: none;">
+                    <p class="empty-state__text">Nessuna vendita disponibile</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="sales-page__panel" id="work-panel" style="display: none;">
+        <div class="work-panel__header">
+            <h3>Seleziona Articolo</h3>
+            <button id="btn-close-panel" class="btn-close-panel" title="Chiudi">✕</button>
+        </div>
+        <div class="work-panel__prompt" id="work-panel-prompt" style="display: none;">
+            <input type="text" id="recon-prompt-input" placeholder="Vendor code o barcode..."
+                class="form-control form-control--sm">
+            <button id="btn-recon-search" class="btn-primary">Invia</button>
+        </div>
+        <div class="work-panel__content" id="candidates-container">
+            <!-- JS populate -->
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script type="module" src="/static/js/sales_page.js"></script>
+{% endblock %}

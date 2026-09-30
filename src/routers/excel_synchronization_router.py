@@ -64,6 +64,22 @@ def get_pending_sales(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/daily-sales", status_code=status.HTTP_200_OK)
+def get_daily_sales(
+    target_date: date,
+    db: Session = Depends(get_db)
+):
+    """
+    Returns a list of all Excel sales records for the specified date.
+    """
+    try:
+        sales = excel_synchronization_service.get_daily_sales(db, target_date)
+        return {"status": "success", "data": sales}
+    except Exception as e:
+        logger.log_execution("excel_synchronization_router", "get_daily_sales", "err", exc=e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/reconciliation-candidates", status_code=status.HTTP_200_OK)
 def get_reconciliation_candidates(
     search_code: str,

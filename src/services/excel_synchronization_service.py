@@ -78,7 +78,7 @@ def ingest_daily_sales(db: Session, file_path: str, target_date: date) -> List[s
         for col_idx in range(1, 9):
             cell = row[col_idx]
             if cell.value is not None:
-                found_category_col = chr(ord('A') + col_idx) # Convert index to letter, e.g., 1 -> 'B'
+                found_category_col = col_idx - 1 # 0-based index for categories (0 for 'B', 1 for 'C', etc.)
                 try:
                     selling_price_val = float(cell.value)
                 except (ValueError, TypeError):
@@ -202,6 +202,50 @@ def get_pending_sales(db: Session, target_date: Optional[date] = None) -> List[D
             "selling_price": float(r.selling_price) if r.selling_price is not None else None,
             "is_exchange": r.is_exchange,
             "raw_article_code": r.raw_article_code
+        })
+    return results
+
+def get_daily_sales(db: Session, target_date: date) -> List[Dict[str, Any]]:
+    """
+    Returns all sales records for the specified date, including photo URL and article name for reconciled items.
+    """
+    records = excel_synchronization_repo.get_all_by_date(db, target_date)
+    
+    results = []
+    for r in records:
+        photo_url = None
+        article_name = None
+        
+        if r.status == ExcelSaleStatus.RECONCILED and r.article:
+            blueprint = r.article.blueprint
+            article_name = blueprint.article_name if blueprint else None
+            
+            colors_list = [c.lower() for c in (r.article.colors or [])]
+            photo = None
+            if colors_list:
+                photo = db.query(ArticlePhoto).filter(
+                    ArticlePhoto.article_blueprint_id == r.article.article_blueprint_id,
+                    func.lower(ArticlePhoto.canonical_color_name).in_(colors_list)
+                ).first()
+            if not photo:
+                photo = db.query(ArticlePhoto).filter(
+                    ArticlePhoto.article_blueprint_id == r.article.article_blueprint_id
+                ).first()
+                
+            photo_url = f"/api/v1/ingestion/photos/{photo.id}" if photo else None
+            
+        results.append({
+            "id": str(r.id),
+            "date": str(r.date),
+            "excel_row_index": r.excel_row_index,
+            "excel_file_column": r.excel_file_column,
+            "status": r.status,
+            "starting_price": float(r.starting_price) if r.starting_price is not None else None,
+            "selling_price": float(r.selling_price) if r.selling_price is not None else None,
+            "is_exchange": r.is_exchange,
+            "raw_article_code": r.raw_article_code,
+            "article_name": article_name,
+            "photo_url": photo_url
         })
     return results
 

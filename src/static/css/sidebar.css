@@ -106,11 +106,22 @@
     width: 100%;
     text-align: left;
     white-space: nowrap;
+    text-decoration: none;
 }
 
 .sidebar__nav-item:hover {
     background: var(--bg-elevated);
     color: var(--text-primary);
+}
+
+.sidebar__nav-item--active {
+    background: var(--accent-dim);
+    color: var(--accent);
+}
+
+.sidebar__nav-item--active:hover {
+    background: var(--accent-dim);
+    color: var(--accent-hover);
 }
 
 /* ---- Bottom ---- */

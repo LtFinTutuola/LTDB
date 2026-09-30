@@ -13,7 +13,7 @@ class ExcelSaleStatus(str, Enum):
 class ExcelSaleBase(BaseModel):
     date: date
     excel_row_index: int
-    excel_file_column: Optional[str] = None
+    excel_file_column: Optional[int] = None
     status: ExcelSaleStatus = ExcelSaleStatus.ORPHAN
     starting_price: Optional[float] = None
     selling_price: Optional[float] = None
@@ -37,3 +37,17 @@ class ExcelSaleResponse(ExcelSaleBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ExcelSaleListItem(BaseModel):
+    id: str
+    date: str
+    excel_row_index: int
+    excel_file_column: Optional[int] = None
+    status: ExcelSaleStatus
+    starting_price: Optional[float] = None
+    selling_price: Optional[float] = None
+    is_exchange: bool = False
+    raw_article_code: Optional[str] = None
+    article_name: Optional[str] = None
+    photo_url: Optional[str] = None

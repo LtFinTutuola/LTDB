@@ -1,0 +1,269 @@
+/* src/static/css/sales_table.css */
+.sales-page {
+    display: grid;
+    grid-template-columns: 1fr 0px;
+    height: 100%;
+    transition: grid-template-columns 0.4s cubic-bezier(0.25, 0.1, 0.25, 1);
+    background: var(--bg-app);
+    overflow: hidden;
+}
+
+.sales-page--panel-open {
+    grid-template-columns: 2fr 1fr;
+}
+
+.sales-page__main {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+    padding: var(--space-md);
+    gap: var(--space-md);
+    align-items: center; /* Center the wrapper horizontally */
+}
+
+.sales-page__wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    width: max-content;
+    max-width: 100%;
+    height: 100%;
+}
+
+.sales-page__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+    width: 100%;
+}
+
+.sales-page__header-left {
+    display: flex;
+    gap: var(--space-sm);
+    align-items: center;
+}
+
+
+
+.sales-page__table-container {
+    flex: 0 1 auto;
+    align-self: center;
+    max-width: 100%;
+    overflow-y: auto;
+    overflow-x: auto;
+    background: var(--bg-surface);
+    border-radius: var(--radius-card);
+    border: 1px solid var(--border-color);
+    position: relative;
+    scrollbar-width: none; /* Firefox */
+}
+
+.sales-page__table-container::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    background: transparent;
+}
+
+/* Table styling */
+.sales-table {
+    width: max-content;
+    margin: 0 auto;
+    border-collapse: collapse;
+    font-size: var(--font-size-sm);
+    text-align: left;
+}
+
+.sales-table th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-elevated);
+    padding: 4px 6px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    z-index: 10;
+}
+
+.sales-table td {
+    padding: 2px 6px;
+    border: 1px solid var(--border-color);
+    vertical-align: middle;
+}
+
+.sales-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+/* Column specific sizing */
+.col-status {
+    width: 40px;
+    text-align: center;
+    border: none !important;
+    font-weight: 600;
+}
+
+.col-price {
+    width: 70px;
+}
+
+.col-cat {
+    width: 70px;
+}
+
+.col-recon {
+    width: 1%;
+    white-space: nowrap;
+}
+
+/* Status indicators */
+.status-cell--orphan {
+    background: rgba(var(--warning-rgb, 255, 152, 0), 0.2);
+    color: var(--warning);
+}
+
+.status-cell--unprocessable {
+    background: rgba(var(--error-rgb, 244, 67, 54), 0.2);
+    color: var(--error);
+}
+
+.status-cell--reconciled {
+    background: rgba(var(--success-rgb, 76, 175, 80), 0.2);
+    color: var(--success);
+}
+
+/* Reconciliation Cell */
+.recon-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-sm);
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+}
+
+.recon-cell input {
+    flex: 1;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 4px 8px;
+    border-radius: var(--radius-xs);
+    font-size: var(--font-size-sm);
+}
+
+.recon-cell input:focus {
+    outline: none;
+    border-color: var(--border-focus);
+}
+
+.recon-cell .btn-search {
+    background: var(--accent);
+    color: var(--bg-app);
+    border: none;
+    padding: 4px 12px;
+    border-radius: var(--radius-xs);
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.recon-cell .btn-search:hover {
+    background: var(--accent-hover);
+}
+
+.recon-photo {
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    object-fit: cover;
+    background: var(--bg-elevated);
+    pointer-events: none; /* Let the cell handle the click */
+}
+
+.btn-add-recon {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    background: var(--bg-elevated); /* light grey in dark theme context */
+    color: #ffffff;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 18px;
+    padding: 0;
+}
+.btn-add-recon.has-badge::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 10px;
+    height: 10px;
+    background: var(--error, #F44336);
+    border-radius: 50%;
+    border: 2px solid var(--bg-surface);
+}
+.btn-add-recon:hover {
+    background: var(--bg-surface-hover, #555);
+}
+
+.recon-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.recon-name {
+    font-weight: 500;
+}
+
+/* Keyboard Navigation Active Cell */
+.cell--active {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    background: var(--accent-dim) !important;
+}
+
+/* Work Panel */
+.sales-page__panel {
+    background: var(--bg-surface);
+    border-left: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.work-panel__header {
+    padding: var(--space-md);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.work-panel__prompt {
+    padding: var(--space-md);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    gap: var(--space-sm);
+}
+
+.work-panel__prompt input {
+    flex: 1;
+}
+
+.work-panel__content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-md);
+}
+
+.loading-state {
+    padding: var(--space-xl);
+    text-align: center;
+    color: var(--text-muted);
+}

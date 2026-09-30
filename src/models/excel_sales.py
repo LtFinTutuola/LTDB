@@ -16,7 +16,7 @@ class ExcelSale(Base, UUIDMixin, TimestampMixin):
 
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     excel_row_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    excel_file_column: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    excel_file_column: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
     status: Mapped[ExcelSaleStatus] = mapped_column(Enum(ExcelSaleStatus), nullable=False, default=ExcelSaleStatus.ORPHAN)
     

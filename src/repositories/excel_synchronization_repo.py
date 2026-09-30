@@ -44,4 +44,8 @@ class ExcelSaleRepository(BaseRepository[ExcelSale, ExcelSaleCreate, ExcelSaleCr
             query = query.filter(self.model.date == target_date)
         return query.order_by(self.model.excel_row_index.asc()).all()
 
+    def get_all_by_date(self, db: Session, target_date: date) -> List[ExcelSale]:
+        """Returns all records for a specific date, ordered by row index."""
+        return db.query(self.model).filter(self.model.date == target_date).order_by(self.model.excel_row_index.asc()).all()
+
 excel_synchronization_repo = ExcelSaleRepository()

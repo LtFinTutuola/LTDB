@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 
+{% block content %}
+  {% include 'partials/chat.html' %}
+  {% include 'partials/workspace.html' %}
+{% endblock %}
+
 {% block scripts %}
 <script>
     window.__LTDB_BRANDS__ = {{ brands_json | safe }};

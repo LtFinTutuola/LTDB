@@ -48,14 +48,14 @@ def test_ingest_no_headers_format(db_session):
         r1, r2 = records
         
         assert r1.excel_row_index == 1
-        assert r1.excel_file_column == 'B'
+        assert r1.excel_file_column == 0
         assert r1.starting_price == 100.0
         assert r1.selling_price == 90.0
         assert r1.is_exchange is False
         assert r1.status == ExcelSaleStatus.ORPHAN
         
         assert r2.excel_row_index == 2
-        assert r2.excel_file_column == 'C'
+        assert r2.excel_file_column == 1
         assert r2.starting_price == 50.0
         assert r2.selling_price == 45.0
         assert r2.is_exchange is True
@@ -123,7 +123,7 @@ def test_row_count_resume(db_session):
         r3 = next(r for r in records if r.excel_row_index == 3)
         assert r3.starting_price == 30.0
         assert r3.selling_price == 25.0
-        assert r3.excel_file_column == 'C'
+        assert r3.excel_file_column == 1
     finally:
         os.remove(file_path)
 
@@ -295,3 +295,30 @@ def test_pending_sales_includes_raw_code(db_session):
     assert len(res) == 1
     assert res[0]["raw_article_code"] == "VEND-XYZ"
 
+def test_get_daily_sales_returns_all_statuses(db_session):
+    from src.services.excel_synchronization_service import get_daily_sales
+    sale1 = ExcelSaleCreate(date=date(2023, 11, 4), excel_row_index=1, status=ExcelSaleStatus.ORPHAN, is_exchange=False)
+    sale2 = ExcelSaleCreate(date=date(2023, 11, 4), excel_row_index=2, status=ExcelSaleStatus.RECONCILED, is_exchange=False)
+    sale3 = ExcelSaleCreate(date=date(2023, 11, 4), excel_row_index=3, status=ExcelSaleStatus.UNPROCESSABLE, is_exchange=False)
+    excel_synchronization_repo.bulk_create(db_session, [sale1, sale2, sale3])
+    
+    res = get_daily_sales(db_session, target_date=date(2023, 11, 4))
+    assert len(res) == 3
+    assert res[0]["status"] == ExcelSaleStatus.ORPHAN
+    assert res[1]["status"] == ExcelSaleStatus.RECONCILED
+    assert res[2]["status"] == ExcelSaleStatus.UNPROCESSABLE
+
+from fastapi.testclient import TestClient
+from src.main import app
+
+def test_daily_sales_route_200(db_session):
+    client = TestClient(app)
+    response = client.get("/api/v1/excel-synchronization/daily-sales?target_date=2023-11-04")
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+
+def test_vendite_route_200(db_session):
+    client = TestClient(app)
+    response = client.get("/vendite")
+    assert response.status_code == 200
+    assert b"Riconciliazione Vendite" in response.content
