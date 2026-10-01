@@ -123,3 +123,18 @@ def reconcile_sale(
         logger.log_execution("excel_synchronization_router", "reconcile_sale", "err", exc=e)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/aggregations", status_code=status.HTTP_200_OK)
+def get_daily_aggregations(
+    target_date: date,
+    db: Session = Depends(get_db)
+):
+    """
+    Returns Excel-like sales aggregations and PnL for the specified date.
+    """
+    try:
+        aggregations = excel_synchronization_service.get_daily_aggregations(db, target_date)
+        return {"status": "success", "data": aggregations}
+    except Exception as e:
+        logger.log_execution("excel_synchronization_router", "get_daily_aggregations", "err", exc=e)
+        raise HTTPException(status_code=500, detail=str(e))

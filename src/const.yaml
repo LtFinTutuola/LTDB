@@ -1,0 +1,14 @@
+vat_rate: 1.22
+base_cost: 100
+list_prices:
+  0: 240
+  1: 210
+  2: 230
+  3: 240
+  4: 230
+  5: 230
+  6: 230
+  7: 240
+sg_media_giorno: 500
+costo_lavoro: 350
+imposizione_mutuo: 180

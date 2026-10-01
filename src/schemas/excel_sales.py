@@ -51,3 +51,41 @@ class ExcelSaleListItem(BaseModel):
     raw_article_code: Optional[str] = None
     article_name: Optional[str] = None
     photo_url: Optional[str] = None
+
+
+
+class ColumnAggregation(BaseModel):
+    col_index: int
+    total_revenue: float
+    total_list_price: float = 0.0
+    discount: float = 0.0
+    total_sales: int
+    avg_price: float
+
+class MetricComparison(BaseModel):
+    today: float
+    dow_avg: float
+    dow_diff: float
+    general_avg: float
+    general_diff: float
+    is_constant: bool = False
+
+class PnLSummary(BaseModel):
+    total_list_price: MetricComparison
+    discount: MetricComparison
+    net_discounted: MetricComparison
+    vat_amount: MetricComparison
+    net_no_vat: MetricComparison
+    cost_of_goods: MetricComparison
+    gross_margin: MetricComparison
+    sg_media_giorno: MetricComparison
+    costo_lavoro: MetricComparison
+    residuo: MetricComparison
+    imposizione_mutuo: MetricComparison
+    net_margin: MetricComparison
+
+class AggregationsResponse(BaseModel):
+    columns: list[ColumnAggregation]
+    pl_column: ColumnAggregation
+    pnl_summary: PnLSummary
+    target_date_dow: int = 0

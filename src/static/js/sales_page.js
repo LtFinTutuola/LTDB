@@ -21,12 +21,14 @@ const dom = {
     table: document.getElementById('sales-table'),
     tbody: document.getElementById('sales-tbody'),
     datePicker: document.getElementById('date-picker'),
-    btnToday: document.getElementById('btn-today'),
-    btnAskGemini: document.getElementById('btn-ask-gemini'),
+    salesView: document.getElementById('sales-view'),
+    statsView: document.getElementById('stats-view'),
+    btnRefreshStats: document.getElementById('btn-refresh-stats'),
+    statsTbody: document.getElementById('stats-tbody'),
+    pnlContent: document.getElementById('pnl-content'),
     loading: document.getElementById('loading-indicator'),
     empty: document.getElementById('empty-state'),
     panel: document.getElementById('work-panel'),
-    btnClosePanel: document.getElementById('btn-close-panel'),
     workPanelPrompt: document.getElementById('work-panel-prompt'),
     reconPromptInput: document.getElementById('recon-prompt-input'),
     btnReconSearch: document.getElementById('btn-recon-search'),
@@ -74,23 +76,34 @@ function openImageModal(url) {
 
 function init() {
     dom.datePicker.valueAsDate = new Date();
-    dom.datePicker.addEventListener('change', () => fetchDailySales(dom.datePicker.value));
-    
-    dom.btnToday.addEventListener('click', () => {
-        dom.datePicker.valueAsDate = new Date();
+    dom.datePicker.addEventListener('change', () => {
         fetchDailySales(dom.datePicker.value);
+        if (dom.statsView.style.display !== 'none') {
+            fetchDailyAggregations(dom.datePicker.value);
+        }
     });
     
-    dom.btnAskGemini.addEventListener('click', () => {
-        dom.page.classList.add('sales-page--panel-open');
-        dom.panel.style.display = 'flex';
-        // Clear candidates but focus prompt
-        dom.candidatesContainer.innerHTML = '';
-        dom.reconPromptInput.value = '';
-        dom.reconPromptInput.focus();
+    const tabs = document.querySelectorAll('.tab');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            const target = tab.dataset.tab;
+            if (target === 'sales') {
+                dom.statsView.style.display = 'none';
+                dom.salesView.style.display = 'block';
+            } else if (target === 'stats') {
+                dom.salesView.style.display = 'none';
+                dom.statsView.style.display = 'block';
+                fetchDailyAggregations(dom.datePicker.value);
+            }
+        });
     });
 
-    dom.btnClosePanel.addEventListener('click', closeWorkPanel);
+    dom.btnRefreshStats.addEventListener('click', () => {
+        fetchDailyAggregations(dom.datePicker.value);
+    });
 
     dom.btnReconSearch.addEventListener('click', performReconSearch);
     dom.reconPromptInput.addEventListener('keydown', (e) => {
@@ -272,9 +285,6 @@ function renderReconCell(td, sale) {
                 if (!isNaN(idx)) setActiveCell(idx, 10);
             }
 
-            dom.page.classList.add('sales-page--panel-open');
-            dom.panel.style.display = 'flex';
-            dom.workPanelPrompt.style.display = 'flex';
             dom.candidatesContainer.innerHTML = '';
             dom.reconPromptInput.value = defaultVal;
             dom.reconPromptInput.focus();
@@ -395,9 +405,12 @@ function handleCandidateConfirm(sale, cand) {
 }
 
 function closeWorkPanel() {
-    dom.page.classList.remove('sales-page--panel-open');
-    dom.panel.style.display = 'none';
     state.activeSaleId = null;
+    dom.candidatesContainer.innerHTML = `
+        <p style="color: var(--text-muted); font-size: 0.9rem; text-align: center; margin-top: 2rem;">
+            Seleziona una vendita per riconciliarla o cerca un articolo.
+        </p>
+    `;
 }
 
 function setActiveCell(rowIndex, colIndex) {
@@ -474,3 +487,111 @@ function handleKeyNav(e) {
 
 // Initialize on DOM load
 document.addEventListener('DOMContentLoaded', init);
+
+async function fetchDailyAggregations(dateStr) {
+    if (!dateStr) return;
+    dom.statsTbody.innerHTML = '<tr><td colspan="9" style="text-align:center">Caricamento statistiche...</td></tr>';
+    try {
+        const url = `/api/v1/excel-synchronization/aggregations?target_date=${dateStr}`;
+        const res = await fetch(url).then(r => r.json());
+        if (res.status === 'success') {
+            renderStatsTable(res.data);
+        } else {
+            dom.statsTbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:red;">Errore caricamento statistiche</td></tr>';
+        }
+    } catch (err) {
+        console.error(err);
+        dom.statsTbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:red;">Errore rete</td></tr>';
+    }
+}
+
+function renderStatsTable(data) {
+    const { columns, pl_column, pnl_summary, target_date_dow } = data;
+    const colMap = {};
+    columns.forEach(c => { colMap[c.col_index] = c; });
+
+    const rows = [
+        { label: 'Totale Vendite (€)', key: 'total_list_price', transform: v => `${v.toFixed(2)}` },
+        { label: 'Totale Sconti (€)', key: 'discount', transform: v => `-${v.toFixed(2)}` },
+        { label: 'Totale Netto (€)', key: 'total_revenue', transform: v => `${v.toFixed(2)}`, strong: true },
+        { label: 'Numero Vendite', key: 'total_sales' },
+        { label: 'Media (€)', key: 'avg_price', transform: v => `${v.toFixed(2)}` }
+    ];
+
+    let html = '';
+    rows.forEach(r => {
+        const fw = r.strong ? 'font-weight: bold;' : '';
+        html += `<tr><td style="${fw}"><strong>${r.label}</strong></td>`;
+        
+        const plVal = pl_column[r.key] || 0;
+        const plDisplayVal = r.transform ? r.transform(plVal) : plVal;
+        html += `<td style="${fw}">${plDisplayVal}</td>`;
+        
+        for (let i = 0; i < 8; i++) {
+            const val = colMap[i] ? colMap[i][r.key] : 0;
+            const displayVal = r.transform ? r.transform(val) : val;
+            html += `<td style="${fw}">${displayVal}</td>`;
+        }
+        html += '</tr>';
+    });
+    dom.statsTbody.innerHTML = html;
+
+    const days = ["Domenica", "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
+    const dowName = days[target_date_dow] || "Giorno";
+
+    const renderCard = (title, summaryData, invertColor, explanation) => {
+        const d = summaryData;
+        const formatDiff = (diff, invert) => {
+            if (diff === 0) return '<span style="color: var(--text-muted);">-</span>';
+            const isPositive = diff > 0;
+            const isGood = invert ? !isPositive : isPositive;
+            const color = isGood ? 'var(--success)' : 'var(--error)';
+            const sign = isPositive ? '+' : '';
+            return `<strong style="color: ${color};">${sign}€ ${diff.toFixed(2)}</strong>`;
+        };
+
+        return `
+            <div style="background: var(--surface); padding: 15px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 20px; flex: 1; display: flex; flex-direction: column;">
+                <h3 style="margin-top: 0; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase;">${title}</h3>
+                <div style="font-size: 2.1rem; font-weight: bold; margin: 5px 0;">€ ${d.today.toFixed(2)}</div>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 15px; min-height: 40px;">${explanation}</p>
+                
+                <div style="display: flex; gap: 15px; border-top: 1px solid var(--border); padding-top: 12px; margin-top: auto;">
+                    <div style="flex: 1;">
+                        <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Media di ${dowName}</div>
+                        <div style="display: flex; align-items: baseline; gap: 8px;">
+                            <span style="font-size: 1.05rem;">€ ${d.dow_avg.toFixed(2)}</span>
+                            <span style="font-size: 0.9rem;">${formatDiff(d.dow_diff, invertColor)}</span>
+                        </div>
+                    </div>
+                    <div style="flex: 1;">
+                        <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px;">Media Generale</div>
+                        <div style="display: flex; align-items: baseline; gap: 8px;">
+                            <span style="font-size: 1.05rem;">€ ${d.general_avg.toFixed(2)}</span>
+                            <span style="font-size: 0.9rem;">${formatDiff(d.general_diff, invertColor)}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    };
+
+    let pnlHtml = `
+        <div style="display: flex; gap: 20px; margin-top: 20px; flex-wrap: wrap;">
+            ${renderCard(
+                'Fatturato', 
+                pnl_summary.net_discounted, 
+                false, 
+                'Incasso totale al netto degli sconti applicati, IVA inclusa.'
+            )}
+            ${renderCard(
+                'Netto', 
+                pnl_summary.net_margin, 
+                false, 
+                'Utile netto stimato dopo la deduzione di sconti, IVA, costo della merce e costi operativi/fissi.'
+            )}
+        </div>
+    `;
+
+    dom.pnlContent.innerHTML = pnlHtml;
+}

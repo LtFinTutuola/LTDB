@@ -12,17 +12,17 @@
         <div class="sales-page__wrapper">
             <div class="sales-page__header">
                 <div class="sales-page__header-left">
-                    <button id="btn-today" class="btn-add-recon" style="width: auto; padding: 0 14px; font-size: 13px;"
-                        title="Seleziona oggi">Statistiche</button>
-                    <input type="date" id="date-picker" class="form-control form-control--sm" title="Seleziona data">
+                    <div class="tabs">
+                        <button class="tab active" data-tab="sales">Vendite</button>
+                        <button class="tab" data-tab="stats">Statistiche</button>
+                    </div>
                 </div>
                 <div class="sales-page__header-right">
-                    <button id="btn-ask-gemini" class="btn-primary"
-                        style="background: var(--accent); border-color: var(--accent);">Chiedi a GeminI</button>
+                    <input type="date" id="date-picker" class="form-control form-control--sm" title="Seleziona data">
                 </div>
             </div>
 
-            <div class="sales-page__table-container">
+            <div class="sales-page__table-container" id="sales-view">
                 <table class="sales-table" id="sales-table">
                     <thead>
                         <tr>
@@ -50,21 +50,61 @@
                     <p class="empty-state__text">Nessuna vendita disponibile</p>
                 </div>
             </div>
+
+            <!-- Statistics View -->
+            <div class="sales-page__table-container" id="stats-view" style="display: none; padding: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h3>Statistiche Giornaliere</h3>
+                    <button id="btn-refresh-stats"
+                        style="background: transparent; border: none; color: #555; font-size: 1.2rem; cursor: pointer; padding: 5px;"
+                        title="Aggiorna">🔄</button>
+                </div>
+
+                <table class="sales-table" id="stats-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 150px;">Metriche</th>
+                            <th class="col-price">PL</th>
+                            <th class="col-cat">B</th>
+                            <th class="col-cat">Sam/AT</th>
+                            <th class="col-cat">V</th>
+                            <th class="col-cat">PP</th>
+                            <th class="col-cat">C</th>
+                            <th class="col-cat">CAR</th>
+                            <th class="col-cat">BORSELLI</th>
+                            <th class="col-cat">O+A</th>
+                        </tr>
+                    </thead>
+                    <tbody id="stats-tbody">
+                        <!-- JS populate -->
+                    </tbody>
+                </table>
+
+                <div id="pnl-summary"
+                    style="margin-top: 30px; padding: 20px; background: var(--bg-elevated); border-radius: var(--radius-md);">
+                    <h4>Riepilogo Generale</h4>
+                    <div id="pnl-content" style="display: flex; gap: 40px; margin-top: 15px;">
+                        <!-- JS populate -->
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
-    <div class="sales-page__panel" id="work-panel" style="display: none;">
+    <div class="sales-page__panel" id="work-panel">
         <div class="work-panel__header">
-            <h3>Seleziona Articolo</h3>
-            <button id="btn-close-panel" class="btn-close-panel" title="Chiudi">✕</button>
+            <h3>Area di Lavoro</h3>
         </div>
-        <div class="work-panel__prompt" id="work-panel-prompt" style="display: none;">
+        <div class="work-panel__prompt" id="work-panel-prompt">
             <input type="text" id="recon-prompt-input" placeholder="Vendor code o barcode..."
                 class="form-control form-control--sm">
             <button id="btn-recon-search" class="btn-primary">Invia</button>
         </div>
         <div class="work-panel__content" id="candidates-container">
             <!-- JS populate -->
+            <p style="color: var(--text-muted); font-size: 0.9rem; text-align: center; margin-top: 2rem;">
+                Seleziona una vendita per riconciliarla o cerca un articolo.
+            </p>
         </div>
     </div>
 </div>

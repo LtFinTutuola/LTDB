@@ -359,3 +359,176 @@ def stop_polling():
         _stop_event.set()
         _polling_thread.join(timeout=5.0)
         _polling_thread = None
+
+
+# ---------------------------------------------------------------------------
+# Aggregations Logic
+# ---------------------------------------------------------------------------
+
+import yaml
+from pathlib import Path
+from src.models.excel_sales import ExcelSale
+
+def _calculate_pnl(revenue_by_col: dict, pl_by_col: dict, constants: dict) -> dict:
+    vat_rate = constants.get('vat_rate', 1.22)
+    base_cost = constants.get('base_cost', 100)
+    list_prices = constants.get('list_prices', {})
+    sg_media_giorno = constants.get('sg_media_giorno', 500)
+    costo_lavoro = constants.get('costo_lavoro', 350)
+    imposizione_mutuo = constants.get('imposizione_mutuo', 180)
+    
+    total_costo_merce = 0.0
+    for col_idx in range(8):
+        list_price_total = pl_by_col.get(col_idx, 0.0)
+        list_price = list_prices.get(col_idx, 0)
+        if list_price and list_price > 0:
+            total_costo_merce += (list_price_total / list_price) * base_cost
+            
+    grand_total_revenue = sum(revenue_by_col.values())
+    pl_revenue = sum(pl_by_col.values())
+    
+    discount = pl_revenue - grand_total_revenue
+    net_discounted = grand_total_revenue
+    vat_amount = net_discounted - (net_discounted / vat_rate)
+    net_no_vat = net_discounted - vat_amount
+    gross_margin = net_no_vat - total_costo_merce
+    residuo = gross_margin - sg_media_giorno - costo_lavoro
+    net_margin = residuo - imposizione_mutuo
+    
+    return {
+        "total_list_price": round(pl_revenue, 2),
+        "discount": round(discount, 2),
+        "net_discounted": round(net_discounted, 2),
+        "vat_amount": round(vat_amount, 2),
+        "net_no_vat": round(net_no_vat, 2),
+        "cost_of_goods": round(total_costo_merce, 2),
+        "gross_margin": round(gross_margin, 2),
+        "sg_media_giorno": sg_media_giorno,
+        "costo_lavoro": costo_lavoro,
+        "residuo": round(residuo, 2),
+        "imposizione_mutuo": imposizione_mutuo,
+        "net_margin": round(net_margin, 2)
+    }
+
+def get_daily_aggregations(db: Session, target_date: date) -> Dict[str, Any]:
+    const_path = Path(__file__).parent.parent / 'const.yaml'
+    with open(const_path, 'r') as cf:
+        constants = yaml.safe_load(cf)
+
+    # 1. Today's stats
+    today_stats = db.query(
+        ExcelSale.excel_file_column,
+        func.sum(ExcelSale.selling_price).label("total_revenue"),
+        func.count(ExcelSale.selling_price).label("total_sales"),
+        func.sum(ExcelSale.starting_price).label("total_list_price")
+    ).filter(
+        ExcelSale.date == target_date,
+        ExcelSale.selling_price.isnot(None),
+        ExcelSale.status != ExcelSaleStatus.UNPROCESSABLE
+    ).group_by(ExcelSale.excel_file_column).all()
+
+    today_revenue_by_col = {row.excel_file_column: float(row.total_revenue or 0) for row in today_stats}
+    today_pl_by_col = {row.excel_file_column: float(row.total_list_price or 0) for row in today_stats}
+    today_sales_by_col = {row.excel_file_column: row.total_sales for row in today_stats}
+    
+    # 2. General Historical stats
+    general_days = db.query(func.count(func.distinct(ExcelSale.date))).filter(
+        ExcelSale.status != ExcelSaleStatus.UNPROCESSABLE,
+        ExcelSale.selling_price.isnot(None)
+    ).scalar() or 1
+    
+    general_stats = db.query(
+        ExcelSale.excel_file_column,
+        func.sum(ExcelSale.selling_price).label("total_revenue"),
+        func.sum(ExcelSale.starting_price).label("total_list_price")
+    ).filter(
+        ExcelSale.status != ExcelSaleStatus.UNPROCESSABLE,
+        ExcelSale.selling_price.isnot(None)
+    ).group_by(ExcelSale.excel_file_column).all()
+    
+    general_revenue_by_col = {row.excel_file_column: float(row.total_revenue or 0) / general_days for row in general_stats}
+    general_pl_by_col = {row.excel_file_column: float(row.total_list_price or 0) / general_days for row in general_stats}
+    
+    # 3. DOW Historical stats
+    target_dow = target_date.strftime('%w')
+    dow_days = db.query(func.count(func.distinct(ExcelSale.date))).filter(
+        ExcelSale.status != ExcelSaleStatus.UNPROCESSABLE,
+        ExcelSale.selling_price.isnot(None),
+        func.strftime('%w', ExcelSale.date) == target_dow
+    ).scalar() or 1
+
+    dow_stats = db.query(
+        ExcelSale.excel_file_column,
+        func.sum(ExcelSale.selling_price).label("total_revenue"),
+        func.sum(ExcelSale.starting_price).label("total_list_price")
+    ).filter(
+        ExcelSale.status != ExcelSaleStatus.UNPROCESSABLE,
+        ExcelSale.selling_price.isnot(None),
+        func.strftime('%w', ExcelSale.date) == target_dow
+    ).group_by(ExcelSale.excel_file_column).all()
+
+    dow_revenue_by_col = {row.excel_file_column: float(row.total_revenue or 0) / dow_days for row in dow_stats}
+    dow_pl_by_col = {row.excel_file_column: float(row.total_list_price or 0) / dow_days for row in dow_stats}
+
+    # Calculate P&L for all 3 projections
+    today_pnl = _calculate_pnl(today_revenue_by_col, today_pl_by_col, constants)
+    dow_pnl = _calculate_pnl(dow_revenue_by_col, dow_pl_by_col, constants)
+    general_pnl = _calculate_pnl(general_revenue_by_col, general_pl_by_col, constants)
+
+    # Prepare Column results for today
+    results = []
+    for col_idx in range(8):
+        revenue = today_revenue_by_col.get(col_idx, 0.0)
+        pl = today_pl_by_col.get(col_idx, 0.0)
+        discount = pl - revenue
+        sales = today_sales_by_col.get(col_idx, 0)
+        avg_price = revenue / sales if sales > 0 else 0.0
+        results.append({
+            "col_index": col_idx,
+            "total_revenue": revenue,
+            "total_list_price": pl,
+            "discount": discount,
+            "total_sales": sales,
+            "avg_price": round(avg_price, 2)
+        })
+
+    # Prepare PL column results
+    pl_revenue = sum(today_revenue_by_col.values()) # wait, total_revenue should be revenue, pl should be pl
+    pl_list_price = sum(today_pl_by_col.values())
+    pl_discount = pl_list_price - pl_revenue
+    pl_count = sum(today_sales_by_col.values())
+    pl_avg = pl_revenue / pl_count if pl_count > 0 else 0.0
+    pl_column = {
+        "col_index": -1,
+        "total_revenue": pl_revenue,
+        "total_list_price": pl_list_price,
+        "discount": pl_discount,
+        "total_sales": pl_count,
+        "avg_price": round(pl_avg, 2)
+    }
+    
+    # Prepare comparative PnL
+    comparisons = {}
+    constant_keys = {"sg_media_giorno", "costo_lavoro", "imposizione_mutuo"}
+    
+    for key in today_pnl.keys():
+        t_val = today_pnl[key]
+        d_val = dow_pnl[key]
+        g_val = general_pnl[key]
+        is_const = key in constant_keys
+        
+        comparisons[key] = {
+            "today": round(t_val, 2),
+            "dow_avg": round(d_val, 2),
+            "dow_diff": round(t_val - d_val, 2),
+            "general_avg": round(g_val, 2),
+            "general_diff": round(t_val - g_val, 2),
+            "is_constant": is_const
+        }
+
+    return {
+        "columns": results, 
+        "pl_column": pl_column, 
+        "pnl_summary": comparisons,
+        "target_date_dow": int(target_dow)
+    }

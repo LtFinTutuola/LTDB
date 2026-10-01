@@ -321,4 +321,73 @@ def test_vendite_route_200(db_session):
     client = TestClient(app)
     response = client.get("/vendite")
     assert response.status_code == 200
-    assert b"Riconciliazione Vendite" in response.content
+    assert b"Vendite - La Triestina" in response.content
+
+def test_get_daily_aggregations(db_session):
+    from src.schemas.excel_sales import ExcelSaleCreate, ExcelSaleStatus
+    from src.services.excel_synchronization_service import get_daily_aggregations
+    from src.repositories.excel_synchronization_repo import excel_synchronization_repo
+    from datetime import date, timedelta
+    
+    test_date = date(2024, 1, 4) # A Thursday
+    hist_date_1 = test_date - timedelta(days=7) # Thursday
+    hist_date_2 = test_date - timedelta(days=1) # Wednesday
+    
+    sales = [
+        # Today
+        ExcelSaleCreate(date=test_date, excel_row_index=1, excel_file_column=0, status=ExcelSaleStatus.ORPHAN, starting_price=240, selling_price=100, is_exchange=False, raw_article_code="A"),
+        ExcelSaleCreate(date=test_date, excel_row_index=2, excel_file_column=0, status=ExcelSaleStatus.ORPHAN, starting_price=240, selling_price=150, is_exchange=True, raw_article_code="B"),
+        ExcelSaleCreate(date=test_date, excel_row_index=3, excel_file_column=1, status=ExcelSaleStatus.ORPHAN, starting_price=210, selling_price=200, is_exchange=False, raw_article_code="C"),
+        
+        # Hist 1 (Same DOW)
+        ExcelSaleCreate(date=hist_date_1, excel_row_index=4, excel_file_column=0, status=ExcelSaleStatus.ORPHAN, starting_price=240, selling_price=200, is_exchange=False, raw_article_code="A"),
+        
+        # Hist 2 (Diff DOW)
+        ExcelSaleCreate(date=hist_date_2, excel_row_index=5, excel_file_column=0, status=ExcelSaleStatus.ORPHAN, starting_price=240, selling_price=220, is_exchange=False, raw_article_code="A"),
+    ]
+    
+    excel_synchronization_repo.bulk_create(db_session, sales)
+    db_session.commit()
+    
+    res = get_daily_aggregations(db_session, test_date)
+    
+    assert "columns" in res
+    assert "pl_column" in res
+    assert "pnl_summary" in res
+    
+    cols = {c["col_index"]: c for c in res["columns"]}
+    
+    col_0 = cols[0]
+    assert col_0["total_revenue"] == 250
+    assert col_0["total_list_price"] == 480
+    assert col_0["discount"] == 230
+    assert col_0["total_sales"] == 2
+    assert col_0["avg_price"] == 125
+    assert "target_date_dow" in res
+    
+    pnl = res["pnl_summary"]
+    
+    # Today's Net Discounted should be 250 + 200 = 450
+    assert pnl["net_discounted"]["today"] == 450
+    
+    # DOW Avg Net Discounted:
+    # 2 days (test_date, hist_date_1)
+    # Total revenue for DOW = 450 (today) + 200 (hist1) = 650
+    # Avg = 325
+    assert pnl["net_discounted"]["dow_avg"] == 325
+    
+    # General Avg Net Discounted:
+    # 3 days total
+    # Total revenue = 450 + 200 + 220 = 870
+    # Avg = 870 / 3 = 290
+    assert pnl["net_discounted"]["general_avg"] == 290
+    
+    # Diff checks
+    assert pnl["net_discounted"]["dow_diff"] == 125  # 450 - 325
+    assert pnl["net_discounted"]["general_diff"] == 160  # 450 - 290
+    
+    # Constant check
+    assert pnl["sg_media_giorno"]["is_constant"] is True
+    assert pnl["sg_media_giorno"]["today"] == 500
+    assert pnl["sg_media_giorno"]["dow_avg"] == 500
+    assert pnl["sg_media_giorno"]["dow_diff"] == 0
