@@ -28,6 +28,7 @@ class BrandListItem(BaseModel):
 
 class SemanticSearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=500, description="Natural language search query")
+    in_stock_only: bool = False
 
 
 class SearchResultItem(BaseModel):

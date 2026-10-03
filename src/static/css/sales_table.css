@@ -251,7 +251,7 @@
 
 /* Work Panel */
 .sales-page__panel {
-    background: var(--bg-surface);
+    background: transparent;
     border-left: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
@@ -268,7 +268,6 @@
 
 .work-panel__prompt {
     padding: var(--space-md);
-    border-bottom: 1px solid var(--border-color);
     display: flex;
     gap: var(--space-sm);
 }
@@ -287,4 +286,183 @@
     padding: var(--space-xl);
     text-align: center;
     color: var(--text-muted);
+}
+
+/* Work Panel Tabs */
+.work-panel__tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 var(--space-md);
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-app);
+}
+
+.panel-tab {
+    padding: 8px 16px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    font-weight: 500;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.panel-tab:hover {
+    color: var(--text-primary);
+}
+
+.panel-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.btn-close-tab {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+.btn-close-tab:hover {
+    color: var(--error);
+}
+
+/* Work Panel Body */
+.work-panel__body {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+.panel-mode-container {
+    display: none;
+    flex-direction: column;
+    height: 100%;
+}
+
+.panel-mode-container.active {
+    display: flex;
+}
+
+/* Chat UI */
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.chat-bubble {
+    padding: 12px 16px;
+    border-radius: 12px;
+    max-width: 85%;
+    font-size: var(--font-size-sm);
+    line-height: 1.4;
+}
+
+.chat-bubble--gemini {
+    background: transparent;
+    align-self: flex-start;
+    padding: 0;
+    max-width: 100%;
+    color: var(--text-primary);
+}
+
+.chat-bubble--user {
+    background: var(--accent);
+    color: white;
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+}
+
+.chat-input-area {
+    padding: var(--space-md);
+    display: flex;
+    gap: var(--space-sm);
+    background: transparent;
+}
+
+.chat-input-area textarea {
+    flex: 1;
+    resize: none;
+    background: var(--bg-app);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    overflow: hidden;
+}
+
+.chat-input-area textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+/* Detail UI */
+.detail-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    background: var(--bg-elevated);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+    border: none;
+}
+
+.detail-card__header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.detail-card__img {
+    width: 100%;
+    height: auto;
+    object-fit: contain;
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    cursor: pointer;
+}
+
+.detail-card__info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.detail-card__title {
+    font-weight: 600;
+    font-size: 1.1rem;
+    margin: 0;
+}
+
+.inventory-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    align-self: flex-start;
+}
+
+.inventory-badge--in-stock {
+    background: rgba(var(--success-rgb, 76, 175, 80), 0.2);
+    color: var(--success);
+}
+
+.inventory-badge--out-of-stock {
+    background: rgba(var(--error-rgb, 244, 67, 54), 0.2);
+    color: var(--error);
 }

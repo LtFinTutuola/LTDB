@@ -78,7 +78,7 @@ async def semantic_search(
                          query=request.query)
     start = time.time()
     try:
-        result = await search_service.execute_semantic_search(db, request.query)
+        result = await search_service.execute_semantic_search(db, request.query, request.in_stock_only)
         latency_ms = int((time.time() - start) * 1000)
         logger.log_execution("catalog_router", "response_dispatched", "ok",
                              path="/api/v1/catalog/search/semantic",

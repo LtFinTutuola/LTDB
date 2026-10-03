@@ -57,14 +57,14 @@ _SIMILARITY_THRESHOLD = 0.65
 # Public entry point
 # ---------------------------------------------------------------------------
 
-async def execute_semantic_search(db: Session, query: str) -> dict:
+async def execute_semantic_search(db: Session, query: str, in_stock_only: bool = False) -> dict:
     """
     Interpret a natural language query and return matching catalog results.
 
     Returns:
         dict matching SemanticSearchResponse schema.
     """
-    logger.log_execution("search_service", "search_start", "ok", query=query)
+    logger.log_execution("search_service", "search_start", "ok", query=query, in_stock_only=in_stock_only)
 
     # Step 1 — LLM routing
     interpretation = await _interpret_query(query)
@@ -80,6 +80,10 @@ async def execute_semantic_search(db: Session, query: str) -> dict:
         results = _filter_search(db, interpretation)
     else:
         results = await _similarity_search(db, interpretation.free_text or query)
+
+    # Step 3 — Filter by in_stock_only if requested
+    if in_stock_only:
+        results = [r for r in results if r.get("stock", 0) > 0]
 
     count = len(results)
     if count == 0:

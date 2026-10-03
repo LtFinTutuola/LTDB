@@ -37,3 +37,12 @@ class SaleResponse(BaseSchemaWithAudit):
 class SaleSummary(BaseModel):
     total_sales: int
     total_revenue: float
+
+
+class ChatMessageRequest(BaseModel):
+    message: str
+    context_date: Optional[str] = None
+
+
+class ChatMessageResponse(BaseModel):
+    reply: str

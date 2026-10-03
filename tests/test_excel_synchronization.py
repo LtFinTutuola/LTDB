@@ -391,3 +391,103 @@ def test_get_daily_aggregations(db_session):
     assert pnl["sg_media_giorno"]["today"] == 500
     assert pnl["sg_media_giorno"]["dow_avg"] == 500
     assert pnl["sg_media_giorno"]["dow_diff"] == 0
+
+def test_get_sale_detail_success(db_session):
+    from src.schemas.excel_sales import ExcelSaleCreate, ExcelSaleStatus
+    from src.services.excel_synchronization_service import get_sale_detail
+    from src.repositories.excel_synchronization_repo import excel_synchronization_repo
+    from src.models.pim import Brand, ArticleBlueprint, Category
+    from src.models.wms import Article, Batch, Supplier, ArticleStatus
+    import uuid
+    from datetime import date
+    
+    brand = Brand(name="TestBrand")
+    db_session.add(brand)
+    db_session.flush()
+    
+    category = Category(name="TestCat", description="Test")
+    db_session.add(category)
+    db_session.flush()
+    
+    bp = ArticleBlueprint(
+        brand_id=str(brand.id),
+        category_id=str(category.id),
+        article_name="Test Article Detail",
+        description="Desc",
+        extended_description="Ext Desc",
+        tags=[],
+        materials=[]
+    )
+    db_session.add(bp)
+    db_session.flush()
+    
+    supplier = Supplier(company_name="TestSupplier")
+    db_session.add(supplier)
+    db_session.flush()
+    
+    batch = Batch(supplier_id=str(supplier.id), delivery_note_number="123", document_date=date.today())
+    db_session.add(batch)
+    db_session.flush()
+    
+    # We add one SOLD article to associate with the sale, and one AVAILABLE article to simulate inventory
+    article_sold = Article(article_blueprint_id=str(bp.id), batch_id=str(batch.id), colors=["red"], status=ArticleStatus.SOLD)
+    article_avail = Article(article_blueprint_id=str(bp.id), batch_id=str(batch.id), colors=["red"], status=ArticleStatus.AVAILABLE)
+    db_session.add_all([article_sold, article_avail])
+    db_session.flush()
+    
+    sale = ExcelSaleCreate(date=date(2023, 11, 4), excel_row_index=1, status=ExcelSaleStatus.RECONCILED, is_exchange=False)
+    db_sale = excel_synchronization_repo.bulk_create(db_session, [sale])[0]
+    db_sale.article_id = str(article_sold.id)
+    db_session.commit()
+    
+    detail = get_sale_detail(db_session, str(db_sale.id))
+    assert detail["article_name"] == "Test Article Detail"
+    assert detail["inventory"] == 1
+    assert detail["colors"] == ["red"]
+    assert detail["is_exchange"] is False
+
+def test_sale_detail_route_200(db_session):
+    from src.schemas.excel_sales import ExcelSaleCreate, ExcelSaleStatus
+    from src.repositories.excel_synchronization_repo import excel_synchronization_repo
+    from src.models.pim import Brand, ArticleBlueprint, Category
+    from src.models.wms import Article, Batch, Supplier, ArticleStatus
+    import uuid
+    from datetime import date
+    
+    brand = Brand(name="TestBrand2")
+    db_session.add(brand)
+    db_session.flush()
+    
+    bp = ArticleBlueprint(
+        brand_id=str(brand.id),
+        article_name="Route Article",
+        description="Desc",
+        extended_description="Ext Desc",
+        tags=[],
+        materials=[]
+    )
+    db_session.add(bp)
+    db_session.flush()
+    
+    supplier = Supplier(company_name="TestSupplier2")
+    db_session.add(supplier)
+    db_session.flush()
+    
+    batch = Batch(supplier_id=str(supplier.id), delivery_note_number="124", document_date=date.today())
+    db_session.add(batch)
+    db_session.flush()
+    
+    article = Article(article_blueprint_id=str(bp.id), batch_id=str(batch.id), colors=["blue"], status=ArticleStatus.SOLD)
+    db_session.add(article)
+    db_session.flush()
+    
+    sale = ExcelSaleCreate(date=date(2023, 11, 4), excel_row_index=2, status=ExcelSaleStatus.RECONCILED, is_exchange=False)
+    db_sale = excel_synchronization_repo.bulk_create(db_session, [sale])[0]
+    db_sale.article_id = str(article.id)
+    db_session.commit()
+    
+    client = TestClient(app)
+    response = client.get(f"/api/v1/excel-synchronization/sale-detail/{db_sale.id}")
+    assert response.status_code == 200
+    assert response.json()["article_name"] == "Route Article"
+    assert response.json()["inventory"] == 0

@@ -14,13 +14,14 @@
   <!-- Navigation -->
   <div class="sidebar__top">
     <nav class="sidebar__nav">
-      <a href="/vendite" class="sidebar__nav-item {% if active_page == 'vendite' %}sidebar__nav-item--active{% endif %}">
+      <a href="/vendite"
+        class="sidebar__nav-item {% if active_page == 'vendite' %}sidebar__nav-item--active{% endif %}">
         <span class="material-symbols-rounded">point_of_sale</span>
         <span class="sidebar__nav-label">Vendite</span>
       </a>
       <a href="/" class="sidebar__nav-item {% if active_page == 'dashboard' %}sidebar__nav-item--active{% endif %}">
-        <span class="material-symbols-rounded">dashboard</span>
-        <span class="sidebar__nav-label">Dashboard</span>
+        <span class="material-symbols-rounded">inventory_2</span>
+        <span class="sidebar__nav-label">Magazzino</span>
       </a>
       <!-- Kept as buttons if they trigger modals, or change to links if they are separate pages -->
       <button class="sidebar__nav-item" data-action="brands">

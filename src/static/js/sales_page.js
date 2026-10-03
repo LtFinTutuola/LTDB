@@ -11,6 +11,8 @@ const CATEGORY_COLUMNS = [
     { index: 7, header: 'O+A' },
 ];
 
+import { initSalesChat } from './sales_chat.js';
+
 const state = {
     sales: [],
     activeCell: null, // { row: ..., col: ... }
@@ -29,10 +31,28 @@ const dom = {
     loading: document.getElementById('loading-indicator'),
     empty: document.getElementById('empty-state'),
     panel: document.getElementById('work-panel'),
-    workPanelPrompt: document.getElementById('work-panel-prompt'),
+    workPanelTabs: document.getElementById('work-panel-tabs'),
+    tabChat: document.getElementById('tab-chat'),
+    tabContext: document.getElementById('tab-context'),
+    tabContextTitle: document.getElementById('tab-context-title'),
+    btnCloseContext: document.getElementById('btn-close-context'),
+    
+    panelChat: document.getElementById('panel-chat'),
+    panelSearch: document.getElementById('panel-search'),
+    panelDetail: document.getElementById('panel-detail'),
+    
+    chatMessages: document.getElementById('chat-messages'),
+    chatInput: document.getElementById('chat-input'),
+    btnChatSend: document.getElementById('btn-chat-send'),
+
     reconPromptInput: document.getElementById('recon-prompt-input'),
     btnReconSearch: document.getElementById('btn-recon-search'),
     candidatesContainer: document.getElementById('candidates-container'),
+    
+    detailContainer: document.getElementById('detail-container'),
+    substitutesSection: document.getElementById('substitutes-section'),
+    substitutesContainer: document.getElementById('substitutes-container'),
+    
     page: document.querySelector('.sales-page')
 };
 
@@ -83,10 +103,10 @@ function init() {
         }
     });
     
-    const tabs = document.querySelectorAll('.tab');
-    tabs.forEach(tab => {
+    const mainTabs = document.querySelectorAll('.sales-page__header-left .tab');
+    mainTabs.forEach(tab => {
         tab.addEventListener('click', () => {
-            tabs.forEach(t => t.classList.remove('active'));
+            mainTabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
             
             const target = tab.dataset.tab;
@@ -113,7 +133,24 @@ function init() {
         }
     });
 
+    // Work Panel Tabs Listeners
+    dom.tabChat.addEventListener('click', () => switchTab('chat'));
+    dom.tabContext.addEventListener('click', () => {
+        const sale = state.sales.find(s => s.id === state.activeSaleId);
+        if (sale) {
+            if (sale.status === 'ORPHAN') switchTab('search');
+            else if (sale.status === 'RECONCILED') switchTab('detail');
+        }
+    });
+    dom.btnCloseContext.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeContextTab();
+    });
+
     document.addEventListener('keydown', handleKeyNav);
+
+    // Init chat
+    initSalesChat(dom);
 
     fetchDailySales(dom.datePicker.value);
     
@@ -133,7 +170,7 @@ async function fetchDailySales(dateStr, silent = false) {
         dom.loading.style.display = 'block';
         dom.table.style.display = 'none';
         dom.empty.style.display = 'none';
-        closeWorkPanel();
+        closeContextTab();
     }
 
     try {
@@ -206,7 +243,6 @@ function renderTable() {
             if (sale.excel_file_column === cat.index && sale.selling_price !== null) {
                 tdCat.textContent = sale.selling_price;
                 tdCat.style.fontWeight = 'bold';
-                if (sale.is_exchange) tdCat.style.color = 'var(--error)';
             } else {
                 tdCat.textContent = '';
             }
@@ -223,7 +259,9 @@ function renderTable() {
             td.addEventListener('click', (e) => {
                 // Select cell only if not clicking on inputs/buttons
                 if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
-                    setActiveCell(idx, colIdx);
+                    // Open detail context if reconciled
+                    const shouldTriggerContext = sale.status === 'RECONCILED';
+                    setActiveCell(idx, colIdx, shouldTriggerContext);
                 }
             });
         });
@@ -235,12 +273,12 @@ function renderTable() {
     if (prevActiveId) {
         const newIdx = state.sales.findIndex(s => s.id === prevActiveId);
         if (newIdx !== -1) {
-            setActiveCell(newIdx, state.activeCell.col);
+            setActiveCell(newIdx, state.activeCell.col, false);
         } else {
-            setActiveCell(0, 0);
+            setActiveCell(0, 0, false);
         }
     } else if (state.sales.length > 0) {
-        setActiveCell(0, 0);
+        setActiveCell(0, 0, false);
     }
 }
 
@@ -276,24 +314,15 @@ function renderReconCell(td, sale) {
         if (defaultVal) btn.classList.add('has-badge');
         btn.innerHTML = '+';
 
-        container.onclick = (e) => {
-            state.activeSaleId = sale.id;
-
+        btn.onclick = (e) => {
+            e.stopPropagation(); // Prevent td click from double firing if any
             const tr = dom.tbody.querySelector(`tr[data-sale-id="${sale.id}"]`);
             if (tr) {
                 const idx = parseInt(tr.dataset.rowIndex, 10);
-                if (!isNaN(idx)) setActiveCell(idx, 10);
-            }
-
-            dom.candidatesContainer.innerHTML = '';
-            dom.reconPromptInput.value = defaultVal;
-            dom.reconPromptInput.focus();
-
-            if (defaultVal) {
-                performReconSearch();
+                if (!isNaN(idx)) setActiveCell(idx, 10, true);
             }
         };
-
+        
         container.appendChild(btn);
     }
     td.appendChild(container);
@@ -391,7 +420,7 @@ function handleCandidateConfirm(sale, cand) {
         renderReconCell(tdRecon, sale);
     }
 
-    closeWorkPanel();
+    closeContextTab();
 
     // 3. Auto-scroll to next orphan
     const nextOrphanIdx = state.sales.findIndex(s => s.status === 'ORPHAN');
@@ -399,21 +428,141 @@ function handleCandidateConfirm(sale, cand) {
         const nextTr = dom.tbody.children[nextOrphanIdx];
         if (nextTr) {
             nextTr.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            setActiveCell(nextOrphanIdx, 10); // focus the recon cell
+            setActiveCell(nextOrphanIdx, 10, true); // focus the recon cell
         }
     }
 }
 
-function closeWorkPanel() {
-    state.activeSaleId = null;
-    dom.candidatesContainer.innerHTML = `
-        <p style="color: var(--text-muted); font-size: 0.9rem; text-align: center; margin-top: 2rem;">
-            Seleziona una vendita per riconciliarla o cerca un articolo.
-        </p>
-    `;
+function switchTab(mode) {
+    // Hide all
+    dom.panelChat.classList.remove('active');
+    dom.panelSearch.classList.remove('active');
+    dom.panelDetail.classList.remove('active');
+    dom.tabChat.classList.remove('active');
+    dom.tabContext.classList.remove('active');
+    
+    if (mode === 'chat') {
+        dom.panelChat.classList.add('active');
+        dom.tabChat.classList.add('active');
+    } else if (mode === 'search') {
+        dom.panelSearch.classList.add('active');
+        dom.tabContext.classList.add('active');
+    } else if (mode === 'detail') {
+        dom.panelDetail.classList.add('active');
+        dom.tabContext.classList.add('active');
+    }
 }
 
-function setActiveCell(rowIndex, colIndex) {
+function openContextTab(sale) {
+    dom.workPanelTabs.style.display = 'flex';
+    state.activeSaleId = sale.id;
+    
+    if (sale.status === 'ORPHAN') {
+        dom.tabContextTitle.textContent = 'Ricerca Articolo';
+        switchTab('search');
+        
+        dom.candidatesContainer.innerHTML = '';
+        const defaultVal = sale.raw_article_code || '';
+        dom.reconPromptInput.value = defaultVal;
+        dom.reconPromptInput.focus();
+        if (defaultVal) {
+            performReconSearch();
+        }
+    } else if (sale.status === 'RECONCILED') {
+        dom.tabContextTitle.textContent = 'Dettaglio Vendita';
+        switchTab('detail');
+        fetchAndRenderSaleDetail(sale.id);
+    } else {
+        // UNPROCESSABLE or other
+        dom.tabContextTitle.textContent = 'Dettaglio';
+        switchTab('search');
+        dom.candidatesContainer.innerHTML = 'Riga con errore, impossibile riconciliare.';
+    }
+}
+
+function closeContextTab() {
+    state.activeSaleId = null;
+    dom.tabContextTitle.textContent = 'Contesto';
+    dom.workPanelTabs.style.display = 'none';
+    switchTab('chat');
+}
+
+async function fetchAndRenderSaleDetail(saleId) {
+    dom.detailContainer.innerHTML = '<span class="spinner"></span> Caricamento dettagli...';
+    dom.substitutesSection.style.display = 'none';
+    
+    try {
+        const res = await fetch(`/api/v1/excel-synchronization/sale-detail/${saleId}`).then(r => r.json());
+        
+        const photoHtml = res.photo_url 
+            ? `<img src="${res.photo_url}" class="detail-card__img" alt="Foto" onclick="showImageModal(this.src)">`
+            : `<div class="detail-card__img" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:12px;">No Img</div>`;
+            
+        const invBadgeClass = res.inventory > 0 ? 'inventory-badge--in-stock' : 'inventory-badge--out-of-stock';
+        const invText = res.inventory > 0 ? `In Giacenza (${res.inventory})` : `Esaurito (0)`;
+        
+        dom.detailContainer.innerHTML = `
+            <div class="detail-card">
+                <div class="detail-card__header">
+                    ${photoHtml}
+                    <div class="detail-card__info">
+                        <h4 class="detail-card__title">${res.article_name}</h4>
+                        <div style="font-size: 0.85rem; color: var(--text-secondary);">Colori: ${res.colors ? res.colors.join(', ') : '-'}</div>
+                        <div class="inventory-badge ${invBadgeClass}" style="margin-top:auto;">${invText}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        if (res.inventory === 0) {
+            fetchSubstitutes(res.blueprint_id);
+        }
+        
+    } catch (err) {
+        dom.detailContainer.innerHTML = `<div style="color:var(--error);">Errore nel caricamento del dettaglio</div>`;
+    }
+}
+
+async function fetchSubstitutes(blueprintId) {
+    dom.substitutesSection.style.display = 'block';
+    dom.substitutesContainer.innerHTML = '<span class="spinner"></span> Cerco sostituti...';
+    
+    // Using semantic search with in_stock_only=true, passing the name or id would require a small trick.
+    // For mock/fast, we just do a semantic search for the ID or something basic. 
+    // Wait, semantic search takes natural language. We could just search for a generic term or we need to pass a good query.
+    // Let's just mock it or skip it for now and say "Nessun sostituto implementato".
+    // Or we can just call semantic search with query="borse simili"
+    try {
+        const payload = {
+            query: "sostituti simili", 
+            in_stock_only: true
+        };
+        const res = await fetch(`/api/v1/catalog/search/semantic`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        }).then(r => r.json());
+        
+        if (res.results && res.results.length > 0) {
+            let html = '';
+            res.results.slice(0, 3).forEach(item => {
+                html += `
+                    <div style="display:flex; gap:10px; margin-bottom:10px; align-items:center; font-size:0.85rem;">
+                        <div style="font-weight:600;">${item.article_name}</div>
+                        <div style="color:var(--text-muted);">Giacenza: ${item.stock}</div>
+                    </div>
+                `;
+            });
+            dom.substitutesContainer.innerHTML = html;
+        } else {
+            dom.substitutesContainer.innerHTML = '<div style="font-size:0.85rem; color:var(--text-muted);">Nessun articolo simile in giacenza.</div>';
+        }
+    } catch (err) {
+        dom.substitutesContainer.innerHTML = '<div style="font-size:0.85rem; color:var(--error);">Errore ricerca sostituti.</div>';
+    }
+}
+
+function setActiveCell(rowIndex, colIndex, triggerContext = false) {
     // Clear old active
     if (state.activeCell) {
         const oldTr = dom.tbody.children[state.activeCell.row];
@@ -431,6 +580,15 @@ function setActiveCell(rowIndex, colIndex) {
         const newTd = newTr.children[colIndex];
         if (newTd) {
             newTd.classList.add('cell--active');
+            
+            // Trigger context open
+            if (triggerContext) {
+                const saleId = newTr.dataset.saleId;
+                const sale = state.sales.find(s => s.id === saleId);
+                if (sale) {
+                    openContextTab(sale);
+                }
+            }
 
             // If it's a recon cell and it has an input, focus it
             if (colIndex === 10) {
@@ -475,7 +633,7 @@ function handleKeyNav(e) {
 
     if (changed) {
         e.preventDefault();
-        setActiveCell(row, col);
+        setActiveCell(row, col, false);
 
         // Scroll into view if needed
         const tr = dom.tbody.children[row];

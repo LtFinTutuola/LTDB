@@ -138,3 +138,21 @@ def get_daily_aggregations(
     except Exception as e:
         logger.log_execution("excel_synchronization_router", "get_daily_aggregations", "err", exc=e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sale-detail/{sale_id}", status_code=status.HTTP_200_OK)
+def get_sale_detail(
+    sale_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Returns the details of a reconciled sale, including inventory.
+    """
+    try:
+        detail = excel_synchronization_service.get_sale_detail(db, sale_id)
+        return detail
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.log_execution("excel_synchronization_router", "get_sale_detail", "err", exc=e)
+        raise HTTPException(status_code=500, detail=str(e))

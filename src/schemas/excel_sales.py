@@ -89,3 +89,12 @@ class AggregationsResponse(BaseModel):
     pl_column: ColumnAggregation
     pnl_summary: PnLSummary
     target_date_dow: int = 0
+
+
+class SaleDetailResponse(BaseModel):
+    article_name: str
+    photo_url: Optional[str] = None
+    inventory: int
+    blueprint_id: str
+    colors: list[str]
+    is_exchange: bool

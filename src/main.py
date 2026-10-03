@@ -9,6 +9,7 @@ from src.routers.heuristic_router import router as heuristic_router
 from src.routers.catalog_router import router as catalog_router
 from src.routers.frontend_router import router as frontend_router
 from src.routers.excel_synchronization_router import router as excel_synchronization_router
+from src.routers.sales_router import router as sales_router
 
 # Initialize the logger at startup
 logger = get_logger()
@@ -37,6 +38,7 @@ app.include_router(data_ingestion_router)
 app.include_router(heuristic_router)
 app.include_router(catalog_router)
 app.include_router(excel_synchronization_router)
+app.include_router(sales_router)
 
 # Frontend SPA (catch-all GET /)
 app.include_router(frontend_router)

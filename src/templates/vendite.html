@@ -14,7 +14,8 @@
                 <div class="sales-page__header-left">
                     <div class="tabs">
                         <button class="tab active" data-tab="sales">Vendite</button>
-                        <button class="tab" data-tab="stats">Statistiche</button>
+                        <button class="tab" data-tab="stats">Giornata</button>
+                        <button class="tab" data-tab="stats">Storico</button>
                     </div>
                 </div>
                 <div class="sales-page__header-right">
@@ -92,19 +93,57 @@
     </div>
 
     <div class="sales-page__panel" id="work-panel">
-        <div class="work-panel__header">
-            <h3>Area di Lavoro</h3>
+        <div class="tabs" id="work-panel-tabs"
+            style="display: none; padding: var(--space-md) var(--space-md) 0 var(--space-md);">
+            <button class="tab active" data-mode="chat" id="tab-chat">Gemini</button>
+            <button class="tab" data-mode="context" id="tab-context">
+                <span id="tab-context-title">Contesto</span>
+                <span id="btn-close-context" style="margin-left: 8px;">✕</span>
+            </button>
         </div>
-        <div class="work-panel__prompt" id="work-panel-prompt">
-            <input type="text" id="recon-prompt-input" placeholder="Vendor code o barcode..."
-                class="form-control form-control--sm">
-            <button id="btn-recon-search" class="btn-primary">Invia</button>
-        </div>
-        <div class="work-panel__content" id="candidates-container">
-            <!-- JS populate -->
-            <p style="color: var(--text-muted); font-size: 0.9rem; text-align: center; margin-top: 2rem;">
-                Seleziona una vendita per riconciliarla o cerca un articolo.
-            </p>
+
+        <div class="work-panel__body">
+            <!-- CHAT MODE -->
+            <div id="panel-chat" class="panel-mode-container active">
+                <div class="chat-messages" id="chat-messages">
+                    <div class="chat-bubble chat-bubble--gemini">
+                        Ciao! Sono qui per aiutarti ad analizzare le vendite. Seleziona una vendita per riconciliarla,
+                        oppure chiedimi qualcosa riguardo alla giornata di oggi.
+                    </div>
+                </div>
+                <div class="chat-input-area">
+                    <textarea id="chat-input" placeholder="Chiedi a Gemini..." rows="1"></textarea>
+                    <button id="btn-chat-send" class="btn-primary">Invia</button>
+                </div>
+            </div>
+
+            <!-- SEARCH MODE -->
+            <div id="panel-search" class="panel-mode-container">
+                <div class="work-panel__prompt" id="work-panel-prompt">
+                    <input type="text" id="recon-prompt-input" placeholder="Vendor code o barcode..."
+                        class="form-control form-control--sm">
+                    <button id="btn-recon-search" class="btn-primary">Cerca</button>
+                </div>
+                <div class="work-panel__content" id="candidates-container">
+                    <p style="color: var(--text-muted); font-size: 0.9rem; text-align: center; margin-top: 2rem;">
+                        Digita un codice per cercare articoli disponibili.
+                    </p>
+                </div>
+            </div>
+
+            <!-- DETAIL MODE -->
+            <div id="panel-detail" class="panel-mode-container">
+                <div class="work-panel__content" id="detail-container">
+                    <!-- JS populate details here -->
+                </div>
+                <div id="substitutes-section" style="display: none; padding: 15px;">
+                    <h4 style="margin-bottom: 10px; font-size: 0.9rem; color: var(--text-secondary);">Articoli simili
+                        disponibili</h4>
+                    <div id="substitutes-container">
+                        <!-- JS populate substitutes here -->
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>

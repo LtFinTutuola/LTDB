@@ -250,6 +250,47 @@ def get_daily_sales(db: Session, target_date: date) -> List[Dict[str, Any]]:
     return results
 
 
+def get_sale_detail(db: Session, sale_id: str) -> Dict[str, Any]:
+    from src.models.wms import ArticleStatus
+    
+    sale = excel_synchronization_repo.get(db, sale_id)
+    if not sale:
+        raise ValueError("Sale not found")
+        
+    if sale.status != ExcelSaleStatus.RECONCILED or not sale.article:
+        raise ValueError("Sale is not reconciled or missing article")
+        
+    blueprint = sale.article.blueprint
+    if not blueprint:
+        raise ValueError("Blueprint not found")
+        
+    colors_list = [c.lower() for c in (sale.article.colors or [])]
+    photo = None
+    if colors_list:
+        photo = db.query(ArticlePhoto).filter(
+            ArticlePhoto.article_blueprint_id == sale.article.article_blueprint_id,
+            func.lower(ArticlePhoto.canonical_color_name).in_(colors_list)
+        ).first()
+    if not photo:
+        photo = db.query(ArticlePhoto).filter(
+            ArticlePhoto.article_blueprint_id == sale.article.article_blueprint_id
+        ).first()
+        
+    photo_url = f"/api/v1/ingestion/photos/{photo.id}" if photo else None
+    
+    inventory = db.query(func.count(sale.article.__class__.id)).filter(
+        sale.article.__class__.article_blueprint_id == blueprint.id,
+        sale.article.__class__.status == ArticleStatus.AVAILABLE
+    ).scalar() or 0
+
+    return {
+        "article_name": blueprint.article_name,
+        "photo_url": photo_url,
+        "inventory": inventory,
+        "blueprint_id": blueprint.id,
+        "colors": sale.article.colors or [],
+        "is_exchange": sale.is_exchange
+    }
 def _get_or_create_reason(db: Session, code: str, sign: int) -> str:
     reason = db.query(MovementReason).filter(MovementReason.code == code).first()
     if not reason:
