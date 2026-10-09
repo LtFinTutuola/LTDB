@@ -25,13 +25,34 @@ from src.schemas.catalog import (
     CatalogUpdateResponse,
     SemanticSearchRequest,
     SemanticSearchResponse,
+    CatalogItemsResponse,
 )
 from src.services import catalog_service, search_service
+from fastapi import Query
 
 logger = get_logger()
 
 router = APIRouter(prefix="/api/v1/catalog", tags=["Catalog"])
 
+@router.get("/items", response_model=CatalogItemsResponse)
+def list_items(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db)
+):
+    """
+    Return the latest items in the catalog.
+    """
+    logger.log_execution("catalog_router", "request_received", "ok",
+                         path="/api/v1/catalog/items", method="GET")
+    try:
+        return catalog_service.list_latest_items(db, limit, offset)
+    except Exception as exc:
+        logger.log_execution("catalog_router", "exception_caught", "err", exc=exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc) or "unknown server error",
+        )
 
 @router.get("/brands", response_model=List[BrandListItem])
 def list_brands(db: Session = Depends(get_db)):

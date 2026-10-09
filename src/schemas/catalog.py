@@ -31,17 +31,32 @@ class SemanticSearchRequest(BaseModel):
     in_stock_only: bool = False
 
 
+from datetime import date
+
+class SourceDocument(BaseModel):
+    delivery_note_number: str
+    supplier_name: str
+    document_date: date
+
 class SearchResultItem(BaseModel):
     blueprint_id: str
     article_name: str
     brand_name: str
     category_name: Optional[str] = None
+    sub_category_name: Optional[str] = None
     description: Optional[str] = None
+    extended_description: Optional[str] = None
+    vendor_code: Optional[str] = None
+    barcode: Optional[str] = None
     photo_id: Optional[str] = None
     colors: List[str] = Field(default_factory=list)
     tags: List[str] = Field(default_factory=list)
     materials: List[str] = Field(default_factory=list)
     stock: int = 0
+
+class CatalogItemsResponse(BaseModel):
+    results: List[SearchResultItem]
+    total_blueprints: int
 
 
 class SemanticSearchResponse(BaseModel):

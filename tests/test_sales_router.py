@@ -19,7 +19,7 @@ def test_chat_problemi(db_session):
     }
     response = client.post("/api/v1/sales/chat", json=payload)
     assert response.status_code == 200
-    assert "problemi" in response.json()["reply"].lower()
+    assert "problema" in response.json()["reply"].lower()
 
 def test_chat_fallback(db_session):
     client = TestClient(app)

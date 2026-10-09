@@ -41,9 +41,21 @@ def db_session():
     Base.metadata.create_all(bind=engine)
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = TestSession()
+    
+    from src.main import app
+    from src.core.database import get_db
+    
+    def override_get_db():
+        try:
+            yield session
+        finally:
+            pass # Session is closed in the fixture
+            
+    app.dependency_overrides[get_db] = override_get_db
 
     yield session
 
     session.close()
+    app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
     engine.dispose()

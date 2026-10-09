@@ -245,6 +245,14 @@ def _build_variant_items(db: Session, bp: ArticleBlueprint, interp: Optional[Sea
         
     brand = db.query(Brand).filter(Brand.id == bp.brand_id).first()
     category = db.query(Category).filter(Category.id == bp.category_id).first() if bp.category_id else None
+    main_category = None
+    sub_category = None
+    if category:
+        if category.parent_id:
+            sub_category = category
+            main_category = db.query(Category).filter(Category.id == category.parent_id).first()
+        else:
+            main_category = category
 
     results = []
     for color, articles in colors_dict.items():
@@ -268,13 +276,19 @@ def _build_variant_items(db: Session, bp: ArticleBlueprint, interp: Optional[Sea
             photo = db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp.id).first()
             
         name = f"{bp.article_name} - {color.capitalize()}" if color and color != "unknown" else bp.article_name
-        
+        vendor_code = next((a.supplier_code for a in articles if a.supplier_code), None)
+        barcode = next((a.ean for a in articles if a.ean), None)
+
         results.append({
             "blueprint_id": bp.id,
             "article_name": name,
             "brand_name": brand.name if brand else "Unknown",
-            "category_name": category.name if category else None,
+            "category_name": main_category.name if main_category else None,
+            "sub_category_name": sub_category.name if sub_category else None,
             "description": bp.description,
+            "extended_description": bp.extended_description,
+            "vendor_code": vendor_code,
+            "barcode": barcode,
             "photo_id": photo.id if photo else None,
             "colors": [color] if color != "unknown" else [],
             "tags": list(bp.tags or []),

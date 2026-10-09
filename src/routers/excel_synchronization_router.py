@@ -47,6 +47,18 @@ def poll_rows(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/status", status_code=status.HTTP_200_OK)
+def get_sync_status():
+    """
+    Returns the current status of the background polling loop.
+    """
+    try:
+        status_data = excel_synchronization_service.get_sync_status()
+        return {"status": "success", "data": status_data}
+    except Exception as e:
+        logger.log_execution("excel_synchronization_router", "get_sync_status", "err", exc=e)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/pending-sales", status_code=status.HTTP_200_OK)
 def get_pending_sales(
     target_date: Optional[date] = None,

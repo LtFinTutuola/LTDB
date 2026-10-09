@@ -32,9 +32,9 @@ def ingest_daily_sales(db: Session, file_path: str, target_date: date) -> List[s
         logger.error("openpyxl is not installed.")
         raise ImportError("openpyxl is required to ingest excel files")
 
-    # 1. Count existing records
-    db_count = excel_synchronization_repo.count_by_date(db, target_date)
-    min_row = db_count + 1
+    # 1. Fetch existing records to allow updating ORPHANs
+    existing_records = excel_synchronization_repo.get_all_by_date(db, target_date)
+    existing_by_row = {r.excel_row_index: r for r in existing_records}
     
     # 2. Open workbook in read_only mode
     try:
@@ -54,9 +54,11 @@ def ingest_daily_sales(db: Session, file_path: str, target_date: date) -> List[s
         except TypeError:
             logger.error(f"Invalid EXCEL_CODE_COLUMN: {settings.EXCEL_CODE_COLUMN}")
 
-    # 4. Read only new rows
+    # 4. Read rows
     sales_to_insert = []
-    for row_idx, row in enumerate(sheet.iter_rows(min_row=min_row, max_row=698, min_col=1, max_col=max_col_to_read), start=min_row):
+    sales_to_update = []
+    
+    for row_idx, row in enumerate(sheet.iter_rows(min_row=1, max_row=698, min_col=1, max_col=max_col_to_read), start=1):
         # A row is empty if all cells in A to I are None
         if all(cell.value is None for cell in row[0:9]):
             break
@@ -98,32 +100,68 @@ def ingest_daily_sales(db: Session, file_path: str, target_date: date) -> List[s
             if val_code is not None:
                 raw_article_code = str(val_code).strip()
 
-        sale_in = ExcelSaleCreate(
-            date=target_date,
-            excel_row_index=row_idx,
-            excel_file_column=found_category_col,
-            status=status,
-            starting_price=starting_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None,
-            selling_price=selling_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None,
-            is_exchange=is_exchange,
-            raw_article_code=raw_article_code
-        )
-        sales_to_insert.append(sale_in)
+        existing_record = existing_by_row.get(row_idx)
+        if existing_record:
+            if existing_record.status in (ExcelSaleStatus.ORPHAN, ExcelSaleStatus.UNPROCESSABLE):
+                new_starting = starting_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None
+                new_selling = selling_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None
+                
+                changed = False
+                if existing_record.starting_price != new_starting:
+                    existing_record.starting_price = new_starting
+                    changed = True
+                if existing_record.selling_price != new_selling:
+                    existing_record.selling_price = new_selling
+                    changed = True
+                if existing_record.is_exchange != is_exchange:
+                    existing_record.is_exchange = is_exchange
+                    changed = True
+                if existing_record.raw_article_code != raw_article_code:
+                    existing_record.raw_article_code = raw_article_code
+                    changed = True
+                if existing_record.excel_file_column != found_category_col:
+                    existing_record.excel_file_column = found_category_col
+                    changed = True
+                if existing_record.status != status:
+                    existing_record.status = status
+                    changed = True
+                
+                if changed:
+                    sales_to_update.append(existing_record)
+        else:
+            sale_in = ExcelSaleCreate(
+                date=target_date,
+                excel_row_index=row_idx,
+                excel_file_column=found_category_col,
+                status=status,
+                starting_price=starting_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None,
+                selling_price=selling_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None,
+                is_exchange=is_exchange,
+                raw_article_code=raw_article_code
+            )
+            sales_to_insert.append(sale_in)
         
     wb.close()
     
-    # 5. Bulk insert
+    # 5. Bulk insert and update
+    if sales_to_update:
+        db.commit()
+        
+    created_records = []
     if sales_to_insert:
         created_records = excel_synchronization_repo.bulk_create(db, sales_to_insert)
+        
+    if sales_to_insert or sales_to_update:
         logger.log_execution(
             "excel_synchronization_service", 
             "ingest_daily_sales", 
             "ok", 
             target_date=str(target_date),
             records_inserted=len(created_records),
-            min_row_checked=min_row
+            records_updated=len(sales_to_update),
+            min_row_checked=1
         )
-        return [str(r.id) for r in created_records]
+        return [str(r.id) for r in created_records] + [str(r.id) for r in sales_to_update]
     
     return []
 
@@ -363,6 +401,41 @@ def reconcile_sale(db: Session, excel_sale_id: str, article_id: str) -> Dict[str
 
 _polling_thread = None
 _stop_event = threading.Event()
+_sync_lock = threading.Lock()
+_sync_state = {
+    "last_attempt_at": None,
+    "last_success_at": None,
+    "last_inserted_count": 0,
+    "last_error": None
+}
+
+def _record_sync(success: bool, inserted_count: int = 0, error: str = None):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    with _sync_lock:
+        _sync_state["last_attempt_at"] = now
+        if success:
+            _sync_state["last_success_at"] = now
+            _sync_state["last_inserted_count"] = inserted_count
+            _sync_state["last_error"] = None
+        else:
+            _sync_state["last_error"] = error
+
+def get_sync_status() -> dict:
+    with _sync_lock:
+        return {
+            **_sync_state,
+            "polling_interval_seconds": settings.EXCEL_POLLING_INTERVAL
+        }
+
+def reset_sync_status():
+    with _sync_lock:
+        _sync_state.update({
+            "last_attempt_at": None,
+            "last_success_at": None,
+            "last_inserted_count": 0,
+            "last_error": None
+        })
 
 def _polling_loop(stop_event: threading.Event):
     logger.log_execution("excel_synchronization_service", "startup", "ok", message=f"Starting Excel polling loop. Interval: {settings.EXCEL_POLLING_INTERVAL}s")
@@ -375,8 +448,10 @@ def _polling_loop(stop_event: threading.Event):
                 inserted_ids = ingest_daily_sales(db, settings.EXCEL_FILE_PATH, target_date)
                 if inserted_ids:
                     logger.log_execution("excel_synchronization_service", "ingested", "ok", message=f"Polled Excel and ingested {len(inserted_ids)} new sales rows.")
+                _record_sync(True, len(inserted_ids) if inserted_ids else 0)
             except Exception as e:
                 logger.log_execution("excel_synchronization_service", "error", "error", exc=e)
+                _record_sync(False, error=str(e))
             finally:
                 db.close()
         

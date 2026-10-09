@@ -74,6 +74,9 @@ export async function submitRevisions() {
 
 function _render() {
     const panel = getDetailPanel();
+    const oldContent = document.getElementById('staging-content');
+    const scrollPos = oldContent ? oldContent.scrollTop : 0;
+    
     const grouped = _groupByBlueprint(_stagingData);
     const photoProposals = _stagingData?.photo_proposals || {};
 
@@ -112,6 +115,11 @@ function _render() {
     `;
 
     panel.innerHTML = html;
+    
+    const newContent = document.getElementById('staging-content');
+    if (newContent) {
+        newContent.scrollTop = scrollPos;
+    }
     
     const closeBtn = panel.querySelector('.btn-close-panel');
     if (closeBtn) closeBtn.addEventListener('click', exitSplitScreen);

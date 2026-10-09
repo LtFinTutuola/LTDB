@@ -286,3 +286,37 @@ class TestGetAllEmbeddings:
         assert len(results) == 1
         for key in ("id", "embedding", "article_name", "description"):
             assert key in results[0], f"Missing key: {key}"
+
+from fastapi.testclient import TestClient
+from src.main import app
+
+def test_list_items(db_session):
+    client = TestClient(app)
+    response = client.get("/api/v1/catalog/items")
+    assert response.status_code == 200
+    data = response.json()
+    assert "results" in data
+    assert "total_blueprints" in data
+
+
+class TestListLatestItemsCodes:
+    def test_vendor_code_and_barcode_exposed(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article
+        from src.services import catalog_service
+
+        brand = _make_brand(db_session)
+        bp = _make_blueprint(db_session, brand.id)
+        sup = Supplier(company_name="Sup")
+        db_session.add(sup)
+        db_session.commit()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT1", document_date=date(2026, 1, 1))
+        db_session.add(batch)
+        db_session.commit()
+        db_session.add(Article(article_blueprint_id=bp.id, batch_id=batch.id,
+                               supplier_code="ABC123", ean="8000000000017", colors=["red"]))
+        db_session.commit()
+
+        result = catalog_service.list_latest_items(db_session)
+        assert result["results"][0].vendor_code == "ABC123"
+        assert result["results"][0].barcode == "8000000000017"

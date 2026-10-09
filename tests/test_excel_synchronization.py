@@ -491,3 +491,11 @@ def test_sale_detail_route_200(db_session):
     assert response.status_code == 200
     assert response.json()["article_name"] == "Route Article"
     assert response.json()["inventory"] == 0
+
+def test_get_sync_status(db_session):
+    client = TestClient(app)
+    response = client.get("/api/v1/excel-synchronization/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "data" in data
+    assert "last_attempt_at" in data["data"]

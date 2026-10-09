@@ -20,11 +20,13 @@ def chat_with_gemini(
         # Mock logic
         query = request.message.lower()
         if "vendite" in query:
-            reply = f"Mock: Ho controllato le vendite per la data {request.context_date}. Sembra tutto a posto!"
+            base_reply = f"Mock: Ho controllato le vendite per la data {request.context_date}. Sembra tutto a posto!"
         elif "problemi" in query:
-            reply = "Mock: Non ho rilevato alcun problema particolare nelle vendite di oggi."
+            base_reply = "Mock: Non ho rilevato alcun problema particolare nelle vendite di oggi."
         else:
-            reply = f"Mock: Ricevuto il tuo messaggio '{request.message}'. (Risposta mock da Gemini)"
+            base_reply = f"Mock: Ricevuto il tuo messaggio '{request.message}'. (Risposta mock da Gemini)"
+            
+        reply = f"{base_reply}\n\n*Nota: Questa funzionalità è attualmente in sviluppo.*"
             
         return ChatMessageResponse(reply=reply)
     except Exception as e:

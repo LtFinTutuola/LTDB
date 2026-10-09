@@ -161,6 +161,34 @@ function init() {
             fetchDailySales(dom.datePicker.value, true);
         }
     }, 5000);
+    
+    // Poll sync status
+    setInterval(updateSyncStatus, 5000);
+    updateSyncStatus();
+}
+
+async function updateSyncStatus() {
+    try {
+        const res = await fetch('/api/v1/excel-synchronization/status');
+        if (res.ok) {
+            const data = await res.json();
+            const status = data.data;
+            const indicator = document.querySelector('.sync-text');
+            const dot = document.querySelector('.sync-dot');
+            if (indicator && status.last_attempt_at) {
+                const lastAttempt = new Date(status.last_attempt_at);
+                indicator.textContent = `Ultima sincronizzazione: ${lastAttempt.toLocaleTimeString()}`;
+                if (status.last_error) {
+                    dot.style.backgroundColor = 'var(--error, #ef4444)';
+                    indicator.textContent += ' (Errore)';
+                } else {
+                    dot.style.backgroundColor = 'var(--status-success, #10b981)';
+                }
+            }
+        }
+    } catch (e) {
+        console.error('Failed to poll sync status', e);
+    }
 }
 
 async function fetchDailySales(dateStr, silent = false) {
@@ -524,8 +552,7 @@ async function fetchAndRenderSaleDetail(saleId) {
 }
 
 async function fetchSubstitutes(blueprintId) {
-    dom.substitutesSection.style.display = 'block';
-    dom.substitutesContainer.innerHTML = '<span class="spinner"></span> Cerco sostituti...';
+    dom.substitutesSection.style.display = 'none';
     
     // Using semantic search with in_stock_only=true, passing the name or id would require a small trick.
     // For mock/fast, we just do a semantic search for the ID or something basic. 
