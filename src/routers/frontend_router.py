@@ -85,3 +85,24 @@ def categorie_redirect():
     """
     return RedirectResponse(url="/categories", status_code=307)
 
+
+@router.get("/settings", include_in_schema=False)
+def settings_page(request: Request):
+    """
+    Serve the Settings configuration page.
+    """
+    return templates.TemplateResponse(
+        request=request,
+        name="settings.html",
+        context={"active_page": "settings"},
+    )
+
+
+@router.get("/impostazioni", include_in_schema=False)
+def impostazioni_redirect():
+    """
+    Redirect /impostazioni to /settings.
+    """
+    return RedirectResponse(url="/settings", status_code=307)
+
+

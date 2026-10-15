@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+
+{% block title %}Impostazioni - La Triestina{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/pim_crud.css">
+<style>
+  .settings-container {
+    max-width: 820px;
+    margin: 0 auto;
+    width: 100%;
+    overflow-y: auto;
+    padding-bottom: 40px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .settings-container::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
+
+  .settings-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-card);
+    padding: 24px;
+    margin-bottom: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .settings-card__header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 14px;
+    margin-bottom: 4px;
+  }
+
+  .settings-card__title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .settings-card__icon {
+    color: var(--accent);
+    font-size: 22px;
+  }
+
+  .settings-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .input-password-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .input-password-wrapper input {
+    padding-right: 40px;
+  }
+
+  .btn-toggle-visibility {
+    position: absolute;
+    right: 8px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-xs);
+    transition: color var(--transition-fast);
+  }
+
+  .btn-toggle-visibility:hover {
+    color: var(--text-primary);
+  }
+
+  .settings-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 10px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="pim-page">
+  <div class="settings-container">
+    <!-- Header -->
+    <header class="pim-header" style="margin-bottom: 24px;">
+      <div class="pim-header__title-group">
+        <h1 class="pim-header__title">
+          <span class="material-symbols-rounded" style="color: var(--accent);">settings</span>
+          Impostazioni
+        </h1>
+        <p class="pim-header__subtitle">Configurazione dei parametri di sistema e integrazioni esterne</p>
+      </div>
+      <div id="loading-state" class="pim-stats" style="display: none; align-items: center; gap: 8px;">
+        <div class="pim-loading-spinner" style="width: 16px; height: 16px;"></div>
+        <span>Caricamento...</span>
+      </div>
+    </header>
+
+    <!-- Settings Form -->
+    <form id="settings-form">
+      <!-- Card 1: Configurazione Sistema & Magazzino -->
+      <div class="settings-card">
+        <div class="settings-card__header">
+          <span class="material-symbols-rounded settings-card__icon">database</span>
+          <h2 class="settings-card__title">Configurazione Sistema &amp; Magazzino</h2>
+        </div>
+
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+          <label for="setting-db" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Database
+            *</label>
+          <input type="text" id="setting-db" class="form-control" placeholder="sqlite:///{BASE_DIR}/data/ltdb_data.db"
+            required>
+          <span class="settings-hint">Stringa di connessione SQLAlchemy al database SQLite (es.
+            sqlite:///{BASE_DIR}/data/ltdb_data.db)</span>
+        </div>
+
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+          <label for="setting-excel-path"
+            style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Percorso file excel vendite
+            *</label>
+          <input type="text" id="setting-excel-path" class="form-control" placeholder="/percorso/assoluto/file.xlsx"
+            required>
+          <span class="settings-hint">Percorso assoluto del foglio Excel delle vendite monitorato dal servizio di
+            sincronizzazione</span>
+        </div>
+
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+          <label for="setting-excel-col"
+            style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Colonna inserimento barcode
+            *</label>
+          <input type="text" id="setting-excel-col" class="form-control" placeholder="N" style="max-width: 120px;"
+            required>
+          <span class="settings-hint">Lettera identificativa della colonna Excel in cui inserire i barcode (es.
+            N)</span>
+        </div>
+      </div>
+
+      <!-- Card 2: Integrazione Google Gemini AI -->
+      <div class="settings-card">
+        <div class="settings-card__header">
+          <span class="material-symbols-rounded settings-card__icon">neurology</span>
+          <h2 class="settings-card__title">Integrazione Google Gemini AI</h2>
+        </div>
+
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+          <label for="setting-gemini-token"
+            style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Password Gemini *</label>
+          <div class="input-password-wrapper">
+            <input type="password" id="setting-gemini-token" class="form-control"
+              placeholder="Inserisci la tua API Key di Google Gemini..." required>
+            <button type="button" id="btn-toggle-token" class="btn-toggle-visibility"
+              title="Mostra / Nascondi Password">
+              <span id="icon-toggle-token" class="material-symbols-rounded" style="font-size: 18px;">visibility</span>
+            </button>
+          </div>
+          <span class="settings-hint">Chiave API per l'autenticazione con i servizi Gemini (memorizzata in
+            src/agents/gemini.yaml)</span>
+        </div>
+
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+          <label for="setting-gemini-model"
+            style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Versione di gemini *</label>
+          <input type="text" id="setting-gemini-model" class="form-control"
+            placeholder="es. gemini-3.1-flash-lite, gemini-2.5-flash..." required>
+          <span class="settings-hint">Modello utilizzato dagli agenti per deduzione euristiche e arricchimento
+            articoli</span>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="settings-actions">
+        <button type="button" id="btn-reset-settings" class="btn-secondary">
+          <span class="material-symbols-rounded">restart_alt</span>
+          Ripristina
+        </button>
+        <button type="submit" id="btn-save-settings" class="btn-primary">
+          <span class="material-symbols-rounded">save</span>
+          Salva Modifiche
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" src="/static/js/settings_page.js"></script>
+{% endblock %}

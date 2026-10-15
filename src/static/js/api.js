@@ -194,3 +194,20 @@ export async function pollExcelRows() {
     });
     return _handleResponse(res);
 }
+
+// --- Settings ---
+
+export async function getSettings() {
+    const res = await fetch(`${API_BASE}/settings`);
+    return _handleResponse(res);
+}
+
+export async function updateSettings(payload) {
+    const res = await fetch(`${API_BASE}/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    return _handleResponse(res);
+}
+

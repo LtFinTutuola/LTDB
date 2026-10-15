@@ -149,6 +149,7 @@
     background: transparent;
     border: none;
     color: var(--text-secondary);
+    text-decoration: none;
     cursor: pointer;
     padding: var(--space-xs);
     border-radius: var(--radius-sm);
@@ -162,6 +163,12 @@
     background: var(--bg-elevated);
     color: var(--text-primary);
 }
+
+.sidebar__settings-btn--active {
+    background: var(--bg-elevated);
+    color: var(--accent);
+}
+
 
 /* ============================================================
    Collapsed state

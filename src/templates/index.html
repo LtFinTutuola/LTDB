@@ -25,7 +25,15 @@
     border-radius: var(--radius-md);
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     padding: var(--space-md);
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
+  .magazzino-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
   
   .tab-pane {
     display: none;

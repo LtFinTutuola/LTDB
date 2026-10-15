@@ -22,3 +22,19 @@
     border-radius: 50%;
     border: 2px solid var(--surface);
 }
+
+/* ============================================================
+   Hide scrollbars globally while preserving scroll functionality
+   ============================================================ */
+* {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE and Edge */
+}
+
+*::-webkit-scrollbar {
+    width: 0px;
+    height: 0px;
+    display: none;
+    background: transparent;
+}
+

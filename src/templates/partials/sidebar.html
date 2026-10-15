@@ -40,8 +40,8 @@
   <!-- Bottom: admin chip + settings -->
   <div class="sidebar__bottom">
     <div class="chip chip--admin">admin</div>
-    <button class="sidebar__settings-btn" title="Impostazioni">
+    <a href="/settings" class="sidebar__settings-btn {% if active_page == 'settings' %}sidebar__settings-btn--active{% endif %}" title="Impostazioni">
       <span class="material-symbols-rounded">settings</span>
-    </button>
+    </a>
   </div>
 </aside>
