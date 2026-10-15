@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}Categorie - La Triestina{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/pim_crud.css">
+{% endblock %}
+
+{% block content %}
+<div class="pim-page">
+    <!-- Header -->
+    <header class="pim-header">
+        <div class="pim-header__title-group">
+            <h1 class="pim-header__title">
+                <span class="material-symbols-rounded" style="color: var(--accent);">category</span>
+                Gestione Categorie
+            </h1>
+            <p class="pim-header__subtitle">Gestisci la gerarchia ad albero delle categorie (Macro e Sotto) e i relativi brand</p>
+        </div>
+        <div class="pim-actions">
+            <button id="btn-new-category" class="btn-primary">
+                <span class="material-symbols-rounded">add</span>
+                Nuova Categoria
+            </button>
+        </div>
+    </header>
+
+    <!-- Toolbar -->
+    <div class="pim-toolbar">
+        <div style="display: flex; gap: var(--space-md); flex: 1; align-items: center;">
+            <div class="pim-search">
+                <span class="material-symbols-rounded">search</span>
+                <input type="text" id="search-categories" placeholder="Cerca categoria per nome o descrizione...">
+            </div>
+            <div class="pim-filter-group">
+                <select id="filter-category-type" class="pim-select">
+                    <option value="all">Tutte le categorie</option>
+                    <option value="macro">Solo Macro-categorie</option>
+                    <option value="sub">Solo Sottocategorie</option>
+                </select>
+            </div>
+        </div>
+        <div id="categories-count" class="pim-stats">Caricamento...</div>
+    </div>
+
+    <!-- Table Container -->
+    <div class="pim-table-container">
+        <table class="pim-table" id="categories-table">
+            <thead>
+                <tr>
+                    <th style="width: 280px;">Categoria</th>
+                    <th style="min-width: 250px;">Descrizione</th>
+                    <th>Brand Associati</th>
+                    <th style="width: 110px; text-align: center;">Sottocat.</th>
+                    <th style="width: 90px; text-align: center;">Articoli</th>
+                    <th style="width: 130px; text-align: center;">Azioni</th>
+                </tr>
+            </thead>
+            <tbody id="categories-tbody">
+                <!-- Populated by JS -->
+            </tbody>
+        </table>
+
+        <!-- Loading Indicator -->
+        <div id="loading-indicator" class="pim-loading-state">
+            <div class="pim-loading-spinner"></div>
+            <span>Caricamento categorie...</span>
+        </div>
+
+        <!-- Empty State -->
+        <div id="empty-state" class="pim-empty-state" style="display: none;">
+            <span class="material-symbols-rounded">category</span>
+            <p>Nessuna categoria trovata.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Create / Edit Category -->
+<div id="modal-category" class="modal-backdrop">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3 id="modal-category-title" class="modal-title">Nuova Categoria</h3>
+            <button id="btn-close-category" class="modal-close" type="button">
+                <span class="material-symbols-rounded">close</span>
+            </button>
+        </div>
+        <form id="form-category">
+            <div class="modal-body">
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="cat-name" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Nome Categoria *</label>
+                    <input type="text" id="cat-name" class="form-control" placeholder="Es. Valigie, Trolley da cabina..." required>
+                </div>
+
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="cat-description" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Descrizione</label>
+                    <textarea id="cat-description" class="form-control" rows="2" placeholder="Breve descrizione merceologica..."></textarea>
+                </div>
+
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="cat-parent" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Livello / Categoria Padre</label>
+                    <select id="cat-parent" class="form-control">
+                        <!-- Populated by JS -->
+                    </select>
+                </div>
+
+                <div id="section-brands-assignment" class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Brand Trattanti</label>
+                    <span style="font-size: 11px; color: var(--text-muted);">Seleziona i marchi che producono o distribuiscono questa macro-categoria:</span>
+                    <div id="cat-brands-list" class="multi-select-box">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <div id="sub-inherit-hint" style="display: none; padding: 10px; background: rgba(168, 199, 250, 0.08); border: 1px solid var(--accent-dim); border-radius: var(--radius-sm); font-size: 12px; color: var(--accent);">
+                    <span class="material-symbols-rounded" style="font-size: 16px; vertical-align: middle;">info</span>
+                    Questa sottocategoria eredita automaticamente i brand dalla macro-categoria genitore selezionata.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" id="btn-cancel-category" class="btn-secondary">Annulla</button>
+                <button type="submit" id="btn-save-category" class="btn-primary">Salva Categoria</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal: Confirm Delete -->
+<div id="modal-delete" class="modal-backdrop">
+    <div class="modal-card" style="max-width: 440px;">
+        <div class="modal-header">
+            <h3 class="modal-title" style="color: var(--error);">
+                <span class="material-symbols-rounded">warning</span>
+                Conferma Eliminazione
+            </h3>
+            <button id="btn-close-delete" class="modal-close" type="button">
+                <span class="material-symbols-rounded">close</span>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p id="delete-msg" style="font-size: 14px; color: var(--text-primary);"></p>
+            <div id="delete-warning" style="display: none; padding: 10px; background: var(--error-dim); border: 1px solid var(--error); border-radius: var(--radius-sm); font-size: 12px; color: #ff8a80;">
+                <!-- Error msg -->
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" id="btn-cancel-delete" class="btn-secondary">Annulla</button>
+            <button type="button" id="btn-confirm-delete" class="btn-danger">Elimina</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" src="/static/js/categories_page.js"></script>
+{% endblock %}

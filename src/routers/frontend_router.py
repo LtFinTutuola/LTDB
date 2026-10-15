@@ -10,8 +10,10 @@ import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from src.core.database import get_db
 from src.models.pim import Brand
@@ -29,8 +31,9 @@ def index(request: Request, db: Session = Depends(get_db)):
     Injects window.__LTDB_BRANDS__ with the current brand list
     so the import forms can populate their dropdowns immediately.
     """
-    brands = db.query(Brand).order_by(Brand.name).all()
+    brands = db.query(Brand).order_by(func.lower(Brand.name)).all()
     brands_json = json.dumps([{"id": b.id, "name": b.name} for b in brands])
+
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -39,6 +42,7 @@ def index(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/vendite", include_in_schema=False)
+
 def vendite_page(request: Request):
     """
     Serve the Sales Reconciliation tabular page.
@@ -48,3 +52,36 @@ def vendite_page(request: Request):
         name="vendite.html",
         context={"active_page": "vendite"},
     )
+
+
+@router.get("/brands", include_in_schema=False)
+def brands_page(request: Request):
+    """
+    Serve the Brand management CRUD page.
+    """
+    return templates.TemplateResponse(
+        request=request,
+        name="brands.html",
+        context={"active_page": "brands"},
+    )
+
+
+@router.get("/categories", include_in_schema=False)
+def categories_page(request: Request):
+    """
+    Serve the Category hierarchy management CRUD page.
+    """
+    return templates.TemplateResponse(
+        request=request,
+        name="categories.html",
+        context={"active_page": "categories"},
+    )
+
+
+@router.get("/categorie", include_in_schema=False)
+def categorie_redirect():
+    """
+    Redirect /categorie to /categories.
+    """
+    return RedirectResponse(url="/categories", status_code=307)
+

@@ -90,6 +90,66 @@ export async function getBrands() {
     return _handleResponse(res);
 }
 
+export async function getBrandsDetailed() {
+    const res = await fetch(`${API_BASE}/catalog/brands/details`);
+    return _handleResponse(res);
+}
+
+export async function createBrand(payload) {
+    const res = await fetch(`${API_BASE}/catalog/brands`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    return _handleResponse(res);
+}
+
+export async function updateBrand(brandId, payload) {
+    const res = await fetch(`${API_BASE}/catalog/brands/${encodeURIComponent(brandId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    return _handleResponse(res);
+}
+
+export async function deleteBrand(brandId) {
+    const res = await fetch(`${API_BASE}/catalog/brands/${encodeURIComponent(brandId)}`, {
+        method: 'DELETE',
+    });
+    return _handleResponse(res);
+}
+
+export async function getCategoriesDetailed() {
+    const res = await fetch(`${API_BASE}/catalog/categories`);
+    return _handleResponse(res);
+}
+
+export async function createCategory(payload) {
+    const res = await fetch(`${API_BASE}/catalog/categories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    return _handleResponse(res);
+}
+
+export async function updateCategory(categoryId, payload) {
+    const res = await fetch(`${API_BASE}/catalog/categories/${encodeURIComponent(categoryId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    return _handleResponse(res);
+}
+
+export async function deleteCategory(categoryId) {
+    const res = await fetch(`${API_BASE}/catalog/categories/${encodeURIComponent(categoryId)}`, {
+        method: 'DELETE',
+    });
+    return _handleResponse(res);
+}
+
 export async function getBrandCategories(brandId) {
     const res = await fetch(`${API_BASE}/catalog/categories/${encodeURIComponent(brandId)}`);
     return _handleResponse(res);
@@ -103,6 +163,7 @@ export async function patchCatalogItem(blueprintId, fields) {
     });
     return _handleResponse(res);
 }
+
 
 // --- Excel Synchronization ---
 

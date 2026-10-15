@@ -14,12 +14,61 @@ from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
-# Brand
+# Brand & Category CRUD Schemas
 # ---------------------------------------------------------------------------
 
 class BrandListItem(BaseModel):
     id: str
     name: str
+
+
+class BrandDetailItem(BaseModel):
+    id: str
+    name: str
+    category_ids: List[str] = Field(default_factory=list)
+    category_names: List[str] = Field(default_factory=list)
+    blueprint_count: int = 0
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class BrandCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    category_ids: List[str] = Field(default_factory=list)
+
+
+class BrandUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1)
+    category_ids: Optional[List[str]] = None
+
+
+class CategoryDetailItem(BaseModel):
+    id: str
+    name: str
+    description: str
+    parent_id: Optional[str] = None
+    parent_name: Optional[str] = None
+    subcategories_count: int = 0
+    brand_ids: List[str] = Field(default_factory=list)
+    brand_names: List[str] = Field(default_factory=list)
+    blueprint_count: int = 0
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class CategoryCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: str = Field("", min_length=0)
+    parent_id: Optional[str] = None
+    brand_ids: Optional[List[str]] = Field(default_factory=list)
+
+
+class CategoryUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1)
+    description: Optional[str] = None
+    parent_id: Optional[str] = None
+    brand_ids: Optional[List[str]] = None
+
 
 
 # ---------------------------------------------------------------------------

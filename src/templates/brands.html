@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block title %}Brands - La Triestina{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/pim_crud.css">
+{% endblock %}
+
+{% block content %}
+<div class="pim-page">
+    <!-- Header -->
+    <header class="pim-header">
+        <div class="pim-header__title-group">
+            <h1 class="pim-header__title">
+                <span class="material-symbols-rounded" style="color: var(--accent);">style</span>
+                Gestione Brand
+            </h1>
+            <p class="pim-header__subtitle">Gestisci i marchi del catalogo e le loro categorie merceologiche associate</p>
+        </div>
+        <div class="pim-actions">
+            <button id="btn-new-brand" class="btn-primary">
+                <span class="material-symbols-rounded">add</span>
+                Nuovo Brand
+            </button>
+        </div>
+    </header>
+
+    <!-- Toolbar -->
+    <div class="pim-toolbar">
+        <div class="pim-search">
+            <span class="material-symbols-rounded">search</span>
+            <input type="text" id="search-brands" placeholder="Cerca brand per nome...">
+        </div>
+        <div id="brands-count" class="pim-stats">Caricamento...</div>
+    </div>
+
+    <!-- Table Container -->
+    <div class="pim-table-container">
+        <table class="pim-table" id="brands-table">
+            <thead>
+                <tr>
+                    <th style="width: 250px;">Nome Brand</th>
+                    <th>Macro-Categorie Associate</th>
+                    <th style="width: 120px; text-align: center;">Articoli</th>
+                    <th style="width: 100px; text-align: center;">Azioni</th>
+                </tr>
+            </thead>
+            <tbody id="brands-tbody">
+                <!-- Populated by JS -->
+            </tbody>
+        </table>
+
+        <!-- Loading Indicator -->
+        <div id="loading-indicator" class="pim-loading-state">
+            <div class="pim-loading-spinner"></div>
+            <span>Caricamento brand...</span>
+        </div>
+
+        <!-- Empty State -->
+        <div id="empty-state" class="pim-empty-state" style="display: none;">
+            <span class="material-symbols-rounded">style</span>
+            <p>Nessun brand trovato.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Create / Edit Brand -->
+<div id="modal-brand" class="modal-backdrop">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3 id="modal-brand-title" class="modal-title">Nuovo Brand</h3>
+            <button id="btn-close-brand" class="modal-close" type="button">
+                <span class="material-symbols-rounded">close</span>
+            </button>
+        </div>
+        <form id="form-brand">
+            <div class="modal-body">
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="brand-name" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Nome Brand *</label>
+                    <input type="text" id="brand-name" class="form-control" placeholder="Es. Samsonite, The Bridge..." required>
+                </div>
+
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Macro-Categorie Trattate</label>
+                    <span style="font-size: 11px; color: var(--text-muted);">Seleziona le macro-categorie merceologiche offerte da questo brand:</span>
+                    <div id="brand-categories-list" class="multi-select-box">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" id="btn-cancel-brand" class="btn-secondary">Annulla</button>
+                <button type="submit" id="btn-save-brand" class="btn-primary">Salva Brand</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal: Confirm Delete -->
+<div id="modal-delete" class="modal-backdrop">
+    <div class="modal-card" style="max-width: 440px;">
+        <div class="modal-header">
+            <h3 class="modal-title" style="color: var(--error);">
+                <span class="material-symbols-rounded">warning</span>
+                Conferma Eliminazione
+            </h3>
+            <button id="btn-close-delete" class="modal-close" type="button">
+                <span class="material-symbols-rounded">close</span>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p id="delete-msg" style="font-size: 14px; color: var(--text-primary);"></p>
+            <div id="delete-warning" style="display: none; padding: 10px; background: var(--error-dim); border: 1px solid var(--error); border-radius: var(--radius-sm); font-size: 12px; color: #ff8a80;">
+                <!-- Error msg -->
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" id="btn-cancel-delete" class="btn-secondary">Annulla</button>
+            <button type="button" id="btn-confirm-delete" class="btn-danger">Elimina</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" src="/static/js/brands_page.js"></script>
+{% endblock %}

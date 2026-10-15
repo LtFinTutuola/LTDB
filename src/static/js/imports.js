@@ -10,8 +10,11 @@ export function renderForms() {
     const articleContainer = document.getElementById('article-form-container');
     if (!ddtContainer || !articleContainer) return;
     
-    const brands = window.__LTDB_BRANDS__ || [];
+    const brands = (window.__LTDB_BRANDS__ || [])
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
     const brandOptions = brands.map(b => `<option value="${_esc(b.id)}">${_esc(b.name)}</option>`).join('');
+
     
     ddtContainer.innerHTML = `
         <div class="import-form">
