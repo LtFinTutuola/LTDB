@@ -542,7 +542,8 @@ async def confirm_and_persist_staging(
                 # Check if newly created blueprint lacks an embedding; if so, generate and save synchronously
                 bp_obj = pim_repo.get(db, blueprint_id)
                 if bp_obj and bp_obj.embedding is None:
-                    text_to_embed = f"{item.article_name or ''} {item.product_short_description or ''}".strip()
+                    from src.services.pim_service import build_blueprint_embedding_text
+                    text_to_embed = build_blueprint_embedding_text(db, bp_obj)
                     if text_to_embed:
                         try:
                             from src.agents.llm_client import LLMClient

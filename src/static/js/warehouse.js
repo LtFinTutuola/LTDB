@@ -1,7 +1,23 @@
 import * as api from './api.js';
 
+let _controlsBound = false;
+
 export async function initWarehouse() {
-    await fetchLatestItems();
+    if (!_controlsBound) {
+        _bindSearchControls();
+        _controlsBound = true;
+    }
+
+    const searchInput = document.getElementById('warehouse-search-input');
+    const stockToggle = document.getElementById('warehouse-stock-toggle');
+    const query = searchInput ? searchInput.value.trim() : '';
+    const inStockOnly = stockToggle ? stockToggle.checked : false;
+
+    if (query) {
+        await executeWarehouseSearch();
+    } else {
+        await fetchLatestItems(inStockOnly);
+    }
 }
 
 function _esc(str) {
@@ -12,57 +28,195 @@ function _esc(str) {
     })[m]);
 }
 
-async function fetchLatestItems() {
+function _renderResults(items, container, emptyMessage = 'Nessun articolo presente a magazzino.') {
+    container.innerHTML = '';
+
+    if (!items || items.length === 0) {
+        container.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--text-secondary);">${emptyMessage}</div>`;
+        return;
+    }
+
+    items.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'search-preview-card';
+        card.style.cursor = 'pointer';
+
+        const stockLabel = item.stock > 0 ? `Disponibile (${item.stock})` : 'Esaurito';
+        const stockClass = item.stock > 5 ? 'available' : (item.stock > 0 ? 'low' : 'zero');
+
+        const photoHtml = item.photo_id
+            ? `<img src="${api.getPhotoUrl(item.photo_id)}" alt="${_esc(item.article_name)}"
+                   onerror="this.parentElement.innerHTML='<span class=\\"preview-card__photo-placeholder\\">🖼</span>'">`
+            : `<span class="preview-card__photo-placeholder">🖼</span>`;
+
+        const tags = (item.tags || []).slice(0, 2)
+            .map(t => `<span class="chip chip--small">${_esc(t)}</span>`).join('');
+
+        card.innerHTML = `
+            <div class="preview-card__photo">${photoHtml}</div>
+            <div class="preview-card__info">
+                <div class="preview-card__name" title="${_esc(item.article_name)}">${_esc(item.article_name)}</div>
+                <span class="preview-card__brand">${_esc(item.brand_name)}</span>
+                ${item.category_name ? `<span class="preview-card__cat">${_esc(item.category_name)}</span>` : ''}
+                <div class="preview-card__tags">${tags}</div>
+                <span class="stock-badge stock-badge--${stockClass}">${stockLabel}</span>
+            </div>
+        `;
+
+        card.addEventListener('click', () => {
+            showArticleFullscreen(item);
+        });
+
+        container.appendChild(card);
+    });
+}
+
+async function fetchLatestItems(inStockOnly = false) {
     const container = document.getElementById('catalog-results');
     if (!container) return;
-    
+
     try {
         const res = await fetch('/api/v1/catalog/items?limit=50&offset=0');
         if (!res.ok) throw new Error('Failed to fetch items');
         const data = await res.json();
-        
-        container.innerHTML = '';
-        if (data.results && data.results.length > 0) {
-            data.results.forEach(item => {
-                const card = document.createElement('div');
-                card.className = 'search-preview-card';
-                card.style.cursor = 'default';
-                
-                const stockLabel = item.stock > 0 ? `Disponibile (${item.stock})` : 'Esaurito';
-                const stockClass = item.stock > 5 ? 'available' : (item.stock > 0 ? 'low' : 'zero');
-                
-                const photoHtml = item.photo_id
-                    ? `<img src="${api.getPhotoUrl(item.photo_id)}" alt="${_esc(item.article_name)}"
-                           onerror="this.parentElement.innerHTML='<span class=\\"preview-card__photo-placeholder\\">🖼</span>'">`
-                    : `<span class="preview-card__photo-placeholder">🖼</span>`;
-                
-                const tags = (item.tags || []).slice(0, 2)
-                    .map(t => `<span class="chip chip--small">${_esc(t)}</span>`).join('');
-                
-                card.innerHTML = `
-                    <div class="preview-card__photo">${photoHtml}</div>
-                    <div class="preview-card__info">
-                        <div class="preview-card__name" title="${_esc(item.article_name)}">${_esc(item.article_name)}</div>
-                        <span class="preview-card__brand">${_esc(item.brand_name)}</span>
-                        ${item.category_name ? `<span class="preview-card__cat">${_esc(item.category_name)}</span>` : ''}
-                        <div class="preview-card__tags">${tags}</div>
-                        <span class="stock-badge stock-badge--${stockClass}">${stockLabel}</span>
-                    </div>
-                `;
-                
-                card.style.cursor = 'pointer';
-                card.addEventListener('click', () => {
-                    showArticleFullscreen(item);
-                });
-                
-                container.appendChild(card);
-            });
-        } else {
-            container.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--text-secondary);">Nessun articolo presente a magazzino.</div>';
+
+        let items = data.results || [];
+        if (inStockOnly) {
+            items = items.filter(it => (it.stock || 0) > 0);
         }
+
+        _renderResults(items, container, inStockOnly ? 'Nessun articolo con giacenza disponibile.' : 'Nessun articolo presente a magazzino.');
     } catch (e) {
         console.error(e);
         container.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--error);">Errore nel caricamento del magazzino.</div>';
+    }
+}
+
+async function executeWarehouseSearch() {
+    const container = document.getElementById('catalog-results');
+    const searchInput = document.getElementById('warehouse-search-input');
+    const searchBtn = document.getElementById('warehouse-search-btn');
+    const clearBtn = document.getElementById('warehouse-search-clear');
+    const stockToggle = document.getElementById('warehouse-stock-toggle');
+    const feedbackEl = document.getElementById('warehouse-search-feedback');
+
+    if (!container || !searchInput) return;
+
+    const query = searchInput.value.trim();
+    const inStockOnly = stockToggle ? Boolean(stockToggle.checked) : false;
+
+    if (!query) {
+        if (clearBtn) clearBtn.style.display = 'none';
+        if (feedbackEl) {
+            feedbackEl.style.display = 'none';
+            feedbackEl.textContent = '';
+        }
+        await fetchLatestItems(inStockOnly);
+        return;
+    }
+
+    if (clearBtn) clearBtn.style.display = 'inline-flex';
+
+    // Show loading state
+    container.innerHTML = `
+        <div style="grid-column: 1/-1; text-align: center; padding: 50px 20px; color: var(--text-secondary);">
+            <div style="font-size: 16px; margin-bottom: 8px;">🔍 Ricerca in corso...</div>
+            <div style="font-size: 13px; color: var(--text-muted);">Elaborazione semantica e filtri di magazzino</div>
+        </div>
+    `;
+
+    if (searchBtn) searchBtn.disabled = true;
+    searchInput.disabled = true;
+
+    try {
+        const response = await api.semanticSearch(query, inStockOnly);
+        const results = response.results || [];
+
+        if (feedbackEl) {
+            feedbackEl.style.display = 'block';
+            feedbackEl.textContent = response.message || `Trovati ${results.length} articoli`;
+        }
+
+        _renderResults(
+            results,
+            container,
+            `Nessun articolo trovato per la ricerca «${_esc(query)}»${inStockOnly ? ' con giacenza disponibile' : ''}.`
+        );
+    } catch (err) {
+        console.error('Search error:', err);
+        container.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--error);">Errore durante la ricerca: ${_esc(err.message || 'Errore del server')}</div>`;
+        if (feedbackEl) {
+            feedbackEl.style.display = 'block';
+            feedbackEl.style.color = 'var(--error)';
+            feedbackEl.textContent = 'Errore durante l\'esecuzione della ricerca.';
+        }
+    } finally {
+        if (searchBtn) searchBtn.disabled = false;
+        searchInput.disabled = false;
+        searchInput.focus();
+    }
+}
+
+function _bindSearchControls() {
+    const searchInput = document.getElementById('warehouse-search-input');
+    const searchBtn = document.getElementById('warehouse-search-btn');
+    const clearBtn = document.getElementById('warehouse-search-clear');
+    const stockToggle = document.getElementById('warehouse-stock-toggle');
+    const feedbackEl = document.getElementById('warehouse-search-feedback');
+
+    if (searchInput) {
+        searchInput.addEventListener('input', () => {
+            const hasText = searchInput.value.trim().length > 0;
+            if (clearBtn) clearBtn.style.display = hasText ? 'inline-flex' : 'none';
+            if (!hasText) {
+                if (feedbackEl) {
+                    feedbackEl.style.display = 'none';
+                    feedbackEl.textContent = '';
+                }
+                const inStockOnly = stockToggle ? Boolean(stockToggle.checked) : false;
+                fetchLatestItems(inStockOnly);
+            }
+        });
+
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                executeWarehouseSearch();
+            }
+        });
+    }
+
+    if (searchBtn) {
+        searchBtn.addEventListener('click', () => {
+            executeWarehouseSearch();
+        });
+    }
+
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            if (searchInput) {
+                searchInput.value = '';
+                searchInput.focus();
+            }
+            clearBtn.style.display = 'none';
+            if (feedbackEl) {
+                feedbackEl.style.display = 'none';
+                feedbackEl.textContent = '';
+            }
+            const inStockOnly = stockToggle ? Boolean(stockToggle.checked) : false;
+            fetchLatestItems(inStockOnly);
+        });
+    }
+
+    if (stockToggle) {
+        stockToggle.addEventListener('change', () => {
+            const query = searchInput ? searchInput.value.trim() : '';
+            if (query) {
+                executeWarehouseSearch();
+            } else {
+                fetchLatestItems(Boolean(stockToggle.checked));
+            }
+        });
     }
 }
 
@@ -155,4 +309,3 @@ function showArticleFullscreen(item) {
     `;
     overlay.style.display = 'flex';
 }
-

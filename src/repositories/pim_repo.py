@@ -130,6 +130,224 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
 
         return query.limit(200).all()
 
+    def search_by_exact_code(self, db: Session, code: str) -> list[dict]:
+        """
+        Short-circuit deterministic lookup by exact EAN, supplier_code, or normalized_vendor_code.
+        Returns a list of dicts: [{"blueprint_id": str, "allowed_colors": list[str] | None}].
+        """
+        from sqlalchemy import func, or_
+        from src.models.wms import Article
+
+        clean_code = (code or "").strip()
+        if not clean_code:
+            return []
+
+        code_lower = clean_code.lower()
+        matches_by_bp: dict[str, Optional[set[str]]] = {}
+
+        # 1. Check Article.ean and Article.supplier_code
+        matched_articles = (
+            db.query(Article)
+            .filter(
+                or_(
+                    func.lower(Article.ean) == code_lower,
+                    func.lower(Article.supplier_code) == code_lower,
+                )
+            )
+            .all()
+        )
+        for art in matched_articles:
+            bp_id = str(art.article_blueprint_id)
+            art_colors = [c.lower() for c in (art.colors or []) if c]
+            if bp_id not in matches_by_bp:
+                matches_by_bp[bp_id] = set(art_colors) if art_colors else None
+            else:
+                if matches_by_bp[bp_id] is not None:
+                    if art_colors:
+                        matches_by_bp[bp_id].update(art_colors)
+                    else:
+                        matches_by_bp[bp_id] = None
+
+        # 2. Check ArticleBlueprint.normalized_vendor_code
+        matched_bps = (
+            db.query(ArticleBlueprint)
+            .filter(func.lower(ArticleBlueprint.normalized_vendor_code) == code_lower)
+            .all()
+        )
+        for bp in matched_bps:
+            bp_id = str(bp.id)
+            # Full blueprint match means all color variants of this blueprint are allowed
+            matches_by_bp[bp_id] = None
+
+        result = [
+            {
+                "blueprint_id": bp_id,
+                "allowed_colors": sorted(list(colors)) if colors is not None else None,
+            }
+            for bp_id, colors in matches_by_bp.items()
+        ]
+        logger.log_execution(
+            "pim_repo",
+            "exact_code_search",
+            "ok",
+            code=clean_code,
+            matches_count=len(result),
+            matches=result,
+        )
+        return result
+
+    def get_catalog_taxonomy_for_search(self, db: Session) -> dict:
+        """
+        Retrieve all Brand names and the complete Category/Sub-category hierarchy
+        for contextualizing the WarehouseSearchAgent query planner.
+        """
+        brands = [b.name for b in db.query(Brand).order_by(Brand.name).all()]
+        macro_cats = (
+            db.query(Category)
+            .filter(Category.parent_id.is_(None))
+            .order_by(Category.name)
+            .all()
+        )
+        categories_hierarchy: dict = {}
+        for macro in macro_cats:
+            subs = (
+                db.query(Category)
+                .filter(Category.parent_id == macro.id)
+                .order_by(Category.name)
+                .all()
+            )
+            categories_hierarchy[macro.name] = {
+                "description": macro.description,
+                "sub_categories": {s.name: s.description for s in subs},
+            }
+
+        taxonomy = {"brands": brands, "categories": categories_hierarchy}
+        logger.log_execution(
+            "pim_repo",
+            "search_taxonomy_fetched",
+            "ok",
+            brand_count=len(brands),
+            macro_category_count=len(categories_hierarchy),
+        )
+        return taxonomy
+
+    def get_candidate_blueprints_by_sql_plan(
+        self,
+        db: Session,
+        brand_name: Optional[str] = None,
+        category_name: Optional[str] = None,
+        in_stock_only: bool = False,
+    ) -> list[dict]:
+        """
+        Execute a deterministic SQLAlchemy filter query based on the structured SearchQueryPlan.
+        Automatically expands macro-categories to include all child sub-categories.
+        """
+        from sqlalchemy import func
+        from src.models.wms import Article, ArticleStatus
+
+        query = db.query(ArticleBlueprint).join(Brand, ArticleBlueprint.brand_id == Brand.id)
+
+        if brand_name and brand_name.strip():
+            clean_brand = brand_name.strip()
+            exact_brand = db.query(Brand).filter(func.lower(Brand.name) == clean_brand.lower()).first()
+            if exact_brand:
+                query = query.filter(ArticleBlueprint.brand_id == exact_brand.id)
+            else:
+                query = query.filter(Brand.name.ilike(f"%{clean_brand}%"))
+
+        if category_name and category_name.strip():
+            clean_cat = category_name.strip()
+            matched_cats = (
+                db.query(Category)
+                .filter(func.lower(Category.name) == clean_cat.lower())
+                .all()
+            )
+            if not matched_cats:
+                matched_cats = (
+                    db.query(Category)
+                    .filter(Category.name.ilike(f"%{clean_cat}%"))
+                    .all()
+                )
+            if not matched_cats:
+                logger.log_execution(
+                    "pim_repo",
+                    "sql_plan_candidates_fetched",
+                    "ok",
+                    brand_name=brand_name,
+                    category_name=category_name,
+                    in_stock_only=in_stock_only,
+                    count=0,
+                    reason="category_not_found",
+                )
+                return []
+
+            target_cat_ids: set[str] = set()
+            for cat in matched_cats:
+                target_cat_ids.add(str(cat.id))
+                if cat.parent_id is None:
+                    child_cats = db.query(Category).filter(Category.parent_id == cat.id).all()
+                    for child in child_cats:
+                        target_cat_ids.add(str(child.id))
+
+            query = query.filter(ArticleBlueprint.category_id.in_(list(target_cat_ids)))
+
+        blueprints: list[ArticleBlueprint] = query.limit(200).all()
+
+        results: list[dict] = []
+        for bp in blueprints:
+            articles = db.query(Article).filter(Article.article_blueprint_id == bp.id).all()
+            if in_stock_only:
+                eligible_articles = [a for a in articles if a.status == ArticleStatus.AVAILABLE]
+                if not eligible_articles:
+                    continue
+            else:
+                eligible_articles = articles
+
+            available_colors: set[str] = set()
+            for a in eligible_articles:
+                for c in (a.colors or []):
+                    if c and str(c).strip():
+                        available_colors.add(str(c).strip().lower())
+
+            brand_obj = db.query(Brand).filter(Brand.id == bp.brand_id).first()
+            cat_obj = db.query(Category).filter(Category.id == bp.category_id).first() if bp.category_id else None
+            main_cat_name: Optional[str] = None
+            sub_cat_name: Optional[str] = None
+            if cat_obj:
+                if cat_obj.parent_id:
+                    sub_cat_name = cat_obj.name
+                    parent_cat = db.query(Category).filter(Category.id == cat_obj.parent_id).first()
+                    main_cat_name = parent_cat.name if parent_cat else None
+                else:
+                    main_cat_name = cat_obj.name
+
+            results.append(
+                {
+                    "id": str(bp.id),
+                    "article_name": bp.article_name,
+                    "brand_name": brand_obj.name if brand_obj else "Unknown",
+                    "category_name": main_cat_name,
+                    "sub_category_name": sub_cat_name,
+                    "description": bp.description,
+                    "extended_description": bp.extended_description,
+                    "tags": list(bp.tags or []),
+                    "materials": list(bp.materials or []),
+                    "embedding": bp.embedding,
+                    "available_colors": sorted(list(available_colors)),
+                }
+            )
+
+        logger.log_execution(
+            "pim_repo",
+            "sql_plan_candidates_fetched",
+            "ok",
+            brand_name=brand_name,
+            category_name=category_name,
+            in_stock_only=in_stock_only,
+            count=len(results),
+        )
+        return results
+
 
 class CategoryRepository:
     """

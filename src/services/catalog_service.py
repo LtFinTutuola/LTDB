@@ -86,12 +86,8 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
     # --- Regenerate embedding (non-blocking) ---
     if should_regenerate_embedding:
         try:
-            text_for_embedding = " ".join(filter(None, [
-                bp.article_name,
-                bp.description,
-                " ".join(bp.tags or []),
-                " ".join(bp.materials or []),
-            ]))
+            from src.services.pim_service import build_blueprint_embedding_text
+            text_for_embedding = build_blueprint_embedding_text(db, bp)
             client = LLMClient()
             new_embedding = client.generate_embedding_sync(text_for_embedding)
             pim_repo.save_embedding(db, blueprint_id, new_embedding)

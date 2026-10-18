@@ -76,11 +76,11 @@ export function getPhotoUrl(photoId) {
 
 // --- Catalog ---
 
-export async function semanticSearch(query) {
+export async function semanticSearch(query, inStockOnly = false) {
     const res = await fetch(`${API_BASE}/catalog/search/semantic`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, in_stock_only: inStockOnly }),
     });
     return _handleResponse(res);
 }
