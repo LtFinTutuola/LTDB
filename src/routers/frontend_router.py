@@ -25,9 +25,17 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
 @router.get("/", include_in_schema=False)
-def index(request: Request, db: Session = Depends(get_db)):
+def index_redirect():
     """
-    Serve the SPA index page.
+    Start page of the application: redirects root / to /vendite.
+    """
+    return RedirectResponse(url="/vendite", status_code=307)
+
+
+@router.get("/magazzino", include_in_schema=False)
+def magazzino_page(request: Request, db: Session = Depends(get_db)):
+    """
+    Serve the Magazzino / catalog page.
     Injects window.__LTDB_BRANDS__ with the current brand list
     so the import forms can populate their dropdowns immediately.
     """
@@ -37,8 +45,9 @@ def index(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={"brands_json": brands_json, "active_page": "dashboard"},
+        context={"brands_json": brands_json, "active_page": "magazzino"},
     )
+
 
 
 @router.get("/vendite", include_in_schema=False)

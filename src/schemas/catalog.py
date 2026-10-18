@@ -135,9 +135,19 @@ class CatalogUpdateRequest(BaseModel):
     tags: Optional[List[str]] = None
     materials: Optional[List[str]] = None
     dimensions: Optional[str] = None
+    vendor_code: Optional[str] = None
+    barcode: Optional[str] = None
+    color: Optional[str] = None
 
 
 class CatalogUpdateResponse(BaseModel):
     status: str
     blueprint_id: str
     updated_fields: List[str]
+
+
+class CatalogDeleteResponse(BaseModel):
+    blueprint_id: str
+    deleted_blueprint: bool
+    deleted_articles_count: int
+

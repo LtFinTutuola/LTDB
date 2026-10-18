@@ -164,6 +164,18 @@ export async function patchCatalogItem(blueprintId, fields) {
     return _handleResponse(res);
 }
 
+export async function deleteCatalogItem(blueprintId, color = null) {
+    let url = `${API_BASE}/catalog/${encodeURIComponent(blueprintId)}`;
+    if (color) {
+        url += `?color=${encodeURIComponent(color)}`;
+    }
+    const res = await fetch(url, {
+        method: 'DELETE',
+    });
+    return _handleResponse(res);
+}
+
+
 
 // --- Excel Synchronization ---
 

@@ -320,3 +320,194 @@ class TestListLatestItemsCodes:
         result = catalog_service.list_latest_items(db_session)
         assert result["results"][0].vendor_code == "ABC123"
         assert result["results"][0].barcode == "8000000000017"
+
+
+class TestWarehouseEditAndDelete:
+    def test_update_blueprint_vendor_code_and_barcode_by_color(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article
+        from src.services import catalog_service
+
+        brand = _make_brand(db_session)
+        bp = _make_blueprint(db_session, brand.id, article_name="Borsa Milano")
+        sup = Supplier(company_name="SupEdit")
+        db_session.add(sup)
+        db_session.commit()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-EDIT", document_date=date(2026, 2, 1))
+        db_session.add(batch)
+        db_session.commit()
+
+        art_black = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="OLD-BLK",
+            ean="8000000000011",
+            colors=["black"],
+        )
+        art_white = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="OLD-WHT",
+            ean="8000000000022",
+            colors=["white"],
+        )
+        db_session.add_all([art_black, art_white])
+        db_session.commit()
+
+        with patch("src.services.catalog_service.LLMClient") as MockLLM:
+            mock_instance = MagicMock()
+            mock_instance.generate_embedding_sync.return_value = [0.1] * 768
+            MockLLM.return_value = mock_instance
+
+            result = catalog_service.update_blueprint(
+                db_session,
+                bp.id,
+                CatalogUpdateRequest(
+                    article_name="Borsa Torino - Black",
+                    vendor_code="NEW-BLK-99",
+                    barcode="8000000000099",
+                    color="black",
+                ),
+            )
+
+        assert result.status == "success"
+        assert "vendor_code" in result.updated_fields
+        assert "barcode" in result.updated_fields
+        db_session.refresh(bp)
+        db_session.refresh(art_black)
+        db_session.refresh(art_white)
+
+        assert bp.article_name == "Borsa Torino"
+        assert art_black.supplier_code == "NEW-BLK-99"
+        assert art_black.ean == "8000000000099"
+        assert art_white.supplier_code == "OLD-WHT"
+        assert art_white.ean == "8000000000022"
+
+    def test_delete_catalog_item_specific_color_variant_preserves_other_variants(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article
+        from src.models.pim import ArticlePhoto
+        from src.services import catalog_service
+
+        brand = _make_brand(db_session)
+        bp = _make_blueprint(db_session, brand.id, article_name="Zaino Multi")
+        sup = Supplier(company_name="SupDel")
+        db_session.add(sup)
+        db_session.commit()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-DEL", document_date=date(2026, 2, 1))
+        db_session.add(batch)
+        db_session.commit()
+
+        art_red = Article(article_blueprint_id=bp.id, batch_id=batch.id, colors=["red"])
+        art_blue = Article(article_blueprint_id=bp.id, batch_id=batch.id, colors=["blue"])
+        photo_red = ArticlePhoto(article_blueprint_id=bp.id, canonical_color_name="red", photo_data=b"redbytes")
+        photo_blue = ArticlePhoto(article_blueprint_id=bp.id, canonical_color_name="blue", photo_data=b"bluebytes")
+        db_session.add_all([art_red, art_blue, photo_red, photo_blue])
+        db_session.commit()
+
+        res = catalog_service.delete_catalog_item(db_session, bp.id, color="red")
+        assert res.blueprint_id == bp.id
+        assert res.deleted_blueprint is False
+        assert res.deleted_articles_count == 1
+
+        # Blueprint and blue variant still exist
+        assert db_session.query(ArticleBlueprint).filter_by(id=bp.id).first() is not None
+        remaining_articles = db_session.query(Article).filter_by(article_blueprint_id=bp.id).all()
+        assert len(remaining_articles) == 1
+        assert remaining_articles[0].colors == ["blue"]
+        remaining_photos = db_session.query(ArticlePhoto).filter_by(article_blueprint_id=bp.id).all()
+        assert len(remaining_photos) == 1
+        assert remaining_photos[0].canonical_color_name == "blue"
+
+    def test_delete_catalog_item_last_variant_deletes_blueprint_and_dependents(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article, ArticlePrice, MovementReason, ArticleMovement
+        from src.models.pim import ArticlePhoto
+        from src.services import catalog_service
+
+        brand = _make_brand(db_session)
+        bp = _make_blueprint(db_session, brand.id, article_name="Pochette Unica")
+        sup = Supplier(company_name="SupSingle")
+        reason = MovementReason(code="INTAKE_DEL_TEST", sign=1)
+        db_session.add_all([sup, reason])
+        db_session.commit()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-SGL", document_date=date(2026, 2, 1))
+        db_session.add(batch)
+        db_session.commit()
+
+        art = Article(article_blueprint_id=bp.id, batch_id=batch.id, colors=["gold"])
+        db_session.add(art)
+        db_session.commit()
+
+        price = ArticlePrice(article_id=art.id, list_price=120.0)
+        mov = ArticleMovement(article_id=art.id, reason_id=reason.id, notes="Test")
+        photo = ArticlePhoto(article_blueprint_id=bp.id, canonical_color_name="gold", photo_data=b"goldbytes")
+        db_session.add_all([price, mov, photo])
+        db_session.commit()
+
+        res = catalog_service.delete_catalog_item(db_session, bp.id, color="gold")
+        assert res.blueprint_id == bp.id
+        assert res.deleted_blueprint is True
+        assert res.deleted_articles_count == 1
+
+        assert db_session.query(ArticleBlueprint).filter_by(id=bp.id).first() is None
+        assert db_session.query(Article).filter_by(id=art.id).first() is None
+        assert db_session.query(ArticlePrice).filter_by(article_id=art.id).first() is None
+        assert db_session.query(ArticleMovement).filter_by(article_id=art.id).first() is None
+        assert db_session.query(ArticlePhoto).filter_by(article_blueprint_id=bp.id).first() is None
+
+    def test_delete_catalog_endpoint_and_404(self, db_session):
+        client = TestClient(app)
+        brand = _make_brand(db_session)
+        bp = _make_blueprint(db_session, brand.id, article_name="Da Eliminare API")
+
+        res = client.delete(f"/api/v1/catalog/{bp.id}")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["blueprint_id"] == bp.id
+        assert data["deleted_blueprint"] is True
+
+        res_404 = client.delete(f"/api/v1/catalog/{bp.id}")
+        assert res_404.status_code == 404
+
+    def test_warehouse_ui_elements_rendered(self, db_session):
+        client = TestClient(app)
+        # Root redirects to /vendite
+        res_root = client.get("/", follow_redirects=False)
+        assert res_root.status_code == 307
+        assert res_root.headers["location"] == "/vendite"
+
+        # Magazzino renders catalog UI and swapped tabs
+        res = client.get("/magazzino")
+        assert res.status_code == 200
+        assert "Mostra solo articoli disponibili" in res.text
+        assert "modal-edit-article" in res.text
+        assert "modal-delete-article" in res.text
+        assert res.text.index('data-tab="import-article"') < res.text.index('data-tab="import-ddt"')
+
+
+
+class TestDeleteWithLegacyEmbeddingMeta:
+    def test_delete_blueprint_removes_embedding_meta_rows(self, db_session):
+        from sqlalchemy import text
+        from src.services import catalog_service
+
+        db_session.execute(text(
+            'CREATE TABLE IF NOT EXISTS blueprint_embedding_meta ('
+            'blueprint_id VARCHAR(36) NOT NULL PRIMARY KEY, text_hash VARCHAR(64) NOT NULL, '
+            'model_name VARCHAR(100) NOT NULL, embedded_at DATETIME NOT NULL, '
+            'FOREIGN KEY(blueprint_id) REFERENCES article_blueprints (id))'
+        ))
+        brand = _make_brand(db_session)
+        bp = _make_blueprint(db_session, brand.id, article_name='Con Meta')
+        db_session.execute(text(
+            'INSERT INTO blueprint_embedding_meta VALUES (:i, :h, :m, :t)'
+        ), {'i': bp.id, 'h': 'x', 'm': 'm', 't': '2026-01-01 00:00:00'})
+        db_session.commit()
+
+        res = catalog_service.delete_catalog_item(db_session, bp.id)
+        assert res.deleted_blueprint is True
+        left = db_session.execute(text(
+            'SELECT COUNT(*) FROM blueprint_embedding_meta WHERE blueprint_id = :i'
+        ), {'i': bp.id}).scalar()
+        assert left == 0

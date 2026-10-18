@@ -1,17 +1,24 @@
 import * as api from './api.js';
 
 let _controlsBound = false;
+let _editingItem = null;
+let _deletingItem = null;
 
 export async function initWarehouse() {
     if (!_controlsBound) {
         _bindSearchControls();
+        _bindArticleModals();
         _controlsBound = true;
     }
 
+    await _refreshWarehouseView();
+}
+
+async function _refreshWarehouseView() {
     const searchInput = document.getElementById('warehouse-search-input');
     const stockToggle = document.getElementById('warehouse-stock-toggle');
     const query = searchInput ? searchInput.value.trim() : '';
-    const inStockOnly = stockToggle ? stockToggle.checked : false;
+    const inStockOnly = stockToggle ? Boolean(stockToggle.checked) : false;
 
     if (query) {
         await executeWarehouseSearch();
@@ -28,47 +35,206 @@ function _esc(str) {
     })[m]);
 }
 
+function _showToast(message, type = 'success') {
+    const toast = document.createElement('div');
+    toast.style.position = 'fixed';
+    toast.style.bottom = '24px';
+    toast.style.right = '24px';
+    toast.style.padding = '12px 20px';
+    toast.style.borderRadius = 'var(--radius-sm)';
+    toast.style.background = type === 'error' ? 'var(--error)' : 'var(--bg-elevated)';
+    toast.style.color = '#fff';
+    toast.style.border = type === 'error' ? '1px solid var(--error)' : '1px solid var(--border-color)';
+    toast.style.boxShadow = '0 8px 16px rgba(0,0,0,0.3)';
+    toast.style.zIndex = '13000';
+    toast.style.fontSize = '13px';
+    toast.style.display = 'flex';
+    toast.style.alignItems = 'center';
+    toast.style.gap = '8px';
+    toast.style.transition = 'opacity 0.25s ease';
+
+    const icon = document.createElement('span');
+    icon.className = 'material-symbols-rounded';
+    icon.style.fontSize = '18px';
+    icon.textContent = type === 'error' ? 'error' : 'check_circle';
+    toast.appendChild(icon);
+
+    const text = document.createElement('span');
+    text.textContent = message;
+    toast.appendChild(text);
+
+    document.body.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 250);
+    }, 3500);
+}
+
+function _extractBaseArticleName(item) {
+    const rawName = item.article_name || '';
+    const color = item.colors && item.colors.length > 0 ? item.colors[0] : null;
+    if (color && color.toLowerCase() !== 'unknown') {
+        const suffix = ` - ${color}`;
+        if (rawName.toLowerCase().endsWith(suffix.toLowerCase())) {
+            return rawName.slice(0, rawName.length - suffix.length).trim();
+        }
+    }
+    return rawName;
+}
+
 function _renderResults(items, container, emptyMessage = 'Nessun articolo presente a magazzino.') {
     container.innerHTML = '';
 
     if (!items || items.length === 0) {
-        container.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--text-secondary);">${emptyMessage}</div>`;
+        container.innerHTML = `
+            <div class="pim-empty-state" style="padding: 48px 20px;">
+                <span class="material-symbols-rounded">inventory_2</span>
+                <p>${emptyMessage}</p>
+            </div>
+        `;
         return;
     }
 
+    const table = document.createElement('table');
+    table.className = 'warehouse-table';
+    table.innerHTML = `
+        <thead>
+            <tr>
+                <th style="width: 68px;">Foto</th>
+                <th>Articolo</th>
+                <th style="width: 140px;">Brand</th>
+                <th style="width: 180px;">Categoria</th>
+                <th style="width: 165px;">Codici</th>
+                <th>Tag &amp; Materiali</th>
+                <th style="width: 135px;">Giacenza</th>
+                <th style="width: 90px; text-align: right;">Azioni</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    `;
+
+    const tbody = table.querySelector('tbody');
+
     items.forEach(item => {
-        const card = document.createElement('div');
-        card.className = 'search-preview-card';
-        card.style.cursor = 'pointer';
+        const tr = document.createElement('tr');
+        tr.className = 'warehouse-row';
 
         const stockLabel = item.stock > 0 ? `Disponibile (${item.stock})` : 'Esaurito';
         const stockClass = item.stock > 5 ? 'available' : (item.stock > 0 ? 'low' : 'zero');
 
-        const photoHtml = item.photo_id
-            ? `<img src="${api.getPhotoUrl(item.photo_id)}" alt="${_esc(item.article_name)}"
-                   onerror="this.parentElement.innerHTML='<span class=\\"preview-card__photo-placeholder\\">🖼</span>'">`
-            : `<span class="preview-card__photo-placeholder">🖼</span>`;
+        const hasPhoto = Boolean(item.photo_id);
+        const photoUrl = hasPhoto ? api.getPhotoUrl(item.photo_id) : '';
+        const photoHtml = hasPhoto
+            ? `<img src="${photoUrl}" alt=""
+                   onerror="this.parentElement.classList.remove('warehouse-row__photo--zoomable'); this.parentElement.innerHTML='<span class=\\"warehouse-row__photo-placeholder\\">🖼</span>'">`
+            : `<span class="warehouse-row__photo-placeholder">🖼</span>`;
 
-        const tags = (item.tags || []).slice(0, 2)
-            .map(t => `<span class="chip chip--small">${_esc(t)}</span>`).join('');
+        // Category & Subcategory formatting
+        let categoryHtml = `<span style="color: var(--text-muted); font-style: italic;">-</span>`;
+        if (item.category_name && item.sub_category_name) {
+            categoryHtml = `
+                <div style="font-weight: 500; color: var(--text-primary);">${_esc(item.category_name)}</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">↳ ${_esc(item.sub_category_name)}</div>
+            `;
+        } else if (item.category_name) {
+            categoryHtml = `<div style="font-weight: 500; color: var(--text-primary);">${_esc(item.category_name)}</div>`;
+        } else if (item.sub_category_name) {
+            categoryHtml = `<div style="font-weight: 500; color: var(--text-primary);">${_esc(item.sub_category_name)}</div>`;
+        }
 
-        card.innerHTML = `
-            <div class="preview-card__photo">${photoHtml}</div>
-            <div class="preview-card__info">
-                <div class="preview-card__name" title="${_esc(item.article_name)}">${_esc(item.article_name)}</div>
-                <span class="preview-card__brand">${_esc(item.brand_name)}</span>
-                ${item.category_name ? `<span class="preview-card__cat">${_esc(item.category_name)}</span>` : ''}
-                <div class="preview-card__tags">${tags}</div>
+        // Codes formatting
+        const codeParts = [];
+        if (item.vendor_code) {
+            codeParts.push(`<div class="warehouse-row__code" title="Codice Fornitore"><span style="color: var(--text-muted);">Cod:</span> ${_esc(item.vendor_code)}</div>`);
+        }
+        if (item.barcode) {
+            codeParts.push(`<div class="warehouse-row__code" title="Barcode EAN"><span style="color: var(--text-muted);">EAN:</span> ${_esc(item.barcode)}</div>`);
+        }
+        const codesHtml = codeParts.length > 0
+            ? codeParts.join('')
+            : `<span style="color: var(--text-muted); font-style: italic;">-</span>`;
+
+        // Tags & Materials chips
+        const combinedChips = [...(item.tags || []), ...(item.materials || [])];
+        let chipsHtml = `<span style="color: var(--text-muted); font-style: italic;">-</span>`;
+        if (combinedChips.length > 0) {
+            const visibleChips = combinedChips.slice(0, 3)
+                .map(c => `<span class="mini-chip">${_esc(c)}</span>`)
+                .join('');
+            const moreBadge = combinedChips.length > 3
+                ? `<span class="mini-chip mini-chip--more">+${combinedChips.length - 3}</span>`
+                : '';
+            chipsHtml = `<div class="tags-list">${visibleChips}${moreBadge}</div>`;
+        }
+
+        tr.innerHTML = `
+            <td>
+                <div class="warehouse-row__photo ${hasPhoto ? 'warehouse-row__photo--zoomable' : ''}">
+                    ${photoHtml}
+                </div>
+            </td>
+            <td>
+                <div class="warehouse-row__title" title="${_esc(item.article_name)}">${_esc(item.article_name)}</div>
+                ${item.description ? `<div class="warehouse-row__desc" title="${_esc(item.description)}">${_esc(item.description)}</div>` : ''}
+            </td>
+            <td>
+                <span style="color: var(--accent); font-weight: 500;">${_esc(item.brand_name)}</span>
+            </td>
+            <td>${categoryHtml}</td>
+            <td>${codesHtml}</td>
+            <td>${chipsHtml}</td>
+            <td>
                 <span class="stock-badge stock-badge--${stockClass}">${stockLabel}</span>
-            </div>
+            </td>
+            <td style="text-align: right;">
+                <div class="action-buttons" style="justify-content: flex-end;">
+                    <button type="button" class="action-btn btn-edit-article" title="Modifica Articolo">
+                        <span class="material-symbols-rounded" style="font-size: 18px;">edit</span>
+                    </button>
+                    <button type="button" class="action-btn action-btn--delete btn-delete-article" title="Elimina Articolo">
+                        <span class="material-symbols-rounded" style="font-size: 18px;">delete</span>
+                    </button>
+                </div>
+            </td>
         `;
 
-        card.addEventListener('click', () => {
+        // Photo click -> fullscreen image
+        const photoEl = tr.querySelector('.warehouse-row__photo');
+        if (photoEl && hasPhoto) {
+            photoEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                showImageFullscreen(photoUrl, item.article_name);
+            });
+        }
+
+        // Edit button click -> edit modal
+        const editBtn = tr.querySelector('.btn-edit-article');
+        if (editBtn) {
+            editBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openEditArticleModal(item);
+            });
+        }
+
+        // Delete button click -> delete modal
+        const deleteBtn = tr.querySelector('.btn-delete-article');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openDeleteArticleModal(item);
+            });
+        }
+
+        // Row click -> fullscreen article detail
+        tr.addEventListener('click', () => {
             showArticleFullscreen(item);
         });
 
-        container.appendChild(card);
+        tbody.appendChild(tr);
     });
+
+    container.appendChild(table);
 }
 
 async function fetchLatestItems(inStockOnly = false) {
@@ -85,10 +251,14 @@ async function fetchLatestItems(inStockOnly = false) {
             items = items.filter(it => (it.stock || 0) > 0);
         }
 
-        _renderResults(items, container, inStockOnly ? 'Nessun articolo con giacenza disponibile.' : 'Nessun articolo presente a magazzino.');
+        _renderResults(
+            items,
+            container,
+            inStockOnly ? 'Nessun articolo con giacenza disponibile.' : 'Nessun articolo presente a magazzino.'
+        );
     } catch (e) {
         console.error(e);
-        container.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--error);">Errore nel caricamento del magazzino.</div>';
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--error);">Errore nel caricamento del magazzino.</div>';
     }
 }
 
@@ -119,9 +289,10 @@ async function executeWarehouseSearch() {
 
     // Show loading state
     container.innerHTML = `
-        <div style="grid-column: 1/-1; text-align: center; padding: 50px 20px; color: var(--text-secondary);">
-            <div style="font-size: 16px; margin-bottom: 8px;">🔍 Ricerca in corso...</div>
-            <div style="font-size: 13px; color: var(--text-muted);">Elaborazione semantica e filtri di magazzino</div>
+        <div class="pim-loading-state" style="padding: 50px 20px;">
+            <div class="pim-loading-spinner"></div>
+            <div style="font-size: 15px; color: var(--text-primary); margin-top: 4px;">Ricerca in corso...</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Elaborazione semantica e filtri di magazzino</div>
         </div>
     `;
 
@@ -134,6 +305,7 @@ async function executeWarehouseSearch() {
 
         if (feedbackEl) {
             feedbackEl.style.display = 'block';
+            feedbackEl.style.color = 'var(--text-secondary)';
             feedbackEl.textContent = response.message || `Trovati ${results.length} articoli`;
         }
 
@@ -144,7 +316,7 @@ async function executeWarehouseSearch() {
         );
     } catch (err) {
         console.error('Search error:', err);
-        container.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--error);">Errore durante la ricerca: ${_esc(err.message || 'Errore del server')}</div>`;
+        container.innerHTML = `<div style="text-align: center; padding: 40px; color: var(--error);">Errore durante la ricerca: ${_esc(err.message || 'Errore del server')}</div>`;
         if (feedbackEl) {
             feedbackEl.style.display = 'block';
             feedbackEl.style.color = 'var(--error)';
@@ -220,6 +392,250 @@ function _bindSearchControls() {
     }
 }
 
+// ============================================================================
+// Edit & Delete Modals Logic
+// ============================================================================
+
+function _bindArticleModals() {
+    const modalEdit = document.getElementById('modal-edit-article');
+    const formEdit = document.getElementById('form-edit-article');
+    const btnCloseEdit = document.getElementById('btn-close-edit-article');
+    const btnCancelEdit = document.getElementById('btn-cancel-edit-article');
+
+    const modalDelete = document.getElementById('modal-delete-article');
+    const btnCloseDelete = document.getElementById('btn-close-delete-article');
+    const btnCancelDelete = document.getElementById('btn-cancel-delete-article');
+    const btnConfirmDelete = document.getElementById('btn-confirm-delete-article');
+
+    if (btnCloseEdit) btnCloseEdit.addEventListener('click', closeEditArticleModal);
+    if (btnCancelEdit) btnCancelEdit.addEventListener('click', closeEditArticleModal);
+    if (formEdit) formEdit.addEventListener('submit', _handleSaveEditArticle);
+    if (modalEdit) {
+        modalEdit.addEventListener('click', (e) => {
+            if (e.target === modalEdit) closeEditArticleModal();
+        });
+    }
+
+    if (btnCloseDelete) btnCloseDelete.addEventListener('click', closeDeleteArticleModal);
+    if (btnCancelDelete) btnCancelDelete.addEventListener('click', closeDeleteArticleModal);
+    if (btnConfirmDelete) btnConfirmDelete.addEventListener('click', _handleConfirmDeleteArticle);
+    if (modalDelete) {
+        modalDelete.addEventListener('click', (e) => {
+            if (e.target === modalDelete) closeDeleteArticleModal();
+        });
+    }
+}
+
+function openEditArticleModal(item) {
+    _editingItem = item;
+    const modalEdit = document.getElementById('modal-edit-article');
+    const inputName = document.getElementById('edit-article-name');
+    const inputVendorCode = document.getElementById('edit-article-vendor-code');
+    const inputBarcode = document.getElementById('edit-article-barcode');
+    const inputDesc = document.getElementById('edit-article-description');
+    const inputExtDesc = document.getElementById('edit-article-ext-description');
+    const inputTags = document.getElementById('edit-article-tags');
+    const inputMaterials = document.getElementById('edit-article-materials');
+
+    if (!modalEdit) return;
+
+    if (inputName) inputName.value = _extractBaseArticleName(item);
+    if (inputVendorCode) inputVendorCode.value = item.vendor_code || '';
+    if (inputBarcode) inputBarcode.value = item.barcode || '';
+    if (inputDesc) inputDesc.value = item.description || '';
+    if (inputExtDesc) inputExtDesc.value = item.extended_description || '';
+    if (inputTags) inputTags.value = (item.tags || []).join(', ');
+    if (inputMaterials) inputMaterials.value = (item.materials || []).join(', ');
+
+    modalEdit.classList.add('active');
+    setTimeout(() => {
+        if (inputName) inputName.focus();
+    }, 100);
+}
+
+function closeEditArticleModal() {
+    const modalEdit = document.getElementById('modal-edit-article');
+    const formEdit = document.getElementById('form-edit-article');
+    if (modalEdit) modalEdit.classList.remove('active');
+    if (formEdit) formEdit.reset();
+    _editingItem = null;
+}
+
+async function _handleSaveEditArticle(e) {
+    e.preventDefault();
+    if (!_editingItem) return;
+
+    const inputName = document.getElementById('edit-article-name');
+    const inputVendorCode = document.getElementById('edit-article-vendor-code');
+    const inputBarcode = document.getElementById('edit-article-barcode');
+    const inputDesc = document.getElementById('edit-article-description');
+    const inputExtDesc = document.getElementById('edit-article-ext-description');
+    const inputTags = document.getElementById('edit-article-tags');
+    const inputMaterials = document.getElementById('edit-article-materials');
+    const btnSave = document.getElementById('btn-save-edit-article');
+
+    const articleName = inputName ? inputName.value.trim() : '';
+    const vendorCode = inputVendorCode ? inputVendorCode.value.trim() : '';
+    const barcode = inputBarcode ? inputBarcode.value.trim() : '';
+    const description = inputDesc ? inputDesc.value.trim() : '';
+    const extendedDescription = inputExtDesc ? inputExtDesc.value.trim() : '';
+    const tags = (inputTags ? inputTags.value : '')
+        .split(',')
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean);
+    const materials = (inputMaterials ? inputMaterials.value : '')
+        .split(',')
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean);
+
+    if (!articleName) {
+        _showToast('Il nome dell\'articolo non può essere vuoto.', 'error');
+        return;
+    }
+    if (!description) {
+        _showToast('La descrizione breve non può essere vuota.', 'error');
+        return;
+    }
+    if (tags.length === 0) {
+        _showToast('Inserisci almeno un tag.', 'error');
+        return;
+    }
+    if (materials.length === 0) {
+        _showToast('Inserisci almeno un materiale.', 'error');
+        return;
+    }
+
+    const color = _editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : null;
+    const payload = {
+        article_name: articleName,
+        description: description,
+        extended_description: extendedDescription,
+        tags: tags,
+        materials: materials,
+        vendor_code: vendorCode,
+        barcode: barcode,
+        color: color,
+    };
+
+    if (btnSave) {
+        btnSave.disabled = true;
+        btnSave.textContent = 'Salvataggio...';
+    }
+
+    try {
+        await api.patchCatalogItem(_editingItem.blueprint_id, payload);
+        _showToast('Articolo aggiornato con successo.');
+        closeEditArticleModal();
+
+        const detailOverlay = document.getElementById('article-fullscreen-modal');
+        if (detailOverlay) detailOverlay.style.display = 'none';
+
+        await _refreshWarehouseView();
+    } catch (err) {
+        _showToast(err.message || 'Errore durante l\'aggiornamento.', 'error');
+    } finally {
+        if (btnSave) {
+            btnSave.disabled = false;
+            btnSave.textContent = 'Salva Modifiche';
+        }
+    }
+}
+
+function openDeleteArticleModal(item) {
+    _deletingItem = item;
+    const modalDelete = document.getElementById('modal-delete-article');
+    const deleteMsg = document.getElementById('delete-article-msg');
+    if (!modalDelete) return;
+
+    if (deleteMsg) {
+        deleteMsg.textContent = `Sei sicuro di voler eliminare l'articolo "${item.article_name}" dal magazzino?`;
+    }
+    modalDelete.classList.add('active');
+}
+
+function closeDeleteArticleModal() {
+    const modalDelete = document.getElementById('modal-delete-article');
+    if (modalDelete) modalDelete.classList.remove('active');
+    _deletingItem = null;
+}
+
+async function _handleConfirmDeleteArticle() {
+    if (!_deletingItem) return;
+    const btnConfirm = document.getElementById('btn-confirm-delete-article');
+    const color = _deletingItem.colors && _deletingItem.colors.length > 0 ? _deletingItem.colors[0] : null;
+
+    if (btnConfirm) {
+        btnConfirm.disabled = true;
+        btnConfirm.textContent = 'Eliminazione...';
+    }
+
+    try {
+        await api.deleteCatalogItem(_deletingItem.blueprint_id, color);
+        _showToast('Articolo eliminato con successo.');
+        closeDeleteArticleModal();
+
+        const detailOverlay = document.getElementById('article-fullscreen-modal');
+        if (detailOverlay) detailOverlay.style.display = 'none';
+
+        await _refreshWarehouseView();
+    } catch (err) {
+        _showToast(err.message || 'Errore durante l\'eliminazione.', 'error');
+    } finally {
+        if (btnConfirm) {
+            btnConfirm.disabled = false;
+            btnConfirm.textContent = 'Elimina';
+        }
+    }
+}
+
+// ============================================================================
+// Fullscreen Image Lightbox & Fullscreen Article Detail View
+// ============================================================================
+
+function showImageFullscreen(imageUrl, altText = '') {
+    let imgOverlay = document.getElementById('image-fullscreen-modal');
+    if (!imgOverlay) {
+        imgOverlay = document.createElement('div');
+        imgOverlay.id = 'image-fullscreen-modal';
+        imgOverlay.style.position = 'fixed';
+        imgOverlay.style.top = '0';
+        imgOverlay.style.left = '0';
+        imgOverlay.style.width = '100vw';
+        imgOverlay.style.height = '100vh';
+        imgOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.92)';
+        imgOverlay.style.zIndex = '12000';
+        imgOverlay.style.display = 'none';
+        imgOverlay.style.justifyContent = 'center';
+        imgOverlay.style.alignItems = 'center';
+        imgOverlay.style.backdropFilter = 'blur(6px)';
+        imgOverlay.style.cursor = 'zoom-out';
+        document.body.appendChild(imgOverlay);
+
+        imgOverlay.addEventListener('click', (e) => {
+            if (e.target === imgOverlay || e.target.closest('.close-image-fullscreen')) {
+                imgOverlay.style.display = 'none';
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && imgOverlay.style.display === 'flex') {
+                imgOverlay.style.display = 'none';
+            }
+        });
+    }
+
+    imgOverlay.innerHTML = `
+        <button type="button" class="close-image-fullscreen" title="Chiudi immagine"
+                style="position: absolute; top: 20px; right: 24px; background: var(--bg-elevated); border: 1px solid var(--border-color); color: var(--text-primary); width: 42px; height: 42px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.4);">
+            <span class="material-symbols-rounded" style="font-size: 24px;">close</span>
+        </button>
+        <img src="${imageUrl}" alt=""
+             style="max-width: 92vw; max-height: 90vh; object-fit: contain; border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.65); cursor: default;"
+             onclick="event.stopPropagation()">
+    `;
+    imgOverlay.style.display = 'flex';
+}
+
 function showArticleFullscreen(item) {
     let overlay = document.getElementById('article-fullscreen-modal');
     if (!overlay) {
@@ -245,67 +661,84 @@ function showArticleFullscreen(item) {
         });
     }
 
-    const photoHtml = item.photo_id
-        ? `<div style="width:100%; height:100%; display:flex; justify-content:center; align-items:center; overflow:hidden; border-radius:8px;">
-               <img src="${api.getPhotoUrl(item.photo_id)}" style="width:100%; height:100%; max-height:60vh; object-fit:contain; border-radius:8px;" alt="${_esc(item.article_name)}" onerror="this.style.display='none'">
+    const hasPhoto = Boolean(item.photo_id);
+    const photoUrl = hasPhoto ? api.getPhotoUrl(item.photo_id) : '';
+    const photoHtml = hasPhoto
+        ? `<div class="fullscreen-article-photo" style="width:100%; height:100%; display:flex; justify-content:center; align-items:center; overflow:hidden; border-radius:10px; background:var(--bg-app); cursor:zoom-in;">
+               <img src="${photoUrl}" style="width:100%; height:100%; max-height:68vh; object-fit:contain; border-radius:10px;" alt="" onerror="this.style.display='none'">
            </div>`
-        : `<div style="width:100%; height:300px; display:flex; align-items:center; justify-content:center; font-size:48px; background:var(--bg-elevated); border-radius:8px;">🖼</div>`;
+        : `<div style="width:100%; height:320px; display:flex; align-items:center; justify-content:center; font-size:48px; background:var(--bg-elevated); border-radius:10px;">🖼</div>`;
 
     const tags = (item.tags || []).map(t => `<span class="chip">${_esc(t)}</span>`).join('');
+    const materials = (item.materials || []).map(m => `<span class="mini-chip">${_esc(m)}</span>`).join('');
 
     const stockLabel = item.stock > 0 ? `Disponibile (${item.stock})` : 'Esaurito';
     const stockClass = item.stock > 5 ? 'available' : (item.stock > 0 ? 'low' : 'zero');
 
     overlay.innerHTML = `
-        <div style="background: var(--bg-surface); width: 90%; max-width: 900px; max-height: 90vh; overflow-y: auto; border-radius: 12px; position: relative; display: flex; flex-direction: column; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 20px; border-bottom: 1px solid var(--border-color);">
-                <h2 style="margin: 0; font-size: 20px;">Dettaglio Articolo</h2>
-                <button class="close-article-modal" style="background: none; border: none; cursor: pointer; color: var(--text-secondary); display:flex; align-items:center;">
-                    <span class="material-symbols-rounded" style="font-size: 24px;">close</span>
-                </button>
+        <div style="background: var(--bg-surface); width: 94%; max-width: 1040px; max-height: 92vh; overflow-y: auto; border-radius: 16px; position: relative; display: flex; flex-direction: column; box-shadow: 0 16px 48px rgba(0,0,0,0.6); border: 1px solid var(--border-color);">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid var(--border-color);">
+                <h2 style="margin: 0; font-size: 18px; font-weight: 600;">Dettaglio Articolo</h2>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button type="button" class="close-article-modal action-btn" title="Chiudi">
+                        <span class="material-symbols-rounded" style="font-size: 24px;">close</span>
+                    </button>
+                </div>
             </div>
-            <div style="display: flex; flex-direction: row; gap: 30px; padding: 30px; flex-wrap: wrap;">
-                <div style="flex: 1; text-align: center; min-width: 250px; max-width: 400px; margin: 0 auto; aspect-ratio: 3/4;">
+            <div style="display: flex; flex-direction: row; gap: 30px; padding: 28px; flex-wrap: wrap;">
+                <div style="flex: 1; text-align: center; min-width: 260px; max-width: 420px; margin: 0 auto;">
                     ${photoHtml}
                 </div>
-                <div style="flex: 1; display: flex; flex-direction: column; gap: 15px; min-width: 300px;">
+                <div style="flex: 1.2; display: flex; flex-direction: column; gap: 16px; min-width: 300px;">
                     <div>
-                        <h1 style="margin: 0 0 5px 0; font-size: 24px; color: var(--text-primary);">${_esc(item.article_name)}</h1>
-                        <div style="font-size: 18px; color: var(--accent); font-weight: 500;">${_esc(item.brand_name)}</div>
+                        <div style="font-size: 14px; color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">${_esc(item.brand_name)}</div>
+                        <h1 style="margin: 0; font-size: 24px; color: var(--text-primary); line-height: 1.25;">${_esc(item.article_name)}</h1>
                     </div>
+
+                    ${item.description ? `<div style="font-size: 14px; color: var(--text-primary);">${_esc(item.description)}</div>` : ''}
                     
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
-                        ${tags}
-                    </div>
-
-                    ${item.description ? `<div style="font-size: 14px; color: var(--text-primary); margin-top: 5px;"><strong>Descrizione Breve:</strong><br>${_esc(item.description)}</div>` : ''}
-                    ${item.extended_description ? `<div style="font-size: 14px; color: var(--text-secondary); margin-top: 5px; white-space: pre-wrap;"><strong>Descrizione Estesa:</strong><br>${_esc(item.extended_description)}</div>` : ''}
-
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; background: var(--bg-app); padding: 15px; border-radius: 8px; margin-top: 10px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; background: var(--bg-app); padding: 16px; border-radius: 10px; margin-top: 4px;">
                         <div>
-                            <div style="font-size: 12px; color: var(--text-secondary);">Categoria</div>
+                            <div style="font-size: 12px; color: var(--text-muted);">Categoria</div>
                             <div style="font-weight: 500; font-size: 14px;">${item.category_name ? _esc(item.category_name) : 'N/D'}</div>
                         </div>
                         <div>
-                            <div style="font-size: 12px; color: var(--text-secondary);">Sotto-categoria</div>
+                            <div style="font-size: 12px; color: var(--text-muted);">Sotto-categoria</div>
                             <div style="font-weight: 500; font-size: 14px;">${item.sub_category_name ? _esc(item.sub_category_name) : 'N/D'}</div>
                         </div>
                         <div>
-                            <div style="font-size: 12px; color: var(--text-secondary);">Barcode</div>
-                            <div style="font-weight: 500; font-size: 14px;">${item.barcode ? _esc(item.barcode) : 'N/D'}</div>
+                            <div style="font-size: 12px; color: var(--text-muted);">Barcode (EAN)</div>
+                            <div style="font-weight: 500; font-size: 14px; font-family: monospace;">${item.barcode ? _esc(item.barcode) : 'N/D'}</div>
                         </div>
                         <div>
-                            <div style="font-size: 12px; color: var(--text-secondary);">Codice Fornitore</div>
-                            <div style="font-weight: 500; font-size: 14px;">${item.vendor_code ? _esc(item.vendor_code) : 'N/D'}</div>
+                            <div style="font-size: 12px; color: var(--text-muted);">Codice Fornitore</div>
+                            <div style="font-weight: 500; font-size: 14px; font-family: monospace;">${item.vendor_code ? _esc(item.vendor_code) : 'N/D'}</div>
                         </div>
                         <div>
-                            <div style="font-size: 12px; color: var(--text-secondary);">Giacenza</div>
-                            <div><span class="stock-badge stock-badge--${stockClass}">${stockLabel}</span></div>
+                            <div style="font-size: 12px; color: var(--text-muted);">Materiali</div>
+                            <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px;">${materials || '<span style="font-size: 13px;">N/D</span>'}</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 12px; color: var(--text-muted);">Giacenza</div>
+                            <div style="margin-top: 2px;"><span class="stock-badge stock-badge--${stockClass}">${stockLabel}</span></div>
                         </div>
                     </div>
+
+                    ${item.extended_description ? `<div style="font-size: 14px; color: var(--text-secondary); white-space: pre-wrap; line-height: 1.5;">${_esc(item.extended_description)}</div>` : ''}
+
+                    ${tags ? `<div style="display: flex; gap: 8px; flex-wrap: wrap;">${tags}</div>` : ''}
                 </div>
             </div>
         </div>
     `;
+
+    const fullPhotoEl = overlay.querySelector('.fullscreen-article-photo');
+    if (fullPhotoEl && hasPhoto) {
+        fullPhotoEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showImageFullscreen(photoUrl, item.article_name);
+        });
+    }
+
     overlay.style.display = 'flex';
 }

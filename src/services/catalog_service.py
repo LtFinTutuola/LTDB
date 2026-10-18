@@ -9,10 +9,17 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.models.pim import ArticleBlueprint, Brand, Category, ArticlePhoto
-from src.models.wms import Article, Batch, Supplier, ArticleStatus
-from sqlalchemy import func
+from src.models.wms import Article, Batch, Supplier, ArticleStatus, ArticlePrice, ArticleMovement
+from src.models.sales import SaleLine
+from src.models.excel_sales import ExcelSale
+from sqlalchemy import func, inspect, text
 from src.repositories.pim_repo import pim_repo
-from src.schemas.catalog import CatalogUpdateRequest, CatalogUpdateResponse, SearchResultItem
+from src.schemas.catalog import (
+    CatalogUpdateRequest,
+    CatalogUpdateResponse,
+    CatalogDeleteResponse,
+    SearchResultItem,
+)
 from src.agents.llm_client import LLMClient
 from src.core.logger import get_logger
 
@@ -24,7 +31,7 @@ _DESCRIPTIVE_FIELDS = {"article_name", "description", "extended_description", "t
 
 def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateRequest) -> CatalogUpdateResponse:
     """
-    Apply a partial update to a confirmed ArticleBlueprint.
+    Apply a partial update to a confirmed ArticleBlueprint (and optionally its Article codes).
 
     - Only fields explicitly set in the request are modified.
     - tags and materials, if provided, must be non-empty lists.
@@ -45,11 +52,31 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
         )
 
     update_data = request.model_dump(exclude_unset=True)
-    if not update_data:
+    target_color = update_data.pop("color", None)
+
+    has_vendor_code = "vendor_code" in update_data
+    new_vendor_code = update_data.pop("vendor_code", None)
+    has_barcode = "barcode" in update_data
+    new_barcode = update_data.pop("barcode", None)
+
+    if not update_data and not has_vendor_code and not has_barcode:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No fields provided for update."
         )
+
+    if "article_name" in update_data:
+        if not update_data["article_name"] or not str(update_data["article_name"]).strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Il campo 'article_name' non può essere vuoto."
+            )
+        clean_name = str(update_data["article_name"]).strip()
+        if target_color and str(target_color).strip().lower() != "unknown":
+            suffix = f" - {str(target_color).strip()}"
+            if clean_name.lower().endswith(suffix.lower()):
+                clean_name = clean_name[:-len(suffix)].strip()
+        update_data["article_name"] = clean_name
 
     # --- Prevent description loss ---
     if "description" in update_data and not update_data["description"]:
@@ -70,18 +97,42 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
             detail="'materials' must be a non-empty list."
         )
 
-    # --- Apply fields ---
+    # --- Apply blueprint fields ---
     should_regenerate_embedding = False
+    updated_fields_list = list(update_data.keys())
     for field, value in update_data.items():
         setattr(bp, field, value)
         if field in _DESCRIPTIVE_FIELDS:
             should_regenerate_embedding = True
 
+    # --- Apply article variant fields (vendor_code / barcode) ---
+    if has_vendor_code or has_barcode:
+        articles = db.query(Article).filter(Article.article_blueprint_id == bp.id).all()
+        if target_color and str(target_color).strip().lower() != "unknown":
+            norm_color = str(target_color).strip().lower()
+            target_articles = [
+                a for a in articles
+                if norm_color in [str(c).strip().lower() for c in (a.colors or [])]
+            ]
+        else:
+            target_articles = articles
+
+        for art in target_articles:
+            if has_vendor_code:
+                art.supplier_code = new_vendor_code.strip() if new_vendor_code and new_vendor_code.strip() else None
+            if has_barcode:
+                art.ean = new_barcode.strip() if new_barcode and new_barcode.strip() else None
+
+        if has_vendor_code:
+            updated_fields_list.append("vendor_code")
+        if has_barcode:
+            updated_fields_list.append("barcode")
+
     db.commit()
     db.refresh(bp)
 
     logger.log_execution("catalog_service", "update_blueprint_committed", "ok",
-                         blueprint_id=blueprint_id, updated_fields=list(update_data.keys()))
+                         blueprint_id=blueprint_id, updated_fields=updated_fields_list)
 
     # --- Regenerate embedding (non-blocking) ---
     if should_regenerate_embedding:
@@ -100,7 +151,97 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
     return CatalogUpdateResponse(
         status="success",
         blueprint_id=blueprint_id,
-        updated_fields=list(update_data.keys()),
+        updated_fields=updated_fields_list,
+    )
+
+
+def delete_catalog_item(
+    db: Session,
+    blueprint_id: str,
+    color: str | None = None,
+) -> CatalogDeleteResponse:
+    """
+    Delete a specific color variant of an ArticleBlueprint (or the entire blueprint
+    if `color` is omitted or no other color variants remain).
+    Cleans up dependent ArticlePrice, ArticleMovement, SaleLine, ExcelSale, and ArticlePhoto records.
+    """
+    logger.log_execution(
+        "catalog_service",
+        "delete_catalog_item_start",
+        "ok",
+        blueprint_id=blueprint_id,
+        color=color,
+    )
+
+    bp: ArticleBlueprint | None = (
+        db.query(ArticleBlueprint).filter(ArticleBlueprint.id == blueprint_id).first()
+    )
+    if not bp:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Blueprint '{blueprint_id}' not found in the catalog.",
+        )
+
+    all_articles = db.query(Article).filter(Article.article_blueprint_id == bp.id).all()
+
+    norm_color = color.strip().lower() if color and color.strip() else None
+    if norm_color and norm_color != "unknown":
+        target_articles = [
+            a for a in all_articles
+            if norm_color in [str(c).strip().lower() for c in (a.colors or [])]
+        ]
+        db.query(ArticlePhoto).filter(
+            ArticlePhoto.article_blueprint_id == bp.id,
+            ArticlePhoto.canonical_color_name == norm_color,
+        ).delete()
+    else:
+        target_articles = all_articles
+
+    deleted_articles_count = len(target_articles)
+    for art in target_articles:
+        db.query(ArticlePrice).filter(ArticlePrice.article_id == art.id).delete()
+        db.query(ArticleMovement).filter(ArticleMovement.article_id == art.id).delete()
+        db.query(SaleLine).filter(SaleLine.article_id == art.id).delete()
+        db.query(ExcelSale).filter(ExcelSale.article_id == art.id).update(
+            {ExcelSale.article_id: None}
+        )
+        db.delete(art)
+
+    db.flush()
+
+    remaining_articles = (
+        db.query(Article).filter(Article.article_blueprint_id == bp.id).count()
+    )
+
+    deleted_blueprint = False
+    if not norm_color or norm_color == "unknown" or remaining_articles == 0:
+        db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp.id).delete()
+        # Legacy table with an FK to article_blueprints and no ORM model: clean it up
+        # explicitly (when present) to avoid FOREIGN KEY violations.
+        if inspect(db.connection()).has_table("blueprint_embedding_meta"):
+            db.execute(
+                text("DELETE FROM blueprint_embedding_meta WHERE blueprint_id = :bp_id"),
+                {"bp_id": bp.id},
+            )
+        db.delete(bp)
+        deleted_blueprint = True
+
+    db.commit()
+
+    logger.log_execution(
+        "catalog_service",
+        "delete_catalog_item_committed",
+        "ok",
+        blueprint_id=blueprint_id,
+        color=norm_color,
+        deleted_blueprint=deleted_blueprint,
+        deleted_articles_count=deleted_articles_count,
+    )
+
+    return CatalogDeleteResponse(
+        blueprint_id=blueprint_id,
+        deleted_blueprint=deleted_blueprint,
+        deleted_articles_count=deleted_articles_count,
     )
 
 def list_latest_items(db: Session, limit: int = 50, offset: int = 0) -> dict:

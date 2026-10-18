@@ -30,6 +30,7 @@ from src.schemas.catalog import (
     CategoryUpdateRequest,
     CatalogUpdateRequest,
     CatalogUpdateResponse,
+    CatalogDeleteResponse,
     SemanticSearchRequest,
     SemanticSearchResponse,
     CatalogItemsResponse,
@@ -456,3 +457,48 @@ def patch_blueprint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(exc) or "unknown server error",
         )
+
+
+@router.delete("/{blueprint_id}", response_model=CatalogDeleteResponse, status_code=status.HTTP_200_OK)
+def delete_blueprint(
+    blueprint_id: str,
+    color: Optional[str] = Query(None, description="Optional color variant to delete"),
+    db: Session = Depends(get_db),
+):
+    """
+    Delete a specific color variant or the entire ArticleBlueprint from the catalog.
+    """
+    logger.log_execution(
+        "catalog_router",
+        "request_received",
+        "ok",
+        path=f"/api/v1/catalog/{blueprint_id}",
+        method="DELETE",
+        blueprint_id=blueprint_id,
+        color=color,
+    )
+    start = time.time()
+    try:
+        result = catalog_service.delete_catalog_item(db, blueprint_id, color=color)
+        latency_ms = int((time.time() - start) * 1000)
+        logger.log_execution(
+            "catalog_router",
+            "response_dispatched",
+            "ok",
+            path=f"/api/v1/catalog/{blueprint_id}",
+            method="DELETE",
+            blueprint_id=blueprint_id,
+            color=color,
+            latency_ms=latency_ms,
+        )
+        return result
+    except HTTPException as exc:
+        raise exc
+    except Exception as exc:
+        db.rollback()
+        logger.log_execution("catalog_router", "exception_caught", "err", exc=exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc) if str(exc).strip() else "unknown server error",
+        )
+

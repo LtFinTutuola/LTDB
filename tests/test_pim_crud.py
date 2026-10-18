@@ -320,15 +320,18 @@ class TestFrontendRoutes:
         detail_names = [b["name"] for b in res_details.json()]
         assert detail_names == ["alfa", "Beta", "charlie", "Zebra"]
 
-        # 3. Check / (Magazzino) index template injection
-        res_index = client.get("/")
+        # 3. Check /magazzino index template injection
+        res_index = client.get("/magazzino")
         assert res_index.status_code == 200
         import json
+        found_injection = False
         for line in res_index.text.splitlines():
             if "window.__LTDB_BRANDS__ =" in line:
                 raw_json = line.split("window.__LTDB_BRANDS__ =")[1].strip().rstrip(";")
                 injected_brands = json.loads(raw_json)
                 injected_names = [b["name"] for b in injected_brands]
                 assert injected_names == ["alfa", "Beta", "charlie", "Zebra"]
+                found_injection = True
                 break
+        assert found_injection is True
 

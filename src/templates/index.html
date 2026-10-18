@@ -2,13 +2,14 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="/static/css/tabs.css">
+<link rel="stylesheet" href="/static/css/pim_crud.css">
 <style>
   .magazzino-container {
     display: flex;
     flex-direction: column;
     height: 100vh;
     padding: var(--space-md);
-    background: var(--bg-body);
+    background: var(--bg-app);
     box-sizing: border-box;
   }
   .magazzino-header {
@@ -20,9 +21,12 @@
   }
   .magazzino-content {
     flex: 1;
-    overflow-y: auto;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     background: var(--bg-surface);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-card);
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     padding: var(--space-md);
     scrollbar-width: none;
@@ -34,43 +38,322 @@
     display: none;
   }
 
-  
   .tab-pane {
     display: none;
     height: 100%;
+    min-height: 0;
   }
   .tab-pane.active {
     display: block;
+    overflow-y: auto;
   }
-  
+  #tab-catalog.tab-pane.active {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ---- Harmonious Search Bar & Left Toggle ---- */
   .search-bar-container {
-    margin-bottom: var(--space-md);
+    flex-shrink: 0;
+    margin-bottom: var(--space-sm);
+    background: var(--bg-surface);
+    z-index: 20;
+  }
+  .search-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  /* Modern Pill Switch Control (Left) */
+  .warehouse-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 16px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-app);
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+  }
+  .warehouse-toggle:hover {
+    border-color: rgba(168, 199, 250, 0.45);
+    background: var(--bg-elevated);
+  }
+  .warehouse-toggle__input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+  }
+  .warehouse-toggle__slider {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    transition: background 0.22s ease, border-color 0.22s ease;
+    flex-shrink: 0;
+  }
+  .warehouse-toggle__slider::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), background 0.22s ease;
+  }
+  .warehouse-toggle__input:checked + .warehouse-toggle__slider {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+  }
+  .warehouse-toggle__input:checked + .warehouse-toggle__slider::after {
+    transform: translateX(16px);
+    background: var(--accent);
+  }
+  .warehouse-toggle__label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    transition: color var(--transition-fast);
+  }
+  .warehouse-toggle__input:checked ~ .warehouse-toggle__label {
+    color: var(--text-primary);
+  }
+
+  /* Rounded Search Input (Center) */
+  .search-input-wrapper {
+    position: relative;
+    flex: 1;
+    min-width: 240px;
+    display: flex;
+    align-items: center;
+  }
+  .search-input-icon {
+    position: absolute;
+    left: 16px;
+    font-size: 19px;
+    color: var(--text-muted);
+    pointer-events: none;
   }
   .search-input {
     width: 100%;
-    padding: 10px 16px;
+    padding: 10px 40px 10px 44px;
     border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background: var(--bg-body);
+    border-radius: var(--radius-pill);
+    background: var(--bg-app);
     font-size: 14px;
     color: var(--text-primary);
+    outline: none;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  }
+  .search-input:focus {
+    border-color: var(--border-focus);
+    box-shadow: 0 0 0 3px var(--accent-dim);
   }
   .search-input:disabled {
     opacity: 0.7;
     cursor: not-allowed;
-    background: var(--bg-body);
   }
-  
-  .grid-container {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: var(--space-md);
+  .search-clear-btn {
+    display: none;
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--transition-fast), color var(--transition-fast);
   }
-  
+  .search-clear-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+  }
+
+  /* Rounded Search Button (Right) */
+  .search-btn {
+    padding: 10px 22px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    color: #131314;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    font-size: 14px;
+    white-space: nowrap;
+    transition: background var(--transition-fast), transform 0.1s ease, box-shadow var(--transition-fast);
+  }
+  .search-btn:hover {
+    background: var(--accent-hover);
+    box-shadow: 0 2px 8px rgba(168, 199, 250, 0.25);
+  }
+  .search-btn:active {
+    transform: scale(0.98);
+  }
+  .search-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+
+  /* ---- Borderless Warehouse Table (No Excel Gridlines) ---- */
+  .warehouse-table-wrapper {
+    flex: 1;
+    width: 100%;
+    overflow-y: auto;
+    overflow-x: auto;
+    min-height: 0;
+  }
+  .warehouse-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0 6px;
+    font-size: 13px;
+    text-align: left;
+  }
+  .warehouse-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg-surface);
+    box-shadow: 0 1px 0 var(--border-color);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 8px 14px;
+    border: none;
+    white-space: nowrap;
+  }
+  .warehouse-table tbody tr.warehouse-row {
+    background: var(--bg-app);
+    cursor: pointer;
+    transition: background var(--transition-fast), transform 0.1s ease;
+  }
+  .warehouse-table tbody tr.warehouse-row:hover {
+    background: var(--bg-elevated);
+  }
+  .warehouse-table tbody td {
+    padding: 10px 14px;
+    border: none;
+    vertical-align: middle;
+    color: var(--text-primary);
+  }
+  .warehouse-table tbody tr.warehouse-row td:first-child {
+    border-top-left-radius: 10px;
+    border-bottom-left-radius: 10px;
+    padding-left: 12px;
+  }
+  .warehouse-table tbody tr.warehouse-row td:last-child {
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+    padding-right: 12px;
+  }
+
+  /* Left Photo Thumbnail inside Row */
+  .warehouse-row__photo {
+    position: relative;
+    width: 56px;
+    height: 72px;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    overflow: hidden;
+    flex-shrink: 0;
+    transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  }
+  .warehouse-row__photo--zoomable {
+    cursor: zoom-in;
+  }
+  .warehouse-row__photo--zoomable:hover {
+    transform: scale(1.06);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  .warehouse-row__photo img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center center;
+  }
+  .warehouse-row__photo-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 20px;
+  }
+
+  .warehouse-row__title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-primary);
+    line-height: 1.3;
+  }
+  .warehouse-row__desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .warehouse-row__code {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    line-height: 1.4;
+  }
+
   .import-form-area {
     max-width: 500px;
     margin: 0 auto;
     padding-top: var(--space-xl);
+  }
+
+  /* Edit modal: keep header/footer visible, scroll only the body */
+  #modal-edit-article .modal-card {
+    max-height: 90vh;
+    overflow: hidden;
+  }
+  #form-edit-article {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+  #form-edit-article .modal-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  #form-edit-article .modal-footer {
+    flex-shrink: 0;
   }
 </style>
 {% endblock %}
@@ -81,8 +364,8 @@
         <div class="magazzino-header">
             <div class="tabs" id="magazzino-tabs">
                 <button class="tab active" data-tab="catalog">Magazzino</button>
-                <button class="tab" data-tab="import-ddt">Importa DDT</button>
                 <button class="tab" data-tab="import-article">Importa Articolo</button>
+                <button class="tab" data-tab="import-ddt">Importa DDT</button>
             </div>
         </div>
         
@@ -90,33 +373,33 @@
             <!-- Catalog Tab -->
             <div id="tab-catalog" class="tab-pane active">
                 <div class="search-bar-container">
-                    <div style="display: flex; gap: var(--space-sm); align-items: center;">
-                        <div style="position: relative; flex: 1;">
+                    <div class="search-toolbar">
+                        <!-- Toggle on the left -->
+                        <label class="warehouse-toggle" for="warehouse-stock-toggle">
+                            <input type="checkbox" id="warehouse-stock-toggle" class="warehouse-toggle__input">
+                            <span class="warehouse-toggle__slider"></span>
+                            <span class="warehouse-toggle__label">Mostra solo articoli disponibili</span>
+                        </label>
+
+                        <!-- Rounded search bar in the center -->
+                        <div class="search-input-wrapper">
+                            <span class="material-symbols-rounded search-input-icon">search</span>
                             <input type="text" id="warehouse-search-input" class="search-input" placeholder="Cerca articoli per nome, brand, categoria, codice o descrizione (es. borsa di Guess con tracolla)...">
-                            <button type="button" id="warehouse-search-clear" style="display: none; position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; display: inline-flex; align-items: center;" title="Cancella ricerca">
+                            <button type="button" id="warehouse-search-clear" class="search-clear-btn" title="Cancella ricerca">
                                 <span class="material-symbols-rounded" style="font-size: 18px;">close</span>
                             </button>
                         </div>
-                        <button type="button" id="warehouse-search-btn" style="padding: 10px 18px; display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-md); background: var(--accent); color: var(--bg-app); font-weight: 500; cursor: pointer; border: none; font-size: 14px;">
+
+                        <!-- Rounded search button on the right -->
+                        <button type="button" id="warehouse-search-btn" class="search-btn">
                             <span class="material-symbols-rounded" style="font-size: 18px;">search</span>
                             <span>Cerca</span>
                         </button>
-                        <label style="display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; user-select: none; margin-left: 6px; white-space: nowrap;">
-                            <input type="checkbox" id="warehouse-stock-toggle" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--accent);">
-                            <span>Solo disponibili</span>
-                        </label>
                     </div>
                     <div id="warehouse-search-feedback" style="margin-top: 8px; font-size: 13px; color: var(--text-secondary); display: none;"></div>
                 </div>
-                <div id="catalog-results" class="grid-container">
+                <div id="catalog-results" class="warehouse-table-wrapper">
                     <div style="text-align: center; width: 100%; padding: 20px; color: var(--text-secondary);">Caricamento articoli...</div>
-                </div>
-            </div>
-            
-            <!-- Import DDT Tab -->
-            <div id="tab-import-ddt" class="tab-pane">
-                <div class="import-form-area" id="ddt-form-container">
-                    <!-- Populated by JS -->
                 </div>
             </div>
             
@@ -126,9 +409,97 @@
                     <!-- Populated by JS -->
                 </div>
             </div>
+
+            <!-- Import DDT Tab -->
+            <div id="tab-import-ddt" class="tab-pane">
+                <div class="import-form-area" id="ddt-form-container">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
         </div>
     </div>
 </section>
+
+<!-- Modal: Edit Article -->
+<div id="modal-edit-article" class="modal-backdrop">
+    <div class="modal-card" style="max-width: 580px;">
+        <div class="modal-header">
+            <h3 id="modal-edit-article-title" class="modal-title">
+                <span class="material-symbols-rounded" style="color: var(--accent);">edit</span>
+                Modifica Articolo
+            </h3>
+            <button id="btn-close-edit-article" class="modal-close" type="button">
+                <span class="material-symbols-rounded">close</span>
+            </button>
+        </div>
+        <form id="form-edit-article">
+            <div class="modal-body">
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="edit-article-name" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Nome Articolo *</label>
+                    <input type="text" id="edit-article-name" class="form-control" required>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                        <label for="edit-article-vendor-code" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Codice Fornitore</label>
+                        <input type="text" id="edit-article-vendor-code" class="form-control" placeholder="Es. HWVG87...">
+                    </div>
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                        <label for="edit-article-barcode" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Barcode (EAN)</label>
+                        <input type="text" id="edit-article-barcode" class="form-control" placeholder="Es. 8000000000017">
+                    </div>
+                </div>
+
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="edit-article-description" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Descrizione Breve *</label>
+                    <textarea id="edit-article-description" class="form-control" rows="2" required></textarea>
+                </div>
+
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="edit-article-ext-description" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Descrizione Estesa</label>
+                    <textarea id="edit-article-ext-description" class="form-control" rows="3"></textarea>
+                </div>
+
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="edit-article-tags" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Tags (separati da virgola) *</label>
+                    <input type="text" id="edit-article-tags" class="form-control" placeholder="Es. pelle, tracolla, elegante" required>
+                </div>
+
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="edit-article-materials" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Materiali (separati da virgola) *</label>
+                    <input type="text" id="edit-article-materials" class="form-control" placeholder="Es. ecopelle, metallo" required>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" id="btn-cancel-edit-article" class="btn-secondary">Annulla</button>
+                <button type="submit" id="btn-save-edit-article" class="btn-primary">Salva Modifiche</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal: Confirm Delete Article -->
+<div id="modal-delete-article" class="modal-backdrop">
+    <div class="modal-card" style="max-width: 440px;">
+        <div class="modal-header">
+            <h3 class="modal-title" style="color: var(--error);">
+                <span class="material-symbols-rounded">warning</span>
+                Conferma Eliminazione
+            </h3>
+            <button id="btn-close-delete-article" class="modal-close" type="button">
+                <span class="material-symbols-rounded">close</span>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p id="delete-article-msg" style="font-size: 14px; color: var(--text-primary);"></p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" id="btn-cancel-delete-article" class="btn-secondary">Annulla</button>
+            <button type="button" id="btn-confirm-delete-article" class="btn-danger">Elimina</button>
+        </div>
+    </div>
+</div>
+
 {% include 'partials/workspace.html' %}
 {% endblock %}
 
@@ -138,3 +509,4 @@
 </script>
 <script type="module" src="/static/js/main.js"></script>
 {% endblock %}
+
