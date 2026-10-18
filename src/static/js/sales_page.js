@@ -907,7 +907,7 @@ async function fetchHistoricalSales(dateStr) {
 }
 
 function renderHistoryView(data) {
-    const last7 = data.last_7_days || [];
+    const last7 = [...(data.last_7_days || [])].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const last30 = data.last_30_days || [];
 
     // 1. Render Legend
@@ -967,32 +967,50 @@ function renderHistoryView(data) {
         `;
     }).join('');
 
-    // 3. Render Lower Area: 30-Day Column Chart (Total ONLY)
-    let max30Val = 0;
+    // 3. Render Lower Area: 30-Day Column Chart (Total ONLY + General Avg & Hover DOW Avg Lines)
+    const generalAvg = Number(data.general_avg) || 0;
+    let max30Val = generalAvg;
     last30.forEach(day => {
-        if (day.total_revenue > max30Val) max30Val = day.total_revenue;
+        if ((day.total_revenue || 0) > max30Val) max30Val = day.total_revenue;
+        if ((day.dow_avg || 0) > max30Val) max30Val = day.dow_avg;
     });
+
+    const generalAvgPct = max30Val > 0 ? Math.min(Math.max((generalAvg / max30Val) * 100, 0), 100) : 0;
 
     const bars30Html = last30.map(day => {
         const val = day.total_revenue || 0;
+        const dowAvg = Number(day.dow_avg) || 0;
+        const dowName = ITALIAN_DAYS[day.dow] || 'Giorno';
         const heightPct = max30Val > 0 ? Math.max((Math.max(val, 0) / max30Val) * 100, 3) : 3;
+        const dowPct = max30Val > 0 ? Math.min(Math.max((dowAvg / max30Val) * 100, 0), 100) : 0;
         const dayTitle = formatItalianDayDate(day.date, day.dow);
-        const tooltipText = `${dayTitle} — Totale: ${formatEuro(val)}`;
+        const dowLineLabel = `Media ${dowName}: ${formatEuro(dowAvg)}`;
+        const tooltipText = `${dayTitle} — Totale: ${formatEuro(val)} (${dowLineLabel})`;
         return `
-            <div class="history-bar-col" data-tooltip="${tooltipText}" title="${tooltipText}">
+            <div class="history-bar-col"
+                 data-tooltip="${tooltipText}"
+                 data-dow="${day.dow}"
+                 data-dow-pct="${dowPct.toFixed(1)}"
+                 data-dow-label="${dowLineLabel}"
+                 title="${tooltipText}">
                 <div class="history-bar" style="height: ${heightPct.toFixed(1)}%; background: #3b82f6; max-width: 28px; opacity: ${val > 0 ? '1' : '0.28'};"></div>
             </div>
         `;
     }).join('');
 
     const labels30Html = last30.map((day, idx) => {
-        // Show short date label (every day or every 2nd day if crowded, here short DD/MM fits cleanly)
         const showLabel = idx % 2 === 0 || idx === last30.length - 1;
         return `<div class="history-30days-label">${showLabel ? formatShortDayMonth(day.date) : ''}</div>`;
     }).join('');
 
     dom.history30DaysChart.innerHTML = `
         <div class="history-30days-bars">
+            <div class="history-avg-line history-avg-line--general" style="bottom: ${generalAvgPct.toFixed(1)}%;">
+                <span class="history-avg-line__tag">Media Generale: ${formatEuro(generalAvg)}</span>
+            </div>
+            <div id="history-30days-dow-line" class="history-avg-line history-avg-line--dow" style="bottom: 0%;">
+                <span id="history-30days-dow-tag" class="history-avg-line__tag"></span>
+            </div>
             ${bars30Html}
         </div>
         <div class="history-30days-labels">
@@ -1000,7 +1018,63 @@ function renderHistoryView(data) {
         </div>
     `;
 
+    // Bind hover for DOW average horizontal line & highlighting matching days while dimming others
+    const dowLineEl = document.getElementById('history-30days-dow-line');
+    const dowTagEl = document.getElementById('history-30days-dow-tag');
+    const generalLineEl = dom.history30DaysChart.querySelector('.history-avg-line--general');
+    const cols30 = dom.history30DaysChart.querySelectorAll('.history-bar-col[data-dow]');
+    const barsContainer = dom.history30DaysChart.querySelector('.history-30days-bars');
+
+    const reset30DaysHighlight = () => {
+        cols30.forEach(c => {
+            c.classList.remove('history-bar-col--dimmed');
+            c.classList.remove('history-bar-col--highlighted');
+        });
+        if (generalLineEl) {
+            generalLineEl.classList.remove('history-avg-line--dimmed');
+        }
+        if (dowLineEl) {
+            dowLineEl.style.display = 'none';
+        }
+    };
+
+    cols30.forEach(col => {
+        col.addEventListener('mouseenter', () => {
+            const targetDow = col.getAttribute('data-dow');
+            cols30.forEach(c => {
+                if (c.getAttribute('data-dow') === targetDow) {
+                    c.classList.remove('history-bar-col--dimmed');
+                    c.classList.add('history-bar-col--highlighted');
+                } else {
+                    c.classList.add('history-bar-col--dimmed');
+                    c.classList.remove('history-bar-col--highlighted');
+                }
+            });
+
+            if (generalLineEl) {
+                generalLineEl.classList.add('history-avg-line--dimmed');
+            }
+
+            if (dowLineEl && dowTagEl) {
+                dowLineEl.style.bottom = `${col.getAttribute('data-dow-pct')}%`;
+                dowTagEl.textContent = col.getAttribute('data-dow-label') || '';
+                dowLineEl.style.display = 'block';
+            }
+        });
+
+        col.addEventListener('mouseleave', (e) => {
+            if (!e.relatedTarget || !e.relatedTarget.closest('.history-bar-col')) {
+                reset30DaysHighlight();
+            }
+        });
+    });
+
+    if (barsContainer) {
+        barsContainer.addEventListener('mouseleave', reset30DaysHighlight);
+    }
+
     bindBarTooltips(dom.history7DaysGrid);
     bindBarTooltips(dom.history30DaysChart);
 }
+
 

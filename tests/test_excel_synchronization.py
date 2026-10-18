@@ -577,8 +577,10 @@ def test_get_historical_aggregations_service(db_session):
     assert len(res["last_7_days"]) == 7
     assert len(res["last_30_days"]) == 30
 
-    # Last item in last_7_days is target_date
-    today_7 = res["last_7_days"][-1]
+    # First item in last_7_days is target_date (most recent on the left)
+    dates_7 = [d["date"] for d in res["last_7_days"]]
+    assert dates_7 == sorted(dates_7, reverse=True)
+    today_7 = res["last_7_days"][0]
     assert today_7["date"] == "2026-10-18"
     assert today_7["dow"] == 0
     assert today_7["total_revenue"] == 200.0
@@ -597,8 +599,13 @@ def test_get_historical_aggregations_service(db_session):
     # Day - 15 in last_30_days
     d15_30 = next(d for d in res["last_30_days"] if d["date"] == day_minus_15.isoformat())
     assert d15_30["total_revenue"] == 95.0
+    assert d15_30["dow_avg"] == 95.0
 
-    # Day - 40 is excluded
+    # General average across the 4 valid distinct sales days (200 + 250 + 95 + 999 = 1544 / 4 = 386.0)
+    assert res["general_avg"] == 386.0
+    assert today_7["dow_avg"] == 200.0
+
+    # Day - 40 is excluded from the 30-day window
     all_30_dates = {d["date"] for d in res["last_30_days"]}
     assert day_minus_40.isoformat() not in all_30_dates
 

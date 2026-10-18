@@ -686,19 +686,55 @@ def get_historical_aggregations(db: Session, target_date: date) -> Dict[str, Any
         day_map = revenue_by_day_col.setdefault(row.date, {})
         day_map[row.excel_file_column] = float(row.total_revenue or 0.0)
 
+    # Historical averages (General & Day-of-Week) across all valid ExcelSale records
+    dow_hist_rows = (
+        db.query(
+            func.strftime("%w", ExcelSale.date).label("dow"),
+            func.count(func.distinct(ExcelSale.date)).label("days_count"),
+            func.sum(ExcelSale.selling_price).label("total_revenue"),
+        )
+        .filter(
+            ExcelSale.status != ExcelSaleStatus.UNPROCESSABLE,
+            ExcelSale.selling_price.isnot(None),
+        )
+        .group_by(func.strftime("%w", ExcelSale.date))
+        .all()
+    )
+
+    dow_averages: Dict[int, float] = {}
+    total_general_days = 0
+    total_general_revenue = 0.0
+    for r in dow_hist_rows:
+        if r.dow is None:
+            continue
+        d_idx = int(r.dow)
+        d_cnt = int(r.days_count or 0)
+        d_rev = float(r.total_revenue or 0.0)
+        dow_averages[d_idx] = round(d_rev / d_cnt, 2) if d_cnt > 0 else 0.0
+        total_general_days += d_cnt
+        total_general_revenue += d_rev
+
+    general_avg = (
+        round(total_general_revenue / total_general_days, 2)
+        if total_general_days > 0
+        else 0.0
+    )
+
     last_30_days = []
     for offset in range(29, -1, -1):
         d = target_date - timedelta(days=offset)
         day_map = revenue_by_day_col.get(d, {})
         day_total = round(sum(day_map.values()), 2)
+        dow_idx = int(d.strftime("%w"))
         last_30_days.append({
             "date": d.isoformat(),
-            "dow": int(d.strftime("%w")),
+            "dow": dow_idx,
             "total_revenue": day_total,
+            "dow_avg": dow_averages.get(dow_idx, 0.0),
         })
 
     last_7_days = []
-    for offset in range(6, -1, -1):
+    for offset in range(0, 7):
         d = target_date - timedelta(days=offset)
         day_map = revenue_by_day_col.get(d, {})
         categories = []
@@ -710,10 +746,12 @@ def get_historical_aggregations(db: Session, target_date: date) -> Dict[str, Any
                 "total_revenue": cat_rev,
             })
         day_total = round(sum(day_map.values()), 2)
+        dow_idx = int(d.strftime("%w"))
         last_7_days.append({
             "date": d.isoformat(),
-            "dow": int(d.strftime("%w")),
+            "dow": dow_idx,
             "total_revenue": day_total,
+            "dow_avg": dow_averages.get(dow_idx, 0.0),
             "categories": categories,
         })
 
@@ -721,6 +759,8 @@ def get_historical_aggregations(db: Session, target_date: date) -> Dict[str, Any
         "target_date": target_date.isoformat(),
         "start_date_7": start_date_7.isoformat(),
         "start_date_30": start_date_30.isoformat(),
+        "general_avg": general_avg,
+        "dow_averages": dow_averages,
         "last_7_days": last_7_days,
         "last_30_days": last_30_days,
     }
