@@ -499,3 +499,126 @@ def test_get_sync_status(db_session):
     data = response.json()
     assert "data" in data
     assert "last_attempt_at" in data["data"]
+
+
+def test_get_historical_aggregations_service(db_session):
+    from datetime import date, timedelta
+    from src.schemas.excel_sales import ExcelSaleCreate, ExcelSaleStatus
+    from src.services.excel_synchronization_service import get_historical_aggregations
+    from src.repositories.excel_synchronization_repo import excel_synchronization_repo
+
+    target_date = date(2026, 10, 18)  # Sunday (dow=0)
+    day_minus_2 = target_date - timedelta(days=2)  # within 7 days
+    day_minus_15 = target_date - timedelta(days=15)  # within 30 days, outside 7 days
+    day_minus_40 = target_date - timedelta(days=40)  # outside 30 days
+
+    sales = [
+        ExcelSaleCreate(
+            date=target_date,
+            excel_row_index=1,
+            excel_file_column=0,  # B
+            status=ExcelSaleStatus.ORPHAN,
+            starting_price=150,
+            selling_price=120,
+            is_exchange=False,
+        ),
+        ExcelSaleCreate(
+            date=target_date,
+            excel_row_index=2,
+            excel_file_column=6,  # BORSELLI
+            status=ExcelSaleStatus.RECONCILED,
+            starting_price=90,
+            selling_price=80,
+            is_exchange=False,
+        ),
+        ExcelSaleCreate(
+            date=target_date,
+            excel_row_index=3,
+            excel_file_column=0,
+            status=ExcelSaleStatus.UNPROCESSABLE,  # should be ignored
+            starting_price=500,
+            selling_price=500,
+            is_exchange=False,
+        ),
+        ExcelSaleCreate(
+            date=day_minus_2,
+            excel_row_index=1,
+            excel_file_column=1,  # Sam/AT
+            status=ExcelSaleStatus.ORPHAN,
+            starting_price=300,
+            selling_price=250,
+            is_exchange=False,
+        ),
+        ExcelSaleCreate(
+            date=day_minus_15,
+            excel_row_index=1,
+            excel_file_column=3,  # PP
+            status=ExcelSaleStatus.ORPHAN,
+            starting_price=110,
+            selling_price=95,
+            is_exchange=False,
+        ),
+        ExcelSaleCreate(
+            date=day_minus_40,
+            excel_row_index=1,
+            excel_file_column=0,
+            status=ExcelSaleStatus.ORPHAN,
+            starting_price=999,
+            selling_price=999,
+            is_exchange=False,
+        ),
+    ]
+    excel_synchronization_repo.bulk_create(db_session, sales)
+    db_session.commit()
+
+    res = get_historical_aggregations(db_session, target_date)
+
+    assert res["target_date"] == "2026-10-18"
+    assert len(res["last_7_days"]) == 7
+    assert len(res["last_30_days"]) == 30
+
+    # Last item in last_7_days is target_date
+    today_7 = res["last_7_days"][-1]
+    assert today_7["date"] == "2026-10-18"
+    assert today_7["dow"] == 0
+    assert today_7["total_revenue"] == 200.0
+    cats = {c["header"]: c["total_revenue"] for c in today_7["categories"]}
+    assert cats["B"] == 120.0
+    assert cats["BORSELLI"] == 80.0
+    assert cats["Sam/AT"] == 0.0
+    assert len(today_7["categories"]) == 8
+
+    # Day - 2 in last_7_days
+    d2_7 = next(d for d in res["last_7_days"] if d["date"] == day_minus_2.isoformat())
+    assert d2_7["total_revenue"] == 250.0
+    d2_cats = {c["header"]: c["total_revenue"] for c in d2_7["categories"]}
+    assert d2_cats["Sam/AT"] == 250.0
+
+    # Day - 15 in last_30_days
+    d15_30 = next(d for d in res["last_30_days"] if d["date"] == day_minus_15.isoformat())
+    assert d15_30["total_revenue"] == 95.0
+
+    # Day - 40 is excluded
+    all_30_dates = {d["date"] for d in res["last_30_days"]}
+    assert day_minus_40.isoformat() not in all_30_dates
+
+
+def test_history_endpoint_and_vendite_storico_tab(db_session):
+    client = TestClient(app)
+
+    # Check API endpoint
+    res_api = client.get("/api/v1/excel-synchronization/history?target_date=2026-10-18")
+    assert res_api.status_code == 200
+    payload = res_api.json()
+    assert payload["status"] == "success"
+    assert len(payload["data"]["last_7_days"]) == 7
+    assert len(payload["data"]["last_30_days"]) == 30
+
+    # Check /vendite template has active Storico tab and chart containers
+    res_page = client.get("/vendite")
+    assert res_page.status_code == 200
+    assert '<button class="tab" data-tab="history">Storico</button>' in res_page.text
+    assert 'id="history-view"' in res_page.text
+    assert 'id="history-7days-grid"' in res_page.text
+    assert 'id="history-30days-chart"' in res_page.text
+

@@ -441,3 +441,182 @@
     background: rgba(var(--error-rgb, 244, 67, 54), 0.2);
     color: var(--error);
 }
+
+/* ---- History ("Storico") Tab Styles ---- */
+.history-section {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.history-section__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.history-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.history-legend__item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-elevated);
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+}
+
+.history-legend__swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.history-7days-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 14px;
+}
+
+.history-day-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.history-day-card__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.history-day-card__title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.history-day-card__subtitle {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.history-bars-area {
+    height: 140px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 5px;
+    padding-top: 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.history-bar-col {
+    flex: 1;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    cursor: pointer;
+    position: relative;
+}
+
+.history-bar {
+    width: 100%;
+    max-width: 24px;
+    min-height: 4px;
+    border-radius: 4px 4px 0 0;
+    transition: filter 0.15s ease, transform 0.15s ease;
+    transform-origin: bottom;
+}
+
+.history-bar-col:hover .history-bar {
+    filter: brightness(1.22);
+    transform: scaleY(1.03);
+}
+
+.history-bar-labels {
+    display: flex;
+    justify-content: space-between;
+    gap: 5px;
+}
+
+.history-bar-label {
+    flex: 1;
+    text-align: center;
+    font-size: 9px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 600;
+}
+
+.history-30days-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 18px 16px 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.history-30days-bars {
+    height: 210px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 4px;
+    padding-top: 14px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.history-30days-labels {
+    display: flex;
+    justify-content: space-between;
+    gap: 4px;
+}
+
+.history-30days-label {
+    flex: 1;
+    text-align: center;
+    font-size: 9px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.chart-floating-tooltip {
+    position: fixed;
+    z-index: 10000;
+    pointer-events: none;
+    background: rgba(18, 19, 22, 0.96);
+    color: var(--text-primary, #ffffff);
+    border: 1px solid var(--border-color, #333);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+    white-space: nowrap;
+    display: none;
+}

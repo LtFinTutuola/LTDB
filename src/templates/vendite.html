@@ -16,7 +16,7 @@
                     <div class="tabs">
                         <button class="tab active" data-tab="sales">Vendite</button>
                         <button class="tab" data-tab="stats">Giornata</button>
-                        <button class="tab" data-tab="stats" disabled title="In sviluppo">Storico</button>
+                        <button class="tab" data-tab="history">Storico</button>
                     </div>
                 </div>
                 <div class="sales-page__header-right" style="display: flex; gap: 12px; align-items: center;">
@@ -90,6 +90,35 @@
                     style="margin-top: 30px; padding: 20px; background: var(--bg-elevated); border-radius: var(--radius-md);">
                     <h4>Riepilogo Generale</h4>
                     <div id="pnl-content" style="display: flex; gap: 40px; margin-top: 15px;">
+                        <!-- JS populate -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- History View -->
+            <div class="sales-page__table-container" id="history-view" style="display: none; padding: 20px;">
+                <div class="history-section">
+                    <div class="history-section__header">
+                        <div>
+                            <h3 style="margin: 0; font-size: 1rem;">Ultimi 7 Giorni — Totale e Categorie</h3>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <div id="history-legend" class="history-legend"></div>
+                            <button id="btn-refresh-history"
+                                style="background: transparent; border: none; color: var(--text-secondary); font-size: 1.1rem; cursor: pointer; padding: 4px;"
+                                title="Aggiorna storico">🔄</button>
+                        </div>
+                    </div>
+                    <div id="history-7days-grid" class="history-7days-grid">
+                        <!-- JS populate -->
+                    </div>
+                </div>
+
+                <div class="history-section" style="margin-top: 28px;">
+                    <div class="history-section__header">
+                        <h3 style="margin: 0; font-size: 1rem;">Ultimi 30 Giorni — Totale Giornaliero</h3>
+                    </div>
+                    <div id="history-30days-chart" class="history-30days-card">
                         <!-- JS populate -->
                     </div>
                 </div>

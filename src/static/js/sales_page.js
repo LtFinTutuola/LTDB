@@ -25,7 +25,12 @@ const dom = {
     datePicker: document.getElementById('date-picker'),
     salesView: document.getElementById('sales-view'),
     statsView: document.getElementById('stats-view'),
+    historyView: document.getElementById('history-view'),
     btnRefreshStats: document.getElementById('btn-refresh-stats'),
+    btnRefreshHistory: document.getElementById('btn-refresh-history'),
+    historyLegend: document.getElementById('history-legend'),
+    history7DaysGrid: document.getElementById('history-7days-grid'),
+    history30DaysChart: document.getElementById('history-30days-chart'),
     statsTbody: document.getElementById('stats-tbody'),
     pnlContent: document.getElementById('pnl-content'),
     loading: document.getElementById('loading-indicator'),
@@ -98,8 +103,11 @@ function init() {
     dom.datePicker.valueAsDate = new Date();
     dom.datePicker.addEventListener('change', () => {
         fetchDailySales(dom.datePicker.value);
-        if (dom.statsView.style.display !== 'none') {
+        if (dom.statsView && dom.statsView.style.display !== 'none') {
             fetchDailyAggregations(dom.datePicker.value);
+        }
+        if (dom.historyView && dom.historyView.style.display !== 'none') {
+            fetchHistoricalSales(dom.datePicker.value);
         }
     });
     
@@ -111,12 +119,19 @@ function init() {
             
             const target = tab.dataset.tab;
             if (target === 'sales') {
-                dom.statsView.style.display = 'none';
+                if (dom.statsView) dom.statsView.style.display = 'none';
+                if (dom.historyView) dom.historyView.style.display = 'none';
                 dom.salesView.style.display = 'block';
             } else if (target === 'stats') {
                 dom.salesView.style.display = 'none';
+                if (dom.historyView) dom.historyView.style.display = 'none';
                 dom.statsView.style.display = 'block';
                 fetchDailyAggregations(dom.datePicker.value);
+            } else if (target === 'history') {
+                dom.salesView.style.display = 'none';
+                if (dom.statsView) dom.statsView.style.display = 'none';
+                if (dom.historyView) dom.historyView.style.display = 'block';
+                fetchHistoricalSales(dom.datePicker.value);
             }
         });
     });
@@ -124,6 +139,12 @@ function init() {
     dom.btnRefreshStats.addEventListener('click', () => {
         fetchDailyAggregations(dom.datePicker.value);
     });
+
+    if (dom.btnRefreshHistory) {
+        dom.btnRefreshHistory.addEventListener('click', () => {
+            fetchHistoricalSales(dom.datePicker.value);
+        });
+    }
 
     dom.btnReconSearch.addEventListener('click', performReconSearch);
     dom.reconPromptInput.addEventListener('keydown', (e) => {
@@ -780,3 +801,206 @@ function renderStatsTable(data) {
 
     dom.pnlContent.innerHTML = pnlHtml;
 }
+
+const ITALIAN_DAYS = ["Domenica", "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
+const ITALIAN_MONTHS = [
+    "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
+    "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"
+];
+
+const HISTORY_SERIES_PALETTE = [
+    { key: 'total', label: 'Totale', shortLabel: 'TOT', color: '#3b82f6' },
+    { key: 0, label: 'B', shortLabel: 'B', color: '#10b981' },
+    { key: 1, label: 'Sam/AT', shortLabel: 'Sam/AT', color: '#f59e0b' },
+    { key: 2, label: 'V', shortLabel: 'V', color: '#a855f7' },
+    { key: 3, label: 'PP', shortLabel: 'PP', color: '#ec4899' },
+    { key: 4, label: 'C', shortLabel: 'C', color: '#06b6d4' },
+    { key: 5, label: 'CAR', shortLabel: 'CAR', color: '#f97316' },
+    { key: 6, label: 'BORSELLI', shortLabel: 'Bors.', color: '#14b8a6' },
+    { key: 7, label: 'O+A', shortLabel: 'O+A', color: '#eab308' },
+];
+
+function formatItalianDayDate(dateIso, dow) {
+    const parts = (dateIso || '').split('-');
+    if (parts.length !== 3) return dateIso;
+    const dayNum = parseInt(parts[2], 10);
+    const monthIdx = parseInt(parts[1], 10) - 1;
+    const dayName = ITALIAN_DAYS[dow] || '';
+    const monthName = ITALIAN_MONTHS[monthIdx] || '';
+    return `${dayName} ${dayNum} ${monthName}`.trim();
+}
+
+function formatShortDayMonth(dateIso) {
+    const parts = (dateIso || '').split('-');
+    if (parts.length !== 3) return dateIso;
+    return `${parts[2]}/${parts[1]}`;
+}
+
+function formatEuro(val) {
+    const num = Number(val) || 0;
+    return `€ ${num.toFixed(2)}`;
+}
+
+let _floatingTooltipEl = null;
+function getFloatingTooltip() {
+    if (!_floatingTooltipEl) {
+        _floatingTooltipEl = document.createElement('div');
+        _floatingTooltipEl.className = 'chart-floating-tooltip';
+        document.body.appendChild(_floatingTooltipEl);
+    }
+    return _floatingTooltipEl;
+}
+
+function bindBarTooltips(rootEl) {
+    if (!rootEl) return;
+    const tooltip = getFloatingTooltip();
+    const cols = rootEl.querySelectorAll('.history-bar-col[data-tooltip]');
+    cols.forEach(col => {
+        col.addEventListener('mouseenter', (e) => {
+            tooltip.textContent = col.getAttribute('data-tooltip') || '';
+            tooltip.style.display = 'block';
+            positionTooltip(e, tooltip);
+        });
+        col.addEventListener('mousemove', (e) => {
+            positionTooltip(e, tooltip);
+        });
+        col.addEventListener('mouseleave', () => {
+            tooltip.style.display = 'none';
+        });
+    });
+}
+
+function positionTooltip(e, tooltip) {
+    const offset = 12;
+    let left = e.clientX + offset;
+    let top = e.clientY - 36;
+    if (left + tooltip.offsetWidth > window.innerWidth - 8) {
+        left = e.clientX - tooltip.offsetWidth - offset;
+    }
+    if (top < 8) {
+        top = e.clientY + offset;
+    }
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+}
+
+async function fetchHistoricalSales(dateStr) {
+    if (!dateStr || !dom.history7DaysGrid || !dom.history30DaysChart) return;
+
+    dom.history7DaysGrid.innerHTML = '<div style="text-align:center; padding: 20px; color: var(--text-muted);">Caricamento storico 7 giorni...</div>';
+    dom.history30DaysChart.innerHTML = '<div style="text-align:center; padding: 20px; color: var(--text-muted);">Caricamento storico 30 giorni...</div>';
+
+    try {
+        const url = `/api/v1/excel-synchronization/history?target_date=${encodeURIComponent(dateStr)}`;
+        const res = await fetch(url).then(r => r.json());
+        if (res.status === 'success' && res.data) {
+            renderHistoryView(res.data);
+        } else {
+            dom.history7DaysGrid.innerHTML = '<div style="text-align:center; color: var(--error);">Errore caricamento storico</div>';
+            dom.history30DaysChart.innerHTML = '';
+        }
+    } catch (err) {
+        console.error(err);
+        dom.history7DaysGrid.innerHTML = '<div style="text-align:center; color: var(--error);">Errore di rete nel caricamento dello storico</div>';
+        dom.history30DaysChart.innerHTML = '';
+    }
+}
+
+function renderHistoryView(data) {
+    const last7 = data.last_7_days || [];
+    const last30 = data.last_30_days || [];
+
+    // 1. Render Legend
+    if (dom.historyLegend) {
+        dom.historyLegend.innerHTML = HISTORY_SERIES_PALETTE.map(s => `
+            <span class="history-legend__item">
+                <span class="history-legend__swatch" style="background: ${s.color};"></span>
+                <span>${s.label}</span>
+            </span>
+        `).join('');
+    }
+
+    // 2. Render Upper Area: 7 Daily Column Charts (Totale + 8 Categories)
+    let max7Val = 0;
+    last7.forEach(day => {
+        if (day.total_revenue > max7Val) max7Val = day.total_revenue;
+        (day.categories || []).forEach(c => {
+            if (c.total_revenue > max7Val) max7Val = c.total_revenue;
+        });
+    });
+
+    dom.history7DaysGrid.innerHTML = last7.map(day => {
+        const dayTitle = formatItalianDayDate(day.date, day.dow);
+        const catMap = {};
+        (day.categories || []).forEach(c => {
+            catMap[c.col_index] = c.total_revenue || 0;
+        });
+
+        const barsHtml = HISTORY_SERIES_PALETTE.map(series => {
+            const val = series.key === 'total' ? (day.total_revenue || 0) : (catMap[series.key] || 0);
+            const heightPct = max7Val > 0 ? Math.max((Math.max(val, 0) / max7Val) * 100, 3) : 3;
+            const tooltipText = `${dayTitle} — ${series.label}: ${formatEuro(val)}`;
+            return `
+                <div class="history-bar-col" data-tooltip="${tooltipText}" title="${tooltipText}">
+                    <div class="history-bar" style="height: ${heightPct.toFixed(1)}%; background: ${series.color}; opacity: ${val > 0 ? '1' : '0.28'};"></div>
+                </div>
+            `;
+        }).join('');
+
+        const labelsHtml = HISTORY_SERIES_PALETTE.map(series => `
+            <div class="history-bar-label" title="${series.label}">${series.shortLabel}</div>
+        `).join('');
+
+        return `
+            <div class="history-day-card">
+                <div class="history-day-card__header">
+                    <span class="history-day-card__title">${dayTitle}</span>
+                    <span class="history-day-card__subtitle">${formatEuro(day.total_revenue)}</span>
+                </div>
+                <div class="history-bars-area">
+                    ${barsHtml}
+                </div>
+                <div class="history-bar-labels">
+                    ${labelsHtml}
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    // 3. Render Lower Area: 30-Day Column Chart (Total ONLY)
+    let max30Val = 0;
+    last30.forEach(day => {
+        if (day.total_revenue > max30Val) max30Val = day.total_revenue;
+    });
+
+    const bars30Html = last30.map(day => {
+        const val = day.total_revenue || 0;
+        const heightPct = max30Val > 0 ? Math.max((Math.max(val, 0) / max30Val) * 100, 3) : 3;
+        const dayTitle = formatItalianDayDate(day.date, day.dow);
+        const tooltipText = `${dayTitle} — Totale: ${formatEuro(val)}`;
+        return `
+            <div class="history-bar-col" data-tooltip="${tooltipText}" title="${tooltipText}">
+                <div class="history-bar" style="height: ${heightPct.toFixed(1)}%; background: #3b82f6; max-width: 28px; opacity: ${val > 0 ? '1' : '0.28'};"></div>
+            </div>
+        `;
+    }).join('');
+
+    const labels30Html = last30.map((day, idx) => {
+        // Show short date label (every day or every 2nd day if crowded, here short DD/MM fits cleanly)
+        const showLabel = idx % 2 === 0 || idx === last30.length - 1;
+        return `<div class="history-30days-label">${showLabel ? formatShortDayMonth(day.date) : ''}</div>`;
+    }).join('');
+
+    dom.history30DaysChart.innerHTML = `
+        <div class="history-30days-bars">
+            ${bars30Html}
+        </div>
+        <div class="history-30days-labels">
+            ${labels30Html}
+        </div>
+    `;
+
+    bindBarTooltips(dom.history7DaysGrid);
+    bindBarTooltips(dom.history30DaysChart);
+}
+

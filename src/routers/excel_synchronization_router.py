@@ -152,6 +152,23 @@ def get_daily_aggregations(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/history", status_code=status.HTTP_200_OK)
+def get_historical_aggregations(
+    target_date: date,
+    db: Session = Depends(get_db)
+):
+    """
+    Returns 7-day (total + categories) and 30-day (total only) historical sales aggregations
+    starting from target_date backwards.
+    """
+    try:
+        history = excel_synchronization_service.get_historical_aggregations(db, target_date)
+        return {"status": "success", "data": history}
+    except Exception as e:
+        logger.log_execution("excel_synchronization_router", "get_historical_aggregations", "err", exc=e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/sale-detail/{sale_id}", status_code=status.HTTP_200_OK)
 def get_sale_detail(
     sale_id: str,
@@ -168,3 +185,4 @@ def get_sale_detail(
     except Exception as e:
         logger.log_execution("excel_synchronization_router", "get_sale_detail", "err", exc=e)
         raise HTTPException(status_code=500, detail=str(e))
+

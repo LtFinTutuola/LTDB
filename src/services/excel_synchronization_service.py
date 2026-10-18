@@ -648,3 +648,80 @@ def get_daily_aggregations(db: Session, target_date: date) -> Dict[str, Any]:
         "pnl_summary": comparisons,
         "target_date_dow": int(target_dow)
     }
+
+
+CATEGORY_HEADERS = ["B", "Sam/AT", "V", "PP", "C", "CAR", "BORSELLI", "O+A"]
+
+
+def get_historical_aggregations(db: Session, target_date: date) -> Dict[str, Any]:
+    """
+    Returns historical sales data anchored at target_date:
+    - last_7_days: daily total and breakdown across the 8 Excel category columns (0..7)
+      for [target_date - 6 days .. target_date].
+    - last_30_days: daily total revenue for [target_date - 29 days .. target_date].
+    """
+    from datetime import timedelta
+
+    start_date_30 = target_date - timedelta(days=29)
+    start_date_7 = target_date - timedelta(days=6)
+
+    rows = (
+        db.query(
+            ExcelSale.date,
+            ExcelSale.excel_file_column,
+            func.sum(ExcelSale.selling_price).label("total_revenue"),
+        )
+        .filter(
+            ExcelSale.date >= start_date_30,
+            ExcelSale.date <= target_date,
+            ExcelSale.selling_price.isnot(None),
+            ExcelSale.status != ExcelSaleStatus.UNPROCESSABLE,
+        )
+        .group_by(ExcelSale.date, ExcelSale.excel_file_column)
+        .all()
+    )
+
+    revenue_by_day_col: Dict[date, Dict[Optional[int], float]] = {}
+    for row in rows:
+        day_map = revenue_by_day_col.setdefault(row.date, {})
+        day_map[row.excel_file_column] = float(row.total_revenue or 0.0)
+
+    last_30_days = []
+    for offset in range(29, -1, -1):
+        d = target_date - timedelta(days=offset)
+        day_map = revenue_by_day_col.get(d, {})
+        day_total = round(sum(day_map.values()), 2)
+        last_30_days.append({
+            "date": d.isoformat(),
+            "dow": int(d.strftime("%w")),
+            "total_revenue": day_total,
+        })
+
+    last_7_days = []
+    for offset in range(6, -1, -1):
+        d = target_date - timedelta(days=offset)
+        day_map = revenue_by_day_col.get(d, {})
+        categories = []
+        for col_idx, header in enumerate(CATEGORY_HEADERS):
+            cat_rev = round(day_map.get(col_idx, 0.0), 2)
+            categories.append({
+                "col_index": col_idx,
+                "header": header,
+                "total_revenue": cat_rev,
+            })
+        day_total = round(sum(day_map.values()), 2)
+        last_7_days.append({
+            "date": d.isoformat(),
+            "dow": int(d.strftime("%w")),
+            "total_revenue": day_total,
+            "categories": categories,
+        })
+
+    return {
+        "target_date": target_date.isoformat(),
+        "start_date_7": start_date_7.isoformat(),
+        "start_date_30": start_date_30.isoformat(),
+        "last_7_days": last_7_days,
+        "last_30_days": last_30_days,
+    }
+
