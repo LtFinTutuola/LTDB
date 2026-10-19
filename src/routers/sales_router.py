@@ -1,5 +1,5 @@
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from src.core.database import get_db
 from src.schemas.sales import (
@@ -54,6 +54,54 @@ def list_sales_chats(
         return sales_chat_service.list_chat_sessions(db=db, limit=limit)
     except Exception as e:
         logger.log_execution("sales_router", "list_sales_chats", "err", exc=e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/chats/active", response_model=Optional[SalesChatSessionDetail])
+def get_active_sales_chat(
+    target_date: Optional[str] = Query(None, description="Data nel formato YYYY-MM-DD"),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns the active sales chat session for target_date (defaulting to today UTC),
+    or null if no session has its last message generated on target_date.
+    """
+    try:
+        return sales_chat_service.get_active_chat_session(db=db, target_date=target_date)
+    except Exception as e:
+        logger.log_execution("sales_router", "get_active_sales_chat", "err", exc=e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/chats/{session_id}/activate", response_model=SalesChatSessionDetail)
+def activate_sales_chat(
+    session_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Explicitly marks a sales chat session as active and returns its details.
+    """
+    try:
+        return sales_chat_service.activate_chat_session(db=db, session_id=session_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        logger.log_execution("sales_router", "activate_sales_chat", "err", exc=e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chats/deactivate")
+def deactivate_sales_chats(
+    db: Session = Depends(get_db),
+):
+    """
+    Deactivates all sales chat sessions (e.g. when the user clicks 'Nuova chat').
+    """
+    try:
+        sales_chat_service.deactivate_chat_sessions(db=db)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.log_execution("sales_router", "deactivate_sales_chats", "err", exc=e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

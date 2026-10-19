@@ -57,6 +57,7 @@ class SalesChatSession(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "sales_chat_sessions"
 
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="Nuova conversazione")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # Relationships
     messages: Mapped[List["SalesChatMessage"]] = relationship(

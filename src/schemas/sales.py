@@ -76,10 +76,12 @@ class SalesChatMessageResponse(BaseSchemaWithAudit):
 
 class SalesChatSessionSummary(BaseSchemaWithAudit):
     title: str
+    is_active: bool = True
 
 
 class SalesChatSessionDetail(BaseSchemaWithAudit):
     title: str
+    is_active: bool = True
     messages: List[SalesChatMessageResponse] = []
 
 

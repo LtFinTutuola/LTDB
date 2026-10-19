@@ -11,7 +11,7 @@ const CATEGORY_COLUMNS = [
     { index: 7, header: 'O+A' },
 ];
 
-import { initSalesChat } from './sales_chat.js?v=20261019c';
+import { initSalesChat } from './sales_chat.js?v=20261019d';
 
 const state = {
     sales: [],

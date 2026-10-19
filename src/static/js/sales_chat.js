@@ -504,6 +504,7 @@ export function initSalesChat(dom) {
         autoResizeChatInput();
         closeChatHistoryPopup();
         renderChatHistoryList();
+        fetch('/api/v1/sales/chats/deactivate', { method: 'POST' }).catch(() => {});
     }
 
     async function fetchChatSessions(selectedId = null) {
@@ -535,7 +536,7 @@ export function initSalesChat(dom) {
         }
     }
 
-    async function loadChatSession(sessionId) {
+    async function loadChatSession(sessionId, shouldActivate = true) {
         if (!sessionId) {
             resetChatUI();
             return;
@@ -564,9 +565,32 @@ export function initSalesChat(dom) {
                 });
             }
             scrollChatToBottom();
+
+            if (shouldActivate) {
+                fetch(`/api/v1/sales/chats/${encodeURIComponent(sessionId)}/activate`, { method: 'PUT' }).catch(() => {});
+            }
         } catch (err) {
             console.error('Errore nel caricamento della sessione chat', err);
         }
+    }
+
+    async function checkAndLoadActiveChat() {
+        try {
+            const todayStr =
+                document.getElementById('date-picker')?.value ||
+                new Date().toISOString().split('T')[0];
+            const res = await fetch(`/api/v1/sales/chats/active?target_date=${encodeURIComponent(todayStr)}`);
+            if (res.ok) {
+                const activeSession = await res.json();
+                if (activeSession && activeSession.id) {
+                    await loadChatSession(activeSession.id, false);
+                    return true;
+                }
+            }
+        } catch (err) {
+            console.error('Errore nel controllo della chat attiva', err);
+        }
+        return false;
     }
 
 
@@ -766,6 +790,8 @@ export function initSalesChat(dom) {
         });
     }
 
-    fetchChatSessions();
+    fetchChatSessions().then(() => {
+        checkAndLoadActiveChat();
+    });
 }
 

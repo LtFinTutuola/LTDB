@@ -111,6 +111,24 @@ def list_chat_sessions(db: Session, limit: int = 50) -> List[SalesChatSession]:
     return sales_chat_repo.list_sessions(db, limit=limit)
 
 
+def get_active_chat_session(db: Session, target_date: Optional[str] = None) -> Optional[SalesChatSession]:
+    """Find and return the active chat session whose last message is on target_date."""
+    return sales_chat_repo.get_active_session(db=db, target_date=target_date)
+
+
+def activate_chat_session(db: Session, session_id: str) -> SalesChatSession:
+    """Explicitly activate a chat session and return its detail."""
+    session_obj = sales_chat_repo.set_active_session(db=db, session_id=session_id)
+    if not session_obj:
+        raise ValueError(f"Chat session '{session_id}' not found.")
+    return sales_chat_repo.get_session_with_messages(db, session_id)
+
+
+def deactivate_chat_sessions(db: Session) -> None:
+    """Deactivate all chat sessions (e.g. when starting a new conversation)."""
+    sales_chat_repo.set_active_session(db=db, session_id=None)
+
+
 def get_chat_session_detail(db: Session, session_id: str) -> SalesChatSession:
     """Return a single chat session with all its chronological messages."""
     session_obj = sales_chat_repo.get_session_with_messages(db, session_id)

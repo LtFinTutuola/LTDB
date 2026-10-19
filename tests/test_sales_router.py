@@ -10,7 +10,7 @@ Comprehensive test suite for the conversational sales hybrid RAG system:
   - Hybrid RAG on RECONCILED sales + ORPHAN transparency, strict semantic ranking (no catalog fallback),
     and sold-article color granularity
 """
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 
@@ -924,3 +924,97 @@ def test_markdown_inline_code_placeholder_not_corrupted_by_italic(db_session):
     assert "@@INLINECODE${codeSpans.length}@@" in js_text
     assert "@@INLINECODE${idx}@@" in js_text
     assert r"(^|[^\w_])_([^_]+)_(?![\w_])" in js_text
+
+
+def test_active_chat_session_api_and_loading(db_session):
+    """
+    Test active chat session endpoints and daily auto-loading logic:
+    - GET /api/v1/sales/chats/active returns null if no sessions exist
+    - Only returns session if its last message was generated in the current target date
+    - If multiple sessions exist on the same date, returns the latest active session
+    - PUT /api/v1/sales/chats/{session_id}/activate switches active session
+    - POST /api/v1/sales/chats/deactivate deactivates all sessions
+    - sales_chat.js contains checkAndLoadActiveChat and connects it to init
+    """
+    client = TestClient(app)
+    from src.repositories.sales_repo import sales_chat_repo
+
+    today = "2026-10-19"
+    yesterday = "2026-10-18"
+
+    # 1. Initially no session exists
+    res = client.get(f"/api/v1/sales/chats/active?target_date={today}")
+    assert res.status_code == 200
+    assert res.json() is None
+
+    # 2. Create session with message from yesterday
+    session_yesterday = sales_chat_repo.create_session(db_session, title="Chat Ieri")
+    msg_yesterday = sales_chat_repo.add_message(
+        db_session,
+        session_id=str(session_yesterday.id),
+        role="user",
+        content="Vendite di ieri",
+        context_date=yesterday,
+    )
+    msg_yesterday.created_at = datetime.strptime(yesterday + " 15:30:00", "%Y-%m-%d %H:%M:%S")
+    session_yesterday.updated_at = msg_yesterday.created_at
+    db_session.commit()
+
+    # Target date today should NOT return yesterday's chat
+    res = client.get(f"/api/v1/sales/chats/active?target_date={today}")
+    assert res.status_code == 200
+    assert res.json() is None
+
+    # 3. Create first session today
+    session_today_1 = sales_chat_repo.create_session(db_session, title="Chat Oggi 1")
+    sales_chat_repo.add_message(
+        db_session,
+        session_id=str(session_today_1.id),
+        role="user",
+        content="Prima domanda oggi",
+        context_date=today,
+    )
+    res = client.get(f"/api/v1/sales/chats/active?target_date={today}")
+    assert res.status_code == 200
+    data = res.json()
+    assert data is not None
+    assert data["id"] == str(session_today_1.id)
+    assert len(data["messages"]) == 1
+
+    # 4. Create second session today -> should become the active one (most recent)
+    session_today_2 = sales_chat_repo.create_session(db_session, title="Chat Oggi 2")
+    sales_chat_repo.add_message(
+        db_session,
+        session_id=str(session_today_2.id),
+        role="user",
+        content="Seconda domanda oggi",
+        context_date=today,
+    )
+    res = client.get(f"/api/v1/sales/chats/active?target_date={today}")
+    assert res.status_code == 200
+    data = res.json()
+    assert data is not None
+    assert data["id"] == str(session_today_2.id)
+
+    # 5. Switch active session back to session_today_1 via PUT /activate
+    act_res = client.put(f"/api/v1/sales/chats/{session_today_1.id}/activate")
+    assert act_res.status_code == 200
+    assert act_res.json()["id"] == str(session_today_1.id)
+
+    res = client.get(f"/api/v1/sales/chats/active?target_date={today}")
+    assert res.status_code == 200
+    assert res.json()["id"] == str(session_today_1.id)
+
+    # 6. Deactivate all sessions via POST /deactivate
+    deact_res = client.post("/api/v1/sales/chats/deactivate")
+    assert deact_res.status_code == 200
+    assert deact_res.json()["status"] == "ok"
+
+    # 7. Frontend JS assertions
+    js_res = client.get("/static/js/sales_chat.js")
+    assert js_res.status_code == 200
+    assert "checkAndLoadActiveChat" in js_res.text
+    assert "/api/v1/sales/chats/active" in js_res.text
+    assert "/api/v1/sales/chats/deactivate" in js_res.text
+    assert "/activate" in js_res.text
+
