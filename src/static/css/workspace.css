@@ -321,6 +321,7 @@
 }
 
 .btn-retry-photo,
+.btn-search-photo,
 .btn-manual-photo {
     background: none;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -335,6 +336,7 @@
 }
 
 .btn-retry-photo:hover,
+.btn-search-photo:hover,
 .btn-manual-photo:hover {
     border-color: var(--accent);
     color: var(--accent);

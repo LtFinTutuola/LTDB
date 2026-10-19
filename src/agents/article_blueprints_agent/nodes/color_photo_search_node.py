@@ -142,7 +142,8 @@ async def _search_photo_for_item(client: LLMClient, item: dict, blueprint: dict,
                 "photo_source": "web_search",
                 "canonical_color_candidate": color_str.lower(),
                 "retry_count": len(photo_ctx) // 2,
-                "_photo_search_ctx": new_ctx
+                "_photo_search_ctx": new_ctx,
+                "search_query": generated_query,
             }
         except Exception as exc:
             logger.log_agent("color_photo_search_node", "search_failed", "warn", exc=str(exc))
@@ -152,7 +153,8 @@ async def _search_photo_for_item(client: LLMClient, item: dict, blueprint: dict,
                 "photo_source": "web_search",
                 "canonical_color_candidate": color_str.lower(),
                 "retry_count": 0,
-                "_photo_search_ctx": photo_ctx
+                "_photo_search_ctx": photo_ctx,
+                "search_query": None,
             }
 
 async def color_photo_search_node(state: BlueprintsGraphState) -> dict:

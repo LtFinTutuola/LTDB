@@ -28,7 +28,7 @@ export async function renderStagingPanel(data, jobId) {
     _jobId = jobId;
     _stagingData = JSON.parse(JSON.stringify(data)); // deep copy
     _operationsQueue = [];
-    
+
     if (_stagingData.brand_id && !_stagingData.brand_name) {
         try {
             const brands = await api.getBrands();
@@ -38,7 +38,7 @@ export async function renderStagingPanel(data, jobId) {
             console.error("Failed to fetch brands", e);
         }
     }
-    
+
     if (_stagingData.brand_id && !_categoryHierarchy) {
         try {
             const res = await api.getBrandCategories(_stagingData.brand_id);
@@ -76,7 +76,7 @@ function _render() {
     const panel = getDetailPanel();
     const oldContent = document.getElementById('staging-content');
     const scrollPos = oldContent ? oldContent.scrollTop : 0;
-    
+
     const grouped = _groupByBlueprint(_stagingData);
     const photoProposals = _stagingData?.photo_proposals || {};
 
@@ -115,18 +115,18 @@ function _render() {
     `;
 
     panel.innerHTML = html;
-    
+
     const newContent = document.getElementById('staging-content');
     if (newContent) {
         newContent.scrollTop = scrollPos;
     }
-    
+
     const closeBtn = panel.querySelector('.btn-close-panel');
     if (closeBtn) closeBtn.addEventListener('click', exitSplitScreen);
 
     const refreshBtn = panel.querySelector('.btn-refresh-panel');
     if (refreshBtn) refreshBtn.addEventListener('click', _handleRefresh);
-    
+
     const applyBtn = panel.querySelector('.btn-apply-changes');
     if (applyBtn) applyBtn.addEventListener('click', submitRevisions);
 
@@ -142,7 +142,7 @@ function _groupByBlueprint(data) {
     for (const bp of (data?.blueprints || [])) bpMap[bp.id] = bp;
     for (const item of (data?.items || [])) {
         const bpId = item.article_blueprint_id;
-        if (!map.has(bpId)) map.set(bpId, { blueprint: bpMap[bpId] || { id: bpId, article_name: 'Blueprint ' + bpId.slice(0,8), description: '', tags: [], materials: [] }, items: [] });
+        if (!map.has(bpId)) map.set(bpId, { blueprint: bpMap[bpId] || { id: bpId, article_name: 'Blueprint ' + bpId.slice(0, 8), description: '', tags: [], materials: [] }, items: [] });
         map.get(bpId).items.push(item);
     }
     return map;
@@ -150,7 +150,7 @@ function _groupByBlueprint(data) {
 
 function _buildBlueprintCard(bp, items, photoProposals) {
     const isNew = bp.is_new ? '<span class="badge-new">Nuovo</span>' : '';
-    
+
     const photoHtml = _buildPhotoCarousel(bp.id, items, photoProposals);
 
     const tagsHtml = (bp.tags || []).map(t => `
@@ -162,9 +162,9 @@ function _buildBlueprintCard(bp, items, photoProposals) {
 
     const catDesc = bp.category?.description || '';
     const subCatDesc = bp.sub_category?.description || '';
-    
+
     const hasHierarchy = _categoryHierarchy && Object.keys(_categoryHierarchy).length > 0;
-    
+
     let catOpts = '';
     let subCatOpts = '';
     if (hasHierarchy) {
@@ -252,6 +252,28 @@ function _findProposal(photoProposals, itemId) {
     return null;
 }
 
+function _getPhotoSearchQuery(bpId, item, proposal) {
+    if (proposal && proposal.search_query) {
+        return proposal.search_query;
+    }
+    if (proposal && Array.isArray(proposal._photo_search_ctx) && proposal._photo_search_ctx.length > 0) {
+        for (let i = proposal._photo_search_ctx.length - 1; i >= 0; i--) {
+            const msg = proposal._photo_search_ctx[i];
+            if (msg.role === 'model' && msg.content) {
+                return msg.content.trim();
+            }
+        }
+    }
+    // Fallback: construct query from staging data
+    const bp = _stagingData?.blueprints?.find(b => b.id === bpId);
+    const brand = _stagingData?.brand_name || '';
+    const article = bp?.article_name || '';
+    const vendorCode = item?.vendor_code || '';
+    const colors = (item?.colors || []).join(' ');
+    const parts = [brand, article, vendorCode, colors, 'packshot'].filter(Boolean);
+    return parts.join(' ').trim();
+}
+
 function _buildPhotoCarousel(bpId, items, photoProposals) {
     if (!items || items.length === 0) {
         return `<div class="blueprint-card__photo-col"><div class="photo-placeholder" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:32px;">🖼</div></div>`;
@@ -259,18 +281,19 @@ function _buildPhotoCarousel(bpId, items, photoProposals) {
 
     let currentIndex = _activePhotoIndices[bpId] || 0;
     if (currentIndex >= items.length) currentIndex = 0;
-    
+
     const currentItem = items[currentIndex];
     const proposal = _findProposal(photoProposals, currentItem.item_id) || {};
     const url = proposal.url || proposal.photo_url || null;
-    
+    const searchQuery = _getPhotoSearchQuery(bpId, currentItem, proposal);
+
     const imgHtml = url
         ? `<img src="${_esc(url)}" alt="foto" onerror="this.style.display='none'" onclick="window._openImageModal(this.src)">`
         : `<div class="photo-placeholder" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:32px;">🖼</div>`;
 
     const colorsStr = (currentItem.colors || []).join(', ');
     const colorLabel = colorsStr || 'Nessun colore';
-    
+
     let navHtml = '';
     if (items.length > 1) {
         navHtml = `
@@ -286,13 +309,14 @@ function _buildPhotoCarousel(bpId, items, photoProposals) {
     <div class="blueprint-card__photo-col" style="display:flex;flex-direction:column;">
         ${imgHtml}
         ${navHtml}
-        <button class="btn-retry-photo" data-item-id="${_esc(currentItem.item_id)}" data-job-id="${_esc(_jobId)}" style="margin-top:auto;">🔄 Riprova</button>
+        <button class="btn-search-photo" data-item-id="${_esc(currentItem.item_id)}" data-search-query="${_esc(searchQuery)}" style="margin-top:auto;" title="Cerca su Google">🔍 Cerca</button>
         <button class="btn-manual-photo" data-item-id="${_esc(currentItem.item_id)}" data-job-id="${_esc(_jobId)}" style="margin-top:4px;">🔗 Inserisci URL</button>
+        <button class="btn-retry-photo" data-item-id="${_esc(currentItem.item_id)}" data-job-id="${_esc(_jobId)}" style="margin-top:4px;">🔄 Riprova</button>
     </div>`;
 }
 
 // Global modal function
-window._openImageModal = function(url) {
+window._openImageModal = function (url) {
     let overlay = document.getElementById('image-zoom-modal');
     if (!overlay) {
         overlay = document.createElement('div');
@@ -305,7 +329,7 @@ window._openImageModal = function(url) {
             </div>
         `;
         document.body.appendChild(overlay);
-        
+
         overlay.addEventListener('click', (e) => {
             if (e.target === overlay || e.target.classList.contains('btn-close-modal')) {
                 overlay.classList.remove('open');
@@ -340,9 +364,12 @@ function _attachListeners() {
         sel.addEventListener('change', _handleSubCatChange);
     });
 
-    // Photo retry and manual url
+    // Photo retry, search and manual url
     content.querySelectorAll('.btn-retry-photo').forEach(btn => {
         btn.addEventListener('click', _handleRetryPhoto);
+    });
+    content.querySelectorAll('.btn-search-photo').forEach(btn => {
+        btn.addEventListener('click', _handleSearchPhoto);
     });
     content.querySelectorAll('.btn-manual-photo').forEach(btn => {
         btn.addEventListener('click', _handleManualPhoto);
@@ -388,18 +415,18 @@ function _handleMacroCatChange(e) {
     const sel = e.currentTarget;
     const bpId = sel.dataset.bpId;
     const val = sel.value;
-    
+
     // Reset sub category
     _enqueueUpdate('blueprint', bpId, 'category', val ? { description: val } : null);
     _enqueueUpdate('blueprint', bpId, 'sub_category', null);
-    
+
     // Update local data
     const bp = _stagingData.blueprints.find(b => b.id === bpId);
     if (bp) {
         bp.category = val ? { description: val } : null;
         bp.sub_category = null;
     }
-    
+
     _render();
 }
 
@@ -407,9 +434,9 @@ function _handleSubCatChange(e) {
     const sel = e.currentTarget;
     const bpId = sel.dataset.bpId;
     const val = sel.value;
-    
+
     _enqueueUpdate('blueprint', bpId, 'sub_category', val ? { description: val } : null);
-    
+
     const bp = _stagingData.blueprints.find(b => b.id === bpId);
     if (bp) {
         bp.sub_category = val ? { description: val } : null;
@@ -419,12 +446,12 @@ function _handleSubCatChange(e) {
 function _startEdit(e) {
     const span = e.currentTarget;
     const entity = span.dataset.entity;
-    const id     = span.dataset.id;
-    const field  = span.dataset.field;
-    
+    const id = span.dataset.id;
+    const field = span.dataset.field;
+
     let currentVal = span.textContent;
     let originalTag = span.dataset.originalTag || '';
-    
+
     if (field === 'tags' && !originalTag) {
         currentVal = ''; // adding a new tag
     }
@@ -434,8 +461,8 @@ function _startEdit(e) {
     input.className = 'editable-input';
     input.value = currentVal;
     input.dataset.entity = entity;
-    input.dataset.id     = id;
-    input.dataset.field  = field;
+    input.dataset.id = id;
+    input.dataset.field = field;
     input.dataset.originalVal = originalTag || currentVal;
     input.dataset.isAddTag = field === 'tags' && !originalTag;
     input.dataset.isEditTag = field === 'tags' && !!originalTag;
@@ -456,19 +483,19 @@ function _startEdit(e) {
     input.focus();
     if (input.dataset.isAddTag !== 'true') input.select();
 
-    input.addEventListener('blur',    () => _commitEdit(input));
+    input.addEventListener('blur', () => _commitEdit(input));
     input.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter')  { ev.preventDefault(); input.blur(); }
+        if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
         if (ev.key === 'Escape') { ev.preventDefault(); _cancelEdit(input); }
     });
 }
 
 function _commitEdit(input) {
-    const entity   = input.dataset.entity;
-    const id       = input.dataset.id;
-    const field    = input.dataset.field;
-    const newRaw   = input.value.trim();
-    const origVal  = input.dataset.originalVal;
+    const entity = input.dataset.entity;
+    const id = input.dataset.id;
+    const field = input.dataset.field;
+    const newRaw = input.value.trim();
+    const origVal = input.dataset.originalVal;
     const isAddTag = input.dataset.isAddTag === 'true';
     const isEditTag = input.dataset.isEditTag === 'true';
 
@@ -517,7 +544,7 @@ function _commitEdit(input) {
             if (it) it[field] = value;
         }
     }
-    
+
     _render();
 }
 
@@ -538,9 +565,9 @@ function _updatePhotoProposal(itemId, newProposal) {
 }
 
 async function _handleRetryPhoto(e) {
-    const btn    = e.currentTarget;
+    const btn = e.currentTarget;
     const itemId = btn.dataset.itemId;
-    const jobId  = btn.dataset.jobId;
+    const jobId = btn.dataset.jobId;
     const feedback = prompt('Descrivi la foto che stai cercando (opzionale):');
     btn.disabled = true;
     btn.textContent = '⏳';
@@ -559,12 +586,12 @@ async function _handleRetryPhoto(e) {
 }
 
 async function _handleManualPhoto(e) {
-    const btn    = e.currentTarget;
+    const btn = e.currentTarget;
     const itemId = btn.dataset.itemId;
-    const jobId  = btn.dataset.jobId;
+    const jobId = btn.dataset.jobId;
     const url = prompt('Inserisci URL immagine:');
     if (!url) return;
-    
+
     btn.disabled = true;
     btn.textContent = '⏳';
     try {
@@ -579,6 +606,17 @@ async function _handleManualPhoto(e) {
         btn.disabled = false;
         btn.textContent = '🔗 Inserisci URL';
     }
+}
+
+function _handleSearchPhoto(e) {
+    const btn = e.currentTarget;
+    const query = btn.dataset.searchQuery;
+    if (!query) {
+        addMessage('⚠️ Nessuna query di ricerca disponibile.', 'warn');
+        return;
+    }
+    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+    window.open(searchUrl, '_blank', 'noopener,noreferrer');
 }
 
 // ---- Operations queue ----

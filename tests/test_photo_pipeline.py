@@ -262,6 +262,7 @@ async def test_url_guard_preserves_previous_url_on_rejection():
         f"Expected previous URL to be preserved, got: {res['photo_url']}"
     # retry_count must still increment
     assert res["retry_count"] == 2
+    assert res.get("search_query") == "test query"
 
     db.close()
 
@@ -325,3 +326,27 @@ async def test_url_guard_rejects_null_response(monkeypatch):
 
     result2 = await _validate_photo_url(None)
     assert result2 is False
+
+
+@pytest.mark.asyncio
+async def test_search_photo_for_item_includes_search_query():
+    """Verify that _search_photo_for_item populates search_query with the LLM-generated string."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+    from src.agents.article_blueprints_agent.nodes.color_photo_search_node import _search_photo_for_item
+
+    mock_client = AsyncMock()
+    mock_client.call = AsyncMock(return_value="Prada borsa saffiano nera packshot")
+    mock_client.call_with_grounding = AsyncMock(return_value=("https://example.com/photo.jpg", ["https://example.com/photo.jpg"]))
+
+    item = {"item_id": "test_item_1", "colors": ["nero"]}
+    bp = {"article_name": "borsa", "materials": ["saffiano"]}
+    sem = asyncio.Semaphore(1)
+
+    with patch("src.agents.article_blueprints_agent.nodes.color_photo_search_node._validate_photo_url", return_value=True):
+        res = await _search_photo_for_item(mock_client, item, bp, "Prada", sem)
+
+    assert res["search_query"] == "Prada borsa saffiano nera packshot"
+    assert res["photo_url"] == "https://example.com/photo.jpg"
+
+

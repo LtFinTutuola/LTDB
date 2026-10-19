@@ -127,6 +127,7 @@ async def retry_photo_search(db: Session, job_id: str, request: PhotoRetryReques
         proposal["photo_url"] = candidate_url
     proposal["retry_count"] = retry_count + 1
     proposal["_photo_search_ctx"] = new_ctx
+    proposal["search_query"] = generated_query
     
     staging_repo.update_job_data(db, job_id, job.data)
     
