@@ -1,0 +1,7 @@
+api_key: api_key
+articles_similarity_threshold: 0.84
+cluster_tie_breaker_margin: 0.02
+db_similarity_threshold: 0.92
+hallucination_recognition_threshold: 0.92
+candidate_tolerance: 0.04
+codes_deduction_agent_model: gemini-3.1-flash-lite
