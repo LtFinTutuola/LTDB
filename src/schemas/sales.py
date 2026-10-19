@@ -42,7 +42,44 @@ class SaleSummary(BaseModel):
 class ChatMessageRequest(BaseModel):
     message: str
     context_date: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class ChatMessageResponse(BaseModel):
     reply: str
+    session_id: str
+    session_title: str
+    message_id: Optional[str] = None
+
+
+class ReportMessageRequest(BaseModel):
+    message_id: str
+    reason: str
+
+
+class ReportMessageResponse(BaseModel):
+    status: str
+    message_id: str
+    is_reported: bool
+    report_reason: Optional[str] = None
+
+
+class SalesChatMessageResponse(BaseSchemaWithAudit):
+    session_id: str
+    role: str
+    content: str
+    context_date: Optional[str] = None
+    query_plan: Optional[dict] = None
+    is_reported: bool = False
+    report_reason: Optional[str] = None
+
+
+class SalesChatSessionSummary(BaseSchemaWithAudit):
+    title: str
+
+
+class SalesChatSessionDetail(BaseSchemaWithAudit):
+    title: str
+    messages: List[SalesChatMessageResponse] = []
+
+

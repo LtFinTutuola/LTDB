@@ -1,8 +1,8 @@
 import enum
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
-from sqlalchemy import String, ForeignKey, DateTime, Numeric, Enum, Integer
+from sqlalchemy import String, ForeignKey, DateTime, Numeric, Enum, Integer, JSON, Boolean, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, UUIDMixin, TimestampMixin
@@ -51,3 +51,38 @@ class SaleLine(Base, UUIDMixin, TimestampMixin):
     # Relationships
     sale: Mapped["Sale"] = relationship("Sale", back_populates="lines")
     article: Mapped["Article"] = relationship("Article", back_populates="sale_lines")
+
+
+class SalesChatSession(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "sales_chat_sessions"
+
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="Nuova conversazione")
+
+    # Relationships
+    messages: Mapped[List["SalesChatMessage"]] = relationship(
+        "SalesChatMessage",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="SalesChatMessage.created_at.asc()",
+    )
+
+
+class SalesChatMessage(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "sales_chat_messages"
+
+    session_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("sales_chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(32), nullable=False)  # "user" or "assistant"
+    content: Mapped[str] = mapped_column(String, nullable=False)
+    context_date: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    query_plan: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    is_reported: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    report_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Relationships
+    session: Mapped["SalesChatSession"] = relationship("SalesChatSession", back_populates="messages")
+

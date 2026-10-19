@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.models.base import Base
 # Import all model modules so every table is registered on Base.metadata
-from src.models import pim, wms, sales, staging  # noqa: F401
+from src.models import pim, wms, sales, staging, excel_sales  # noqa: F401
 
 # Register the test logger plugin hooks
 from tests.test_logger_plugin import pytest_runtest_makereport, pytest_sessionfinish  # noqa: F401

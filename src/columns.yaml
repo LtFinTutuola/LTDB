@@ -1,0 +1,25 @@
+columns:
+  - index: 0
+    header: "B"
+    description: "borse"
+  - index: 1
+    header: "Sam/AT"
+    description: "samsonite / american tourister"
+  - index: 2
+    header: "V"
+    description: "valigie / accessori da viaggio / beautycase"
+  - index: 3
+    header: "PP"
+    description: "piccola pelletteria / portafogli / portachiavi"
+  - index: 4
+    header: "C"
+    description: "cinture"
+  - index: 5
+    header: "CAR"
+    description: "cartelle / cartelle da ufficio / zaini da ufficio"
+  - index: 6
+    header: "BORSELLI"
+    description: "borselli / borselli da uomo"
+  - index: 7
+    header: "O+A"
+    description: "ombrelli / occhiali / altro"

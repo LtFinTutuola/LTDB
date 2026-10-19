@@ -650,7 +650,21 @@ def get_daily_aggregations(db: Session, target_date: date) -> Dict[str, Any]:
     }
 
 
-CATEGORY_HEADERS = ["B", "Sam/AT", "V", "PP", "C", "CAR", "BORSELLI", "O+A"]
+def load_columns_schema() -> List[Dict[str, Any]]:
+    """Loads the Excel sales columns schema (index, header, description) from src/columns.yaml."""
+    cols_path = Path(__file__).parent.parent / "columns.yaml"
+    with open(cols_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    columns = data.get("columns", [])
+    return sorted(columns, key=lambda c: int(c["index"]))
+
+
+def get_category_headers() -> List[str]:
+    """Returns the ordered list of Excel category column headers from src/columns.yaml."""
+    return [str(col["header"]) for col in load_columns_schema()]
+
+
+CATEGORY_HEADERS = get_category_headers()
 
 
 def get_historical_aggregations(db: Session, target_date: date) -> Dict[str, Any]:

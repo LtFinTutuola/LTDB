@@ -228,8 +228,11 @@ async function fetchDailySales(dateStr, silent = false) {
 
         if (res.status === 'success') {
             const oldLength = state.sales.length;
-            state.sales = res.data;
-            renderTable();
+            const salesChanged = !silent || JSON.stringify(state.sales) !== JSON.stringify(res.data);
+            if (salesChanged) {
+                state.sales = res.data;
+                renderTable();
+            }
             
             if (silent && state.sales.length > oldLength) {
                 // Scroll to bottom when new records arrive
@@ -250,6 +253,19 @@ async function fetchDailySales(dateStr, silent = false) {
 }
 
 function renderTable() {
+    const activeEl = document.activeElement;
+    const isExternalInputFocused = activeEl && (
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        activeEl.tagName === 'SELECT'
+    ) && !dom.tbody.contains(activeEl);
+    let selectionStart = null;
+    let selectionEnd = null;
+    if (isExternalInputFocused && 'selectionStart' in activeEl) {
+        selectionStart = activeEl.selectionStart;
+        selectionEnd = activeEl.selectionEnd;
+    }
+
     let prevActiveId = null;
     if (state.activeCell && state.sales.length > 0 && dom.tbody.children[state.activeCell.row]) {
         prevActiveId = dom.tbody.children[state.activeCell.row].dataset.saleId;
@@ -310,7 +326,7 @@ function renderTable() {
                 if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
                     // Open detail context if reconciled
                     const shouldTriggerContext = sale.status === 'RECONCILED';
-                    setActiveCell(idx, colIdx, shouldTriggerContext);
+                    setActiveCell(idx, colIdx, shouldTriggerContext, true);
                 }
             });
         });
@@ -318,16 +334,26 @@ function renderTable() {
         dom.tbody.appendChild(tr);
     });
 
-    // Restore or set initial active cell
+    // Restore or set initial active cell without stealing focus
     if (prevActiveId) {
         const newIdx = state.sales.findIndex(s => s.id === prevActiveId);
         if (newIdx !== -1) {
-            setActiveCell(newIdx, state.activeCell.col, false);
+            setActiveCell(newIdx, state.activeCell.col, false, false);
         } else {
-            setActiveCell(0, 0, false);
+            setActiveCell(0, 0, false, false);
         }
     } else if (state.sales.length > 0) {
-        setActiveCell(0, 0, false);
+        setActiveCell(0, 0, false, false);
+    }
+
+    // Preserve external input focus (e.g. chat-input or recon-prompt-input)
+    if (isExternalInputFocused && document.activeElement !== activeEl) {
+        activeEl.focus();
+        if (selectionStart !== null && selectionEnd !== null && 'setSelectionRange' in activeEl) {
+            try {
+                activeEl.setSelectionRange(selectionStart, selectionEnd);
+            } catch (_) {}
+        }
     }
 }
 
@@ -368,7 +394,7 @@ function renderReconCell(td, sale) {
             const tr = dom.tbody.querySelector(`tr[data-sale-id="${sale.id}"]`);
             if (tr) {
                 const idx = parseInt(tr.dataset.rowIndex, 10);
-                if (!isNaN(idx)) setActiveCell(idx, 10, true);
+                if (!isNaN(idx)) setActiveCell(idx, 10, true, true);
             }
         };
         
@@ -477,7 +503,7 @@ function handleCandidateConfirm(sale, cand) {
         const nextTr = dom.tbody.children[nextOrphanIdx];
         if (nextTr) {
             nextTr.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            setActiveCell(nextOrphanIdx, 10, true); // focus the recon cell
+            setActiveCell(nextOrphanIdx, 10, true, true); // focus the recon cell
         }
     }
 }
@@ -610,7 +636,7 @@ async function fetchSubstitutes(blueprintId) {
     }
 }
 
-function setActiveCell(rowIndex, colIndex, triggerContext = false) {
+function setActiveCell(rowIndex, colIndex, triggerContext = false, shouldFocus = false) {
     // Clear old active
     if (state.activeCell) {
         const oldTr = dom.tbody.children[state.activeCell.row];
@@ -638,21 +664,30 @@ function setActiveCell(rowIndex, colIndex, triggerContext = false) {
                 }
             }
 
-            // If it's a recon cell and it has an input, focus it
-            if (colIndex === 10) {
-                const input = newTd.querySelector('input');
-                if (input) input.focus();
-            } else {
-                // Ensure document body has focus to intercept keys
-                document.activeElement.blur();
+            // Only manage focus if explicitly requested (e.g. user clicked on cell or explicit navigation)
+            if (shouldFocus) {
+                if (colIndex === 10) {
+                    const input = newTd.querySelector('input');
+                    if (input) input.focus();
+                } else {
+                    // Only blur if activeElement is an input inside the table body itself; never blur external textboxes (e.g. chat-input)
+                    if (document.activeElement && dom.tbody.contains(document.activeElement)) {
+                        document.activeElement.blur();
+                    }
+                }
             }
         }
     }
 }
 
 function handleKeyNav(e) {
-    // Ignore if input is focused
-    if (document.activeElement.tagName === 'INPUT') {
+    // Ignore if any input, textarea or select is focused
+    if (document.activeElement && (
+        document.activeElement.tagName === 'INPUT' ||
+        document.activeElement.tagName === 'TEXTAREA' ||
+        document.activeElement.tagName === 'SELECT' ||
+        document.activeElement.isContentEditable
+    )) {
         return;
     }
 
@@ -681,7 +716,7 @@ function handleKeyNav(e) {
 
     if (changed) {
         e.preventDefault();
-        setActiveCell(row, col, false);
+        setActiveCell(row, col, false, true);
 
         // Scroll into view if needed
         const tr = dom.tbody.children[row];
