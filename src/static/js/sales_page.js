@@ -11,7 +11,7 @@ const CATEGORY_COLUMNS = [
     { index: 7, header: 'O+A' },
 ];
 
-import { initSalesChat } from './sales_chat.js';
+import { initSalesChat } from './sales_chat.js?v=20261019c';
 
 const state = {
     sales: [],
@@ -194,17 +194,21 @@ async function updateSyncStatus() {
         if (res.ok) {
             const data = await res.json();
             const status = data.data;
+            const container = document.getElementById('syncIndicator');
             const indicator = document.querySelector('.sync-text');
             const dot = document.querySelector('.sync-dot');
-            if (indicator && status.last_attempt_at) {
+            if (status && status.last_attempt_at) {
                 const lastAttempt = new Date(status.last_attempt_at);
-                indicator.textContent = `Ultima sincronizzazione: ${lastAttempt.toLocaleTimeString()}`;
+                let titleText = `Ultima sincronizzazione: ${lastAttempt.toLocaleTimeString()}`;
                 if (status.last_error) {
-                    dot.style.backgroundColor = 'var(--error, #ef4444)';
-                    indicator.textContent += ' (Errore)';
+                    if (dot) dot.style.backgroundColor = 'var(--error, #ef4444)';
+                    titleText += ' (Errore)';
                 } else {
-                    dot.style.backgroundColor = 'var(--status-success, #10b981)';
+                    if (dot) dot.style.backgroundColor = 'var(--status-success, #10b981)';
                 }
+                if (container) container.setAttribute('title', titleText);
+                if (dot) dot.setAttribute('title', titleText);
+                if (indicator) indicator.textContent = titleText;
             }
         }
     } catch (e) {

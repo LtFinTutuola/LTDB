@@ -36,12 +36,68 @@
     align-items: center;
     flex-shrink: 0;
     width: 100%;
+    min-height: 32px;
 }
 
 .sales-page__header-left {
     display: flex;
     gap: var(--space-sm);
     align-items: center;
+}
+
+/* Date Picker Calendar Icon */
+#date-picker::-webkit-calendar-picker-indicator {
+    filter: brightness(0) invert(1);
+    cursor: pointer;
+    opacity: 0.9;
+    transition: opacity 0.15s ease;
+}
+
+#date-picker::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
+}
+
+/* Excel Sync Indicator */
+.sync-indicator {
+    position: relative;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: var(--radius-pill, 999px);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: background-color 0.15s ease;
+}
+
+.sync-indicator:hover {
+    background-color: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.sync-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background-color: var(--status-success, #10b981);
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
+    display: inline-block;
+    flex-shrink: 0;
+    transition: background-color 0.2s ease, transform 0.15s ease;
+}
+
+.sync-indicator:hover .sync-dot {
+    transform: scale(1.1);
+}
+
+.sync-indicator .sync-text {
+    display: none;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.sync-indicator:hover .sync-text {
+    display: inline;
 }
 
 
@@ -368,7 +424,8 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-sm);
-    padding: 8px var(--space-md);
+    padding: var(--space-md) var(--space-md) 0 var(--space-md);
+    min-height: 48px;
     border: none;
     border-bottom: none;
     background: transparent;
@@ -383,8 +440,8 @@
 }
 
 .chat-brand-logo {
-    width: 25px;
-    height: 25px;
+    width: 33px;
+    height: 33px;
     object-fit: contain;
     display: block;
 }

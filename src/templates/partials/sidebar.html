@@ -1,14 +1,10 @@
 <aside id="sidebar" class="sidebar">
-  <!-- Expanded header: logo + brand name + toggle -->
+  <!-- Expanded header: logo + brand name -->
   <div class="sidebar__header">
     <div class="sidebar__brand">
       <img src="/static/assets/logo.png" alt="La Triestina" class="sidebar__logo-img">
       <span class="sidebar__logo-text">La Triestina</span>
     </div>
-    <button id="btn-sidebar-toggle" class="sidebar__toggle" title="Comprimi">
-      <span class="material-symbols-rounded">menu</span>
-      <img src="/static/assets/logo.png" alt="La Triestina" class="sidebar__toggle-logo">
-    </button>
   </div>
 
   <!-- Navigation -->
@@ -37,11 +33,11 @@
 
   </div>
 
-  <!-- Bottom: admin chip + settings -->
+  <!-- Bottom: settings + admin chip (inverted) -->
   <div class="sidebar__bottom">
-    <div class="chip chip--admin">admin</div>
     <a href="/settings" class="sidebar__settings-btn {% if active_page == 'settings' %}sidebar__settings-btn--active{% endif %}" title="Impostazioni">
       <span class="material-symbols-rounded">settings</span>
     </a>
+    <div class="chip chip--admin">admin</div>
   </div>
 </aside>

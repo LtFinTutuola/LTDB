@@ -3,8 +3,8 @@
 {% block title %}Vendite - La Triestina{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="/static/css/tabs.css">
-<link rel="stylesheet" href="/static/css/sales_table.css">
+<link rel="stylesheet" href="/static/css/tabs.css?v=20261019b">
+<link rel="stylesheet" href="/static/css/sales_table.css?v=20261019b">
 {% endblock %}
 
 {% block content %}
@@ -20,10 +20,10 @@
                     </div>
                 </div>
                 <div class="sales-page__header-right" style="display: flex; gap: 12px; align-items: center;">
-                    <div class="sync-indicator" id="syncIndicator"
-                        style="font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px;">
+                    <div class="sync-indicator" id="syncIndicator" title="Ultima sincronizzazione: in attesa..."
+                        style="font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; cursor: pointer;">
                         <span class="sync-dot"
-                            style="width: 8px; height: 8px; border-radius: 50%; background-color: var(--status-success, #10b981);"></span>
+                            style="width: 9px; height: 9px; border-radius: 50%; background-color: var(--status-success, #10b981); display: inline-block; flex-shrink: 0;"></span>
                         <span class="sync-text">Ultima sincronizzazione: ...</span>
                     </div>
                     <input type="date" id="date-picker" class="form-control form-control--sm" title="Seleziona data">
@@ -258,5 +258,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script type="module" src="/static/js/sales_page.js"></script>
+<script type="module" src="/static/js/sales_page.js?v=20261019c"></script>
 {% endblock %}

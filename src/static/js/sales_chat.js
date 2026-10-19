@@ -15,10 +15,10 @@ function escapeHtml(raw) {
 }
 
 function formatInlineMarkdown(escapedLine) {
-    // 1. Protect inline code spans `...`
+    // 1. Protect inline code spans `...` using a token free of markdown characters (_, *, `)
     const codeSpans = [];
     let processed = escapedLine.replace(/`([^`]+)`/g, (_, code) => {
-        const token = `@@INLINE_CODE_${codeSpans.length}@@`;
+        const token = `@@INLINECODE${codeSpans.length}@@`;
         codeSpans.push(`<code>${code}</code>`);
         return token;
     });
@@ -28,13 +28,13 @@ function formatInlineMarkdown(escapedLine) {
     // 3. Bold (**text** or __text__)
     processed = processed.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     processed = processed.replace(/__(.+?)__/g, '<strong>$1</strong>');
-    // 4. Italic (*text* or _text_)
+    // 4. Italic (*text* or _text_ at non-word boundaries so snake_case is preserved)
     processed = processed.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, '$1<em>$2</em>');
-    processed = processed.replace(/(^|[^_])_([^_]+)_(?!_)/g, '$1<em>$2</em>');
+    processed = processed.replace(/(^|[^\w_])_([^_]+)_(?![\w_])/g, '$1<em>$2</em>');
 
     // 5. Restore inline code spans
     codeSpans.forEach((html, idx) => {
-        processed = processed.replace(`@@INLINE_CODE_${idx}@@`, html);
+        processed = processed.replace(`@@INLINECODE${idx}@@`, () => html);
     });
 
     return processed;
@@ -47,7 +47,7 @@ export function renderMarkdown(markdownText) {
     // Extract fenced code blocks ```...``` first
     const codeBlocks = [];
     const withBlockTokens = normalized.replace(/```(?:\w+)?\n?([\s\S]*?)```/g, (_, code) => {
-        const token = `@@CODE_BLOCK_${codeBlocks.length}@@`;
+        const token = `@@CODEBLOCK${codeBlocks.length}@@`;
         codeBlocks.push(`<pre><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`);
         return `\n${token}\n`;
     });
@@ -87,7 +87,7 @@ export function renderMarkdown(markdownText) {
         }
 
         // Fenced code block token
-        const blockMatch = trimmed.match(/^@@CODE_BLOCK_(\d+)@@$/);
+        const blockMatch = trimmed.match(/^@@CODEBLOCK(\d+)@@$/);
         if (blockMatch) {
             flushParagraph();
             closeLists();

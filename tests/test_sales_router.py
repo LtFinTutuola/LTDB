@@ -855,5 +855,72 @@ def test_sales_chat_ui_copy_and_report_elements(db_session):
     assert "simulateStreamingText" in js_res.text
 
 
+def test_sales_ui_and_sidebar_refinements(db_session):
+    """
+    Test the UI and prompt refinements:
+    1. System prompt forbids repetitive greetings (Buongiorno, etc.)
+    2. Datepicker calendar indicator is forced to white in CSS
+    3. Excel sync indicator displays green dot by default and reveals sync text on hover
+    4. Sidebar has admin chip and settings button inverted
+    5. Sidebar hamburger toggle button is removed
+    6. Chat toolbar header is aligned with top page elements
+    """
+    client = TestClient(app)
+
+    # 1. System prompt check
+    from src.agents.sales_chat_agent.nodes.answer_synthesis_node import _SYSTEM_PROMPT
+    assert "NON iniziare MAI la risposta con formule di saluto" in _SYSTEM_PROMPT
+    assert "Buongiorno" in _SYSTEM_PROMPT
+
+    # 2. Vendite HTML page check
+    res = client.get("/vendite")
+    assert res.status_code == 200
+    html = res.text
+
+    # Excel sync indicator has green dot and sync-text (hidden by default via CSS, revealed on hover)
+    assert 'id="syncIndicator"' in html
+    assert 'class="sync-dot"' in html
+    assert 'class="sync-text"' in html
+
+    # Hamburger menu toggle button is removed
+    assert 'id="btn-sidebar-toggle"' not in html
+
+    # Sidebar bottom has settings before chip--admin (inverted)
+    settings_idx = html.find('href="/settings"')
+    admin_chip_idx = html.find('class="chip chip--admin"')
+    assert settings_idx != -1 and admin_chip_idx != -1
+    assert settings_idx < admin_chip_idx
+
+    # 3. CSS check for datepicker white icon, sync hover reveal, and chat header alignment
+    css_res = client.get("/static/css/sales_table.css")
+    assert css_res.status_code == 200
+    assert "#date-picker::-webkit-calendar-picker-indicator" in css_res.text
+    assert "filter: brightness(0) invert(1);" in css_res.text
+    assert ".sync-indicator .sync-text" in css_res.text
+    assert ".sync-indicator:hover .sync-text" in css_res.text
+    assert "padding: var(--space-md) var(--space-md) 0 var(--space-md);" in css_res.text
+    assert "min-height: 48px;" in css_res.text
+
+    # 4. JS check for sync tooltip title logic
+    js_res = client.get("/static/js/sales_page.js")
+    assert js_res.status_code == 200
+    assert "container.setAttribute('title', titleText)" in js_res.text
 
 
+def test_markdown_inline_code_placeholder_not_corrupted_by_italic(db_session):
+    """
+    Regression test for reported bug:
+    Inline code spans (`ORPHAN`) must not use a placeholder token containing
+    underscores (like @@INLINE_CODE_0@@) that gets mutated by the _italic_ regex
+    into @@INLINE<em>CODE</em>0@@ before restoration.
+    """
+    client = TestClient(app)
+    js_res = client.get("/static/js/sales_chat.js")
+    assert js_res.status_code == 200
+    js_text = js_res.text
+
+    assert "@@INLINE_CODE_" not in js_text
+    assert "@@CODE_BLOCK_" not in js_text
+    assert "@@INLINECODE${codeSpans.length}@@" in js_text
+    assert "@@INLINECODE${idx}@@" in js_text
+    assert r"(^|[^\w_])_([^_]+)_(?![\w_])" in js_text
