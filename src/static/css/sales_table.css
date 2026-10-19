@@ -424,7 +424,7 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-sm);
-    padding: var(--space-md) var(--space-md) var(--space-md) var(--space-md);
+    padding: var(--space-md) var(--space-md) 0 var(--space-md);
     min-height: 48px;
     border: none;
     border-bottom: none;
