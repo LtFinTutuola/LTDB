@@ -629,3 +629,202 @@ def test_history_endpoint_and_vendite_storico_tab(db_session):
     assert 'id="history-7days-grid"' in res_page.text
     assert 'id="history-30days-chart"' in res_page.text
 
+
+def test_agent_config_endpoint(db_session):
+    client = TestClient(app)
+    res = client.get("/api/v1/excel-synchronization/agent-config")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "success"
+    cfg = data["data"]
+    assert "excel_file_path" in cfg
+    assert "excel_code_column" in cfg
+    assert cfg["start_row"] == 2
+    assert cfg["excel_polling_interval"] == 20
+    assert cfg["retention_days"] == 30
+
+
+def test_push_batch_endpoint_insert_and_update(db_session):
+    client = TestClient(app)
+    target_date = "2026-10-20"
+
+    # 1. Push 2 new rows
+    payload = {
+        "date": target_date,
+        "rows": [
+            {
+                "excel_row_index": 2,
+                "excel_file_column": 1,
+                "starting_price": 100.0,
+                "selling_price": 90.0,
+                "is_exchange": False,
+                "raw_article_code": "CODE-A"
+            },
+            {
+                "excel_row_index": 3,
+                "excel_file_column": 2,
+                "starting_price": 50.0,
+                "selling_price": 45.0,
+                "is_exchange": True,
+                "raw_article_code": "CODE-B"
+            }
+        ]
+    }
+    res = client.post("/api/v1/excel-synchronization/push-batch", json=payload)
+    assert res.status_code == 200
+    resp_data = res.json()
+    assert resp_data["status"] == "success"
+    assert resp_data["confirmed_row_indexes"] == [2, 3]
+    assert len(resp_data["inserted_ids"]) == 2
+
+    # Verify DB records
+    records = excel_synchronization_repo.get_pending_records(db_session, target_date=date(2026, 10, 20))
+    assert len(records) == 2
+    r2 = next(r for r in records if r.excel_row_index == 2)
+    assert r2.starting_price == 100.0
+    assert r2.selling_price == 90.0
+    assert r2.raw_article_code == "CODE-A"
+
+    # 2. Push update for row 2 (e.g. price correction) and row 4 (new)
+    update_payload = {
+        "date": target_date,
+        "rows": [
+            {
+                "excel_row_index": 2,
+                "excel_file_column": 1,
+                "starting_price": 100.0,
+                "selling_price": 85.0,  # Updated price
+                "is_exchange": False,
+                "raw_article_code": "CODE-A"
+            },
+            {
+                "excel_row_index": 4,
+                "excel_file_column": 0,
+                "starting_price": 20.0,
+                "selling_price": 18.0,
+                "is_exchange": False,
+                "raw_article_code": "CODE-C"
+            }
+        ]
+    }
+    res2 = client.post("/api/v1/excel-synchronization/push-batch", json=update_payload)
+    assert res2.status_code == 200
+    resp2_data = res2.json()
+    assert resp2_data["confirmed_row_indexes"] == [2, 4]
+
+    db_session.expire_all()
+    records2 = excel_synchronization_repo.get_pending_records(db_session, target_date=date(2026, 10, 20))
+    assert len(records2) == 3
+    r2_updated = next(r for r in records2 if r.excel_row_index == 2)
+    assert r2_updated.selling_price == 85.0
+
+
+def test_push_batch_heartbeat_empty_rows(db_session):
+    client = TestClient(app)
+    payload = {
+        "date": "2026-10-20",
+        "rows": []
+    }
+    res = client.post("/api/v1/excel-synchronization/push-batch", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "success"
+    assert data["confirmed_row_indexes"] == []
+    assert data["inserted_ids"] == []
+
+
+def test_push_batch_unprocessable_row(db_session):
+    client = TestClient(app)
+    target_date = "2026-10-20"
+    payload = {
+        "date": target_date,
+        "rows": [
+            {
+                "excel_row_index": 10,
+                "excel_file_column": 0,
+                "starting_price": None,
+                "selling_price": None,
+                "is_exchange": False,
+                "raw_article_code": "INVALID",
+                "is_unprocessable": True
+            }
+        ]
+    }
+    res = client.post("/api/v1/excel-synchronization/push-batch", json=payload)
+    assert res.status_code == 200
+    records = excel_synchronization_repo.get_pending_records(db_session, target_date=date(2026, 10, 20))
+    r10 = next(r for r in records if r.excel_row_index == 10)
+    assert r10.status == ExcelSaleStatus.UNPROCESSABLE
+
+
+def test_push_batch_historical_pattern_rejected(db_session):
+    client = TestClient(app)
+    past_date = date(2026, 10, 15)
+    today = date(2026, 10, 20)
+
+    # Pre-populate 10 historical records on past_date
+    hist_sales = []
+    for i in range(1, 11):
+        hist_sales.append(
+            ExcelSaleCreate(
+                date=past_date,
+                excel_row_index=i,
+                excel_file_column=0,
+                status=ExcelSaleStatus.ORPHAN,
+                starting_price=100.0 + i,
+                selling_price=90.0 + i,
+                is_exchange=False,
+                raw_article_code=f"CODE-{i}"
+            )
+        )
+    excel_synchronization_repo.bulk_create(db_session, hist_sales)
+    db_session.commit()
+
+    # 1. Pushing 9 identical rows for today -> should be accepted (< 10 threshold)
+    payload_9 = {
+        "date": str(today),
+        "rows": [
+            {
+                "excel_row_index": i,
+                "excel_file_column": 0,
+                "starting_price": 100.0 + i,
+                "selling_price": 90.0 + i,
+                "is_exchange": False,
+                "raw_article_code": f"CODE-{i}"
+            }
+            for i in range(1, 10)
+        ]
+    }
+    res_9 = client.post("/api/v1/excel-synchronization/push-batch", json=payload_9)
+    assert res_9.status_code == 200
+    assert len(res_9.json()["confirmed_row_indexes"]) == 9
+
+    # Clean up today's records for clean testing
+    for r in excel_synchronization_repo.get_all_by_date(db_session, today):
+        db_session.delete(r)
+    db_session.commit()
+
+    # 2. Pushing 10 identical rows for today matching past_date -> rejected with 409
+    payload_10 = {
+        "date": str(today),
+        "rows": [
+            {
+                "excel_row_index": i,
+                "excel_file_column": 0,
+                "starting_price": 100.0 + i,
+                "selling_price": 90.0 + i,
+                "is_exchange": False,
+                "raw_article_code": f"CODE-{i}"
+            }
+            for i in range(1, 11)
+        ]
+    }
+    res_10 = client.post("/api/v1/excel-synchronization/push-batch", json=payload_10)
+    assert res_10.status_code == 409
+    assert "Historical file pattern detected" in res_10.json()["detail"]
+    assert str(past_date) in res_10.json()["detail"]
+
+    # Verify no records were inserted for today
+    today_records = excel_synchronization_repo.get_all_by_date(db_session, today)
+    assert len(today_records) == 0
+

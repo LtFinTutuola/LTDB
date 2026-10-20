@@ -7,3 +7,5 @@ __pycache__/
 .agents/
 test_logs/
 src/agents/gemini.yaml
+scripts/excel_agent/logs/
+scripts/excel_agent/state/

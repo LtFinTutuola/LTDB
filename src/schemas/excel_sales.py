@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, date as dt_date
 from typing import Optional
 from pydantic import BaseModel, ConfigDict
 from enum import Enum
@@ -98,3 +98,38 @@ class SaleDetailResponse(BaseModel):
     blueprint_id: str
     colors: list[str]
     is_exchange: bool
+
+
+class ExcelAgentConfigData(BaseModel):
+    excel_file_path: str
+    excel_code_column: str
+    start_row: int
+    excel_polling_interval: int
+    retention_days: int
+
+
+class ExcelAgentConfigResponse(BaseModel):
+    status: str = "success"
+    data: ExcelAgentConfigData
+
+
+class ExcelRowPushItem(BaseModel):
+    excel_row_index: int
+    excel_file_column: Optional[int] = None
+    starting_price: Optional[float] = None
+    selling_price: Optional[float] = None
+    is_exchange: bool = False
+    raw_article_code: Optional[str] = None
+    is_unprocessable: bool = False
+
+
+class ExcelPushBatchRequest(BaseModel):
+    date: Optional[dt_date] = None
+    rows: list[ExcelRowPushItem] = []
+
+
+class ExcelPushBatchResponse(BaseModel):
+    status: str
+    message: str
+    confirmed_row_indexes: list[int]
+    inserted_ids: list[str] = []

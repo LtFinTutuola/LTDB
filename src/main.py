@@ -16,17 +16,14 @@ from src.routers.settings_router import router as settings_router
 logger = get_logger()
 
 from contextlib import asynccontextmanager
-from src.services.excel_synchronization_service import start_polling, stop_polling
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.log_execution("main", "startup", "ok", message="Starting up application services...")
-    start_polling()
     yield
     # Shutdown
     logger.log_execution("main", "shutdown", "ok", message="Shutting down application services...")
-    stop_polling()
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 

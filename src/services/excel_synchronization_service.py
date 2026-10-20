@@ -8,7 +8,7 @@ from src.core.logger import get_logger
 from src.core.database import SessionLocal
 from src.repositories.excel_synchronization_repo import excel_synchronization_repo
 from src.repositories.wms_repo import wms_repo
-from src.schemas.excel_sales import ExcelSaleCreate, ExcelSaleStatus
+from src.schemas.excel_sales import ExcelSaleCreate, ExcelSaleStatus, ExcelRowPushItem
 from src.schemas.wms import StockUpdate
 from src.models.wms import ArticleStatus, MovementReason
 
@@ -18,6 +18,155 @@ except ImportError:
     openpyxl = None
 
 logger = get_logger()
+
+
+class HistoricalFileError(Exception):
+    """Raised when incoming sales data matches a historical date pattern."""
+    def __init__(self, message: str, matched_date: Optional[date] = None):
+        super().__init__(message)
+        self.matched_date = matched_date
+
+
+def get_agent_config() -> Dict[str, Any]:
+    """Reads current configuration for the standalone edge agent."""
+    import yaml
+    from pathlib import Path
+    from src.core.config import BASE_DIR
+
+    config_path = BASE_DIR / "src" / "config.yaml"
+    cfg = {}
+    if config_path.exists():
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+
+    return {
+        "excel_file_path": str(cfg.get("excel_file_path", settings.EXCEL_FILE_PATH)),
+        "excel_code_column": str(cfg.get("excel_code_column", settings.EXCEL_CODE_COLUMN)),
+        "start_row": int(cfg.get("excel_start_row", getattr(settings, "EXCEL_START_ROW", 2))),
+        "excel_polling_interval": int(cfg.get("excel_polling_interval", settings.EXCEL_POLLING_INTERVAL)),
+        "retention_days": int(cfg.get("excel_retention_days", getattr(settings, "EXCEL_RETENTION_DAYS", 30))),
+    }
+
+
+def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: date) -> Dict[str, Any]:
+    """
+    Ingests a batch of sales pushed by the standalone edge agent.
+    - Handles heartbeats (empty rows)
+    - Validates against historical file patterns (Level 3 protection)
+    - Performs idempotent upsert (updates ORPHAN / UNPROCESSABLE, inserts new)
+    - Returns confirmed row indexes and created/updated record IDs
+    """
+    # 1. Heartbeat check
+    if not rows:
+        _record_sync(True, 0)
+        logger.log_execution("excel_synchronization_service", "heartbeat_received", "ok", target_date=str(target_date))
+        return {
+            "confirmed_row_indexes": [],
+            "inserted_ids": []
+        }
+
+    # 2. Level 3 Safety: Historical pattern detection (>= 10 matches on a single historical date)
+    matched_hist_date = excel_synchronization_repo.find_historical_pattern_date(db, target_date, rows, min_matches=10)
+    if matched_hist_date:
+        err_msg = f"Historical file pattern detected: matches data from {matched_hist_date}"
+        _record_sync(False, error=err_msg)
+        logger.log_execution("excel_synchronization_service", "historical_pattern_blocked", "warning",
+                             target_date=str(target_date), matched_date=str(matched_hist_date))
+        raise HistoricalFileError(err_msg, matched_date=matched_hist_date)
+
+    # 3. Existing records for target_date
+    existing_records = excel_synchronization_repo.get_all_by_date(db, target_date)
+    existing_by_row = {r.excel_row_index: r for r in existing_records}
+
+    sales_to_insert = []
+    sales_to_update = []
+    confirmed_row_indexes = []
+
+    for item in rows:
+        row_idx = item.excel_row_index
+        confirmed_row_indexes.append(row_idx)
+
+        status = ExcelSaleStatus.UNPROCESSABLE if item.is_unprocessable else ExcelSaleStatus.ORPHAN
+
+        starting_price_val = None
+        if item.starting_price is not None:
+            try:
+                starting_price_val = float(item.starting_price)
+            except (ValueError, TypeError):
+                status = ExcelSaleStatus.UNPROCESSABLE
+
+        selling_price_val = None
+        if item.selling_price is not None:
+            try:
+                selling_price_val = float(item.selling_price)
+            except (ValueError, TypeError):
+                status = ExcelSaleStatus.UNPROCESSABLE
+
+        existing_record = existing_by_row.get(row_idx)
+        if existing_record:
+            if existing_record.status in (ExcelSaleStatus.ORPHAN, ExcelSaleStatus.UNPROCESSABLE):
+                new_starting = starting_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None
+                new_selling = selling_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None
+
+                changed = False
+                if existing_record.starting_price != new_starting:
+                    existing_record.starting_price = new_starting
+                    changed = True
+                if existing_record.selling_price != new_selling:
+                    existing_record.selling_price = new_selling
+                    changed = True
+                if existing_record.is_exchange != item.is_exchange:
+                    existing_record.is_exchange = item.is_exchange
+                    changed = True
+                if existing_record.raw_article_code != item.raw_article_code:
+                    existing_record.raw_article_code = item.raw_article_code
+                    changed = True
+                if existing_record.excel_file_column != item.excel_file_column:
+                    existing_record.excel_file_column = item.excel_file_column
+                    changed = True
+                if existing_record.status != status:
+                    existing_record.status = status
+                    changed = True
+
+                if changed:
+                    sales_to_update.append(existing_record)
+        else:
+            sale_in = ExcelSaleCreate(
+                date=target_date,
+                excel_row_index=row_idx,
+                excel_file_column=item.excel_file_column,
+                status=status,
+                starting_price=starting_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None,
+                selling_price=selling_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None,
+                is_exchange=item.is_exchange,
+                raw_article_code=item.raw_article_code
+            )
+            sales_to_insert.append(sale_in)
+
+    if sales_to_update:
+        db.commit()
+
+    created_records = []
+    if sales_to_insert:
+        created_records = excel_synchronization_repo.bulk_create(db, sales_to_insert)
+
+    inserted_or_updated_ids = [str(r.id) for r in created_records] + [str(r.id) for r in sales_to_update]
+
+    _record_sync(True, len(inserted_or_updated_ids))
+    logger.log_execution(
+        "excel_synchronization_service",
+        "ingest_pushed_sales",
+        "ok",
+        target_date=str(target_date),
+        records_inserted=len(created_records),
+        records_updated=len(sales_to_update),
+        confirmed_count=len(confirmed_row_indexes)
+    )
+
+    return {
+        "confirmed_row_indexes": confirmed_row_indexes,
+        "inserted_ids": inserted_or_updated_ids
+    }
 
 # ---------------------------------------------------------------------------
 # Ingestion Logic

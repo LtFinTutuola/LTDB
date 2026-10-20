@@ -1,0 +1,14 @@
+{
+  "ltdb_base_url": "http://127.0.0.1:8000",
+  "config_endpoint": "/api/v1/excel-synchronization/agent-config",
+  "push_endpoint": "/api/v1/excel-synchronization/push-batch",
+  "http_timeout_seconds": 10,
+  "heartbeat_interval_seconds": 180,
+  "fallback_config": {
+    "excel_file_path": "/Users/lucasarti/LTDB/_working_files/Stat € B.xlsx",
+    "excel_code_column": "N",
+    "start_row": 2,
+    "excel_polling_interval": 20,
+    "retention_days": 30
+  }
+}

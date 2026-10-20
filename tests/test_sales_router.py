@@ -937,10 +937,10 @@ def test_active_chat_session_api_and_loading(db_session):
     - sales_chat.js contains checkAndLoadActiveChat and connects it to init
     """
     client = TestClient(app)
+    from datetime import date, timedelta
     from src.repositories.sales_repo import sales_chat_repo
-
-    today = "2026-10-19"
-    yesterday = "2026-10-18"
+    today = date.today().isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
 
     # 1. Initially no session exists
     res = client.get(f"/api/v1/sales/chats/active?target_date={today}")

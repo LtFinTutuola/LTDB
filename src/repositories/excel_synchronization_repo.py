@@ -69,6 +69,74 @@ class ExcelSaleRepository(BaseRepository[ExcelSale, ExcelSaleCreate, ExcelSaleCr
         """Returns all records for a specific date, ordered by row index."""
         return db.query(self.model).filter(self.model.date == target_date).order_by(self.model.excel_row_index.asc()).all()
 
+    def find_historical_pattern_date(
+        self,
+        db: Session,
+        target_date: date,
+        rows: List[Any],
+        min_matches: int = 10
+    ) -> Optional[date]:
+        """
+        Checks if incoming rows match >= min_matches identical records on a single
+        historical date (ExcelSale.date != target_date).
+        If detected, returns that historical date. Otherwise returns None.
+        """
+        if not rows or len(rows) < min_matches:
+            return None
+
+        from collections import Counter
+        row_indices = [r.excel_row_index for r in rows]
+        if not row_indices:
+            return None
+
+        historical_records = (
+            db.query(self.model)
+            .filter(
+                self.model.date != target_date,
+                self.model.excel_row_index.in_(row_indices)
+            )
+            .all()
+        )
+        if not historical_records:
+            return None
+
+        hist_by_date_and_row = {}
+        for r in historical_records:
+            hist_by_date_and_row[(r.date, r.excel_row_index)] = r
+
+        matches_per_date = Counter()
+        for incoming in rows:
+            for (hist_date, row_idx), hist_record in hist_by_date_and_row.items():
+                if row_idx != incoming.excel_row_index:
+                    continue
+
+                inc_start = round(float(incoming.starting_price), 2) if incoming.starting_price is not None else None
+                hist_start = round(float(hist_record.starting_price), 2) if hist_record.starting_price is not None else None
+                if inc_start != hist_start:
+                    continue
+
+                inc_sell = round(float(incoming.selling_price), 2) if incoming.selling_price is not None else None
+                hist_sell = round(float(hist_record.selling_price), 2) if hist_record.selling_price is not None else None
+                if inc_sell != hist_sell:
+                    continue
+
+                if incoming.excel_file_column != hist_record.excel_file_column:
+                    continue
+
+                if incoming.is_exchange != hist_record.is_exchange:
+                    continue
+
+                inc_code = (incoming.raw_article_code or "").strip() or None
+                hist_code = (hist_record.raw_article_code or "").strip() or None
+                if inc_code != hist_code:
+                    continue
+
+                matches_per_date[hist_date] += 1
+                if matches_per_date[hist_date] >= min_matches:
+                    return hist_date
+
+        return None
+
     def get_sales_candidates_by_plan(
         self,
         db: Session,

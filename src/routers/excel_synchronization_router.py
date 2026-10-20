@@ -10,9 +10,78 @@ from src.core.config import settings
 from src.services import excel_synchronization_service
 from src.core.logger import get_logger
 
+from src.schemas.excel_sales import (
+    ExcelAgentConfigResponse,
+    ExcelAgentConfigData,
+    ExcelPushBatchRequest,
+    ExcelPushBatchResponse,
+)
+from src.services.excel_synchronization_service import HistoricalFileError
+
 logger = get_logger()
 
 router = APIRouter(prefix="/api/v1/excel-synchronization", tags=["Excel Synchronization"])
+
+
+@router.get("/agent-config", response_model=ExcelAgentConfigResponse, status_code=status.HTTP_200_OK)
+def get_agent_config():
+    """
+    Returns runtime configuration parameters for the standalone edge agent.
+    """
+    try:
+        config_data = excel_synchronization_service.get_agent_config()
+        logger.log_execution("excel_synchronization_router", "get_agent_config", "ok")
+        return ExcelAgentConfigResponse(status="success", data=ExcelAgentConfigData(**config_data))
+    except Exception as e:
+        logger.log_execution("excel_synchronization_router", "get_agent_config", "err", exc=e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/push-batch", response_model=ExcelPushBatchResponse, status_code=status.HTTP_200_OK)
+def push_batch(
+    payload: ExcelPushBatchRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Receives pushed sales rows from the standalone edge agent, validates them,
+    and updates/inserts them into the database idempotently.
+    """
+    target_date = payload.date or date.today()
+    start_time = time.time()
+    try:
+        result = excel_synchronization_service.ingest_pushed_sales(
+            db=db,
+            rows=payload.rows,
+            target_date=target_date
+        )
+        latency_ms = int((time.time() - start_time) * 1000)
+        logger.log_execution(
+            "excel_synchronization_router",
+            "push_batch",
+            "ok",
+            path="/api/v1/excel-synchronization/push-batch",
+            latency_ms=latency_ms,
+            confirmed_count=len(result["confirmed_row_indexes"]),
+            inserted_count=len(result["inserted_ids"])
+        )
+        return ExcelPushBatchResponse(
+            status="success",
+            message=f"Successfully processed {len(result['confirmed_row_indexes'])} rows",
+            confirmed_row_indexes=result["confirmed_row_indexes"],
+            inserted_ids=result["inserted_ids"]
+        )
+    except HistoricalFileError as e:
+        db.rollback()
+        logger.log_execution("excel_synchronization_router", "push_batch_historical_rejected", "warning",
+                             error=str(e), matched_date=str(e.matched_date))
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    except Exception as e:
+        db.rollback()
+        logger.log_execution("excel_synchronization_router", "push_batch", "err", exc=e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/poll-rows", status_code=status.HTTP_200_OK)
 def poll_rows(
