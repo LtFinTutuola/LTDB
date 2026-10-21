@@ -1,5 +1,5 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 from typing import List, Literal, Optional, Any, Dict
 
 from src.schemas.types import NormalizedIdentifier, NormalizedStringList
@@ -89,6 +89,21 @@ class SingleItemIngestionRequest(BaseModel):
     barcode: Optional[str] = Field(default=None, description="Barcode or EAN")
     quantity: Optional[int] = Field(default=1, description="Item quantity")
     colors: NormalizedStringList = Field(..., description="Article colors hint for web search")
+
+    @field_validator("vendor_code", mode="before")
+    @classmethod
+    def clean_vendor_code_whitespace(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return "".join(v.split()).upper()
+        return v
+
+    @field_validator("barcode", mode="before")
+    @classmethod
+    def clean_barcode_whitespace(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            cleaned = "".join(v.split())
+            return cleaned or None
+        return v
 
 
 # ---------------------------------------------------------------------------

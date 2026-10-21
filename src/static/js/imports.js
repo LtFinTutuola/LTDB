@@ -123,9 +123,22 @@ async function submitDDTForm() {
 
 async function submitSingleItemForm() {
     const brandId = _val('single-brand');
-    const vendorCode = _val('single-vendor');
+    const rawVendor = _val('single-vendor');
+    const vendorCode = rawVendor.replace(/\s+/g, '').toUpperCase();
+    const rawBarcode = _val('single-barcode');
+    const barcode = rawBarcode.replace(/\s+/g, '');
+    const rawName = _val('single-name');
+    const articleName = rawName.trim().replace(/\s+/g, ' ');
+    const rawColors = _val('single-colors');
+    const colors = rawColors ? rawColors.split(',').map(s => s.trim().replace(/\s+/g, '')).filter(Boolean) : [];
     const statusEl = document.getElementById('single-status');
     const btn = document.getElementById('btn-submit-single');
+
+    // Update input display with cleaned values
+    const vendorInput = document.getElementById('single-vendor');
+    if (vendorInput) vendorInput.value = vendorCode;
+    const barcodeInput = document.getElementById('single-barcode');
+    if (barcodeInput) barcodeInput.value = barcode;
 
     if (!brandId || !vendorCode) {
         addMessage('⚠️ Compila i campi obbligatori (Brand e Codice Fornitore).', 'error');
@@ -135,10 +148,10 @@ async function submitSingleItemForm() {
     const payload = {
         brand_id: brandId,
         vendor_code: vendorCode,
-        article_name: _val('single-name'),
-        barcode: _val('single-barcode'),
+        article_name: articleName,
+        barcode: barcode,
         quantity: parseInt(_val('single-qty'), 10) || 1,
-        colors: _val('single-colors') ? _val('single-colors').split(',').map(s=>s.trim()) : []
+        colors: colors
     };
 
     btn.disabled = true;
@@ -194,12 +207,10 @@ document.addEventListener('ingestionDone', () => {
     if (document.getElementById('ddt-filepath')) document.getElementById('ddt-filepath').value = '';
     if (document.getElementById('ddt-status')) document.getElementById('ddt-status').innerHTML = '';
 
-    // Reset Single Article form
-    if (document.getElementById('single-brand')) document.getElementById('single-brand').value = '';
+    // Reset Single Article form (preservando brand e colore fissi per importazioni multiple)
     if (document.getElementById('single-vendor')) document.getElementById('single-vendor').value = '';
     if (document.getElementById('single-name')) document.getElementById('single-name').value = '';
     if (document.getElementById('single-barcode')) document.getElementById('single-barcode').value = '';
     if (document.getElementById('single-qty')) document.getElementById('single-qty').value = '1';
-    if (document.getElementById('single-colors')) document.getElementById('single-colors').value = '';
     if (document.getElementById('single-status')) document.getElementById('single-status').innerHTML = '';
 });

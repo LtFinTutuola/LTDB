@@ -501,6 +501,61 @@ function _bindArticleModals() {
     }
 }
 
+let _brandCategoriesCache = {};
+
+async function _loadBrandCategories(brandId) {
+    if (!brandId) return {};
+    if (_brandCategoriesCache[brandId]) return _brandCategoriesCache[brandId];
+    try {
+        const res = await api.getBrandCategories(brandId);
+        _brandCategoriesCache[brandId] = res.data || res || {};
+        return _brandCategoriesCache[brandId];
+    } catch (e) {
+        console.error("Failed to load brand categories:", e);
+        return {};
+    }
+}
+
+function _resolveBrandId(item) {
+    if (item.brand_id) return item.brand_id;
+    const brands = window.__LTDB_BRANDS__ || [];
+    const b = brands.find(x => x.name.toLowerCase() === (item.brand_name || '').toLowerCase());
+    return b ? b.id : null;
+}
+
+function _populateCategoryDropdowns(macroSelect, subSelect, hierarchy, currentMacro, currentSub) {
+    if (!macroSelect || !subSelect) return;
+    const hasHierarchy = hierarchy && Object.keys(hierarchy).length > 0;
+
+    let macroHtml = '<option value="">Macro Categoria...</option>';
+    if (hasHierarchy) {
+        macroHtml += Object.keys(hierarchy).map(c =>
+            `<option value="${_esc(c)}" ${c.toLowerCase() === (currentMacro || '').toLowerCase() ? 'selected' : ''}>${_esc(c)}</option>`
+        ).join('');
+    } else if (currentMacro) {
+        macroHtml += `<option value="${_esc(currentMacro)}" selected>${_esc(currentMacro)}</option>`;
+    }
+    macroSelect.innerHTML = macroHtml;
+
+    function _updateSubOptions(selectedMacro, selectedSub) {
+        let subHtml = '<option value="">Sotto Categoria...</option>';
+        if (hasHierarchy && selectedMacro && hierarchy[selectedMacro]) {
+            const subs = Object.keys(hierarchy[selectedMacro].sub_categories || {});
+            subHtml += subs.map(sc =>
+                `<option value="${_esc(sc)}" ${sc.toLowerCase() === (selectedSub || '').toLowerCase() ? 'selected' : ''}>${_esc(sc)}</option>`
+            ).join('');
+        } else if (selectedSub) {
+            subHtml += `<option value="${_esc(selectedSub)}" selected>${_esc(selectedSub)}</option>`;
+        }
+        subSelect.innerHTML = subHtml;
+    }
+
+    _updateSubOptions(macroSelect.value, currentSub);
+    macroSelect.onchange = () => {
+        _updateSubOptions(macroSelect.value, '');
+    };
+}
+
 function openEditArticleModal(item) {
     _editingItem = item;
     const modalEdit = document.getElementById('modal-edit-article');
@@ -511,6 +566,9 @@ function openEditArticleModal(item) {
     const inputExtDesc = document.getElementById('edit-article-ext-description');
     const inputTags = document.getElementById('edit-article-tags');
     const inputMaterials = document.getElementById('edit-article-materials');
+    const inputQty = document.getElementById('edit-article-qty');
+    const macroSelect = document.getElementById('edit-article-macro-cat');
+    const subSelect = document.getElementById('edit-article-sub-cat');
 
     if (!modalEdit) return;
 
@@ -521,6 +579,17 @@ function openEditArticleModal(item) {
     if (inputExtDesc) inputExtDesc.value = item.extended_description || '';
     if (inputTags) inputTags.value = (item.tags || []).join(', ');
     if (inputMaterials) inputMaterials.value = (item.materials || []).join(', ');
+    if (inputQty) inputQty.value = item.stock ?? 0;
+
+    const brandId = _resolveBrandId(item);
+    if (macroSelect && subSelect) {
+        _populateCategoryDropdowns(macroSelect, subSelect, {}, item.category_name, item.sub_category_name);
+        if (brandId) {
+            _loadBrandCategories(brandId).then(hierarchy => {
+                _populateCategoryDropdowns(macroSelect, subSelect, hierarchy, item.category_name, item.sub_category_name);
+            });
+        }
+    }
 
     modalEdit.classList.add('active');
     setTimeout(() => {
@@ -547,6 +616,9 @@ async function _handleSaveEditArticle(e) {
     const inputExtDesc = document.getElementById('edit-article-ext-description');
     const inputTags = document.getElementById('edit-article-tags');
     const inputMaterials = document.getElementById('edit-article-materials');
+    const inputQty = document.getElementById('edit-article-qty');
+    const macroSelect = document.getElementById('edit-article-macro-cat');
+    const subSelect = document.getElementById('edit-article-sub-cat');
     const btnSave = document.getElementById('btn-save-edit-article');
 
     const articleName = inputName ? inputName.value.trim() : '';
@@ -562,6 +634,11 @@ async function _handleSaveEditArticle(e) {
         .split(',')
         .map(s => s.trim().toLowerCase())
         .filter(Boolean);
+
+    const rawQty = inputQty ? parseInt(inputQty.value, 10) : 0;
+    const newQty = isNaN(rawQty) ? 0 : Math.max(0, rawQty);
+    const newMacroCat = macroSelect ? macroSelect.value.trim() : '';
+    const newSubCat = subSelect ? subSelect.value.trim() : '';
 
     if (!articleName) {
         _showToast('Il nome dell\'articolo non può essere vuoto.', 'error');
@@ -590,6 +667,9 @@ async function _handleSaveEditArticle(e) {
         vendor_code: vendorCode,
         barcode: barcode,
         color: color,
+        quantity: newQty,
+        category_name: newMacroCat,
+        sub_category_name: newSubCat
     };
 
     if (btnSave) {
@@ -599,7 +679,6 @@ async function _handleSaveEditArticle(e) {
 
     try {
         await api.patchCatalogItem(_editingItem.blueprint_id, payload);
-        _showToast('Articolo aggiornato con successo.');
         closeEditArticleModal();
 
         const detailOverlay = document.getElementById('article-fullscreen-modal');
@@ -727,6 +806,21 @@ export function openArticleMobilePanel(item) {
     if (tagsInput) tagsInput.value = (item.tags || []).join(', ');
     if (materialsInput) materialsInput.value = (item.materials || []).join(', ');
 
+    const inputQtyMobile = document.getElementById('mob-art-qty');
+    if (inputQtyMobile) inputQtyMobile.value = item.stock ?? 0;
+
+    const macroSelectMobile = document.getElementById('mob-art-macro-cat');
+    const subSelectMobile = document.getElementById('mob-art-sub-cat');
+    const brandIdMobile = _resolveBrandId(item);
+    if (macroSelectMobile && subSelectMobile) {
+        _populateCategoryDropdowns(macroSelectMobile, subSelectMobile, {}, item.category_name, item.sub_category_name);
+        if (brandIdMobile) {
+            _loadBrandCategories(brandIdMobile).then(hierarchy => {
+                _populateCategoryDropdowns(macroSelectMobile, subSelectMobile, hierarchy, item.category_name, item.sub_category_name);
+            });
+        }
+    }
+
     container.classList.add('mobile-panel-open');
 }
 
@@ -747,6 +841,9 @@ async function _handleSaveArticleMobile(e) {
     const extDescInput = document.getElementById('mob-art-ext-description');
     const tagsInput = document.getElementById('mob-art-tags');
     const materialsInput = document.getElementById('mob-art-materials');
+    const inputQtyMobile = document.getElementById('mob-art-qty');
+    const macroSelectMobile = document.getElementById('mob-art-macro-cat');
+    const subSelectMobile = document.getElementById('mob-art-sub-cat');
     const btnSave = document.getElementById('btn-save-article-mobile');
 
     const articleName = nameInput ? nameInput.value.trim() : '';
@@ -762,6 +859,11 @@ async function _handleSaveArticleMobile(e) {
         .split(',')
         .map(s => s.trim().toLowerCase())
         .filter(Boolean);
+
+    const rawQty = inputQtyMobile ? parseInt(inputQtyMobile.value, 10) : 0;
+    const newQty = isNaN(rawQty) ? 0 : Math.max(0, rawQty);
+    const newMacroCat = macroSelectMobile ? macroSelectMobile.value.trim() : '';
+    const newSubCat = subSelectMobile ? subSelectMobile.value.trim() : '';
 
     if (!articleName) {
         _showToast('Il nome dell\'articolo non può essere vuoto.', 'error');
@@ -790,6 +892,9 @@ async function _handleSaveArticleMobile(e) {
         vendor_code: vendorCode,
         barcode: barcode,
         color: color,
+        quantity: newQty,
+        category_name: newMacroCat,
+        sub_category_name: newSubCat
     };
 
     if (btnSave) {
@@ -799,7 +904,6 @@ async function _handleSaveArticleMobile(e) {
 
     try {
         await api.patchCatalogItem(_currentMobileArticle.blueprint_id, payload);
-        _showToast('Articolo aggiornato con successo.');
         closeArticleMobilePanel();
         await _refreshWarehouseView();
     } catch (err) {

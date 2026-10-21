@@ -67,7 +67,6 @@ export async function submitRevisions() {
         _operationsQueue = [];
         _stagingData = result.data;
         _render();
-        addMessage(`✅ Modifiche applicate (${result.data?.items?.length ?? '?'} elementi).`, 'success');
     } catch (err) {
         addMessage(`❌ Errore: ${err.message}`, 'error');
     }
@@ -434,7 +433,7 @@ function _buildItemsTable(items, photoProposals, bp) {
         <tr data-item-id="${_esc(item.item_id)}">
             <td><span class="editable" data-entity="item" data-id="${_esc(item.item_id)}" data-field="vendor_code">${_esc(item.vendor_code || '')}</span></td>
             <td><span class="editable" data-entity="item" data-id="${_esc(item.item_id)}" data-field="barcode">${_esc(item.barcode || '')}</span></td>
-            <td><span class="editable" data-entity="item" data-id="${_esc(item.item_id)}" data-field="quantity">${_esc(String(item.quantity ?? 1))}</span></td>
+            <td style="padding: 4px 8px; width: 85px;"><input type="number" min="1" class="staging-qty-input" data-item-id="${_esc(item.item_id)}" value="${_esc(String(item.quantity ?? 1))}" style="width: 65px; padding: 4px 6px; text-align: center; border-radius: var(--radius-xs); border: 1px solid var(--border-color); background: var(--bg-app); color: var(--text-primary); font-size: 13px; font-weight: 600;"></td>
             <td><span class="editable" data-entity="item" data-id="${_esc(item.item_id)}" data-field="colors">${_esc(colors)}</span></td>
             <td><span class="editable" data-entity="blueprint" data-id="${_esc(bp.id)}" data-field="materials">${_esc(materials)}</span></td>
         </tr>
@@ -444,7 +443,7 @@ function _buildItemsTable(items, photoProposals, bp) {
     return `
     <table class="items-table">
         <thead><tr>
-            <th>Codice</th><th>Barcode</th><th>Qtà</th><th>Colori</th><th>Materiali</th>
+            <th>Codice</th><th>Barcode</th><th style="width: 85px;">Qtà</th><th>Colori</th><th>Materiali</th>
         </tr></thead>
         <tbody>${rows}</tbody>
     </table>`;
@@ -562,6 +561,21 @@ function _attachListeners() {
     // Click-to-edit
     content.querySelectorAll('.editable').forEach(el => {
         el.addEventListener('click', _startEdit);
+    });
+
+    // Staging quantity input
+    content.querySelectorAll('.staging-qty-input').forEach(input => {
+        input.addEventListener('change', (e) => {
+            const itemId = e.target.dataset.itemId;
+            const newQty = parseInt(e.target.value, 10) || 1;
+            e.target.value = newQty;
+            const it = _stagingData.items.find(i => i.item_id === itemId);
+            if (it && it.quantity !== newQty) {
+                it.quantity = newQty;
+                _enqueueUpdate('item', itemId, 'quantity', newQty);
+                _render();
+            }
+        });
     });
 
     // Delete tag
@@ -934,7 +948,6 @@ function _handleMobileSave(e) {
 
     closeStagingMobilePanel();
     _render();
-    addMessage('Modifiche salvate in staging.', 'success');
 }
 
 function _handleRemoveTag(e) {
@@ -1110,7 +1123,6 @@ async function _handleRetryPhoto(e) {
     btn.textContent = '⏳';
     try {
         const result = await api.retryPhoto(jobId, itemId, feedback || null);
-        addMessage('✅ Ricerca foto aggiornata.', 'success');
         if (result?.data) {
             _updatePhotoProposal(itemId, result.data);
             _render();
@@ -1133,7 +1145,6 @@ async function _handleManualPhoto(e) {
     btn.textContent = '⏳';
     try {
         const result = await api.retryPhoto(jobId, itemId, null, url);
-        addMessage('✅ Immagine aggiornata con successo.', 'success');
         if (result?.data) {
             _updatePhotoProposal(itemId, result.data);
             _render();
@@ -1152,7 +1163,7 @@ function _handleSearchPhoto(e) {
         addMessage('⚠️ Nessuna query di ricerca disponibile.', 'warn');
         return;
     }
-    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+    const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
     window.open(searchUrl, '_blank', 'noopener,noreferrer');
 }
 
@@ -1216,9 +1227,14 @@ async function _handleRefresh() {
 }
 
 async function _handleConfirm() {
-    const btn = document.querySelector('.btn-confirm-import');
+    const btn = document.querySelector('.btn-confirm-import') || document.querySelector('.btn-apply-changes');
     if (btn) btn.disabled = true;
     try {
+        if (_operationsQueue.length > 0) {
+            const revRes = await api.submitRevisions(_jobId, _operationsQueue);
+            _operationsQueue = [];
+            if (revRes?.data) _stagingData = revRes.data;
+        }
         await api.confirmIngestion(_jobId);
         addMessage('✅ Dati importati con successo nel catalogo.', 'success');
         document.dispatchEvent(new CustomEvent('ingestionDone', { detail: { jobId: _jobId } }));

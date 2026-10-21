@@ -770,3 +770,20 @@ def test_get_job_existing_blueprint_name_and_description(db_session):
     assert bp_omitted["article_name"] == "Existing Blueprint Name"
     assert bp_omitted["description"] == "Existing Blueprint Description"
 
+
+def test_single_item_request_whitespace_stripping():
+    from src.schemas.data_ingestion import SingleItemIngestionRequest
+
+    req = SingleItemIngestionRequest(
+        brand_id="test-brand-id",
+        vendor_code="  HWVG 871  234  ",
+        article_name="  Borsa a Spalla  ",
+        barcode="  800 0000 000 17  ",
+        quantity=2,
+        colors=[" Rosso ", " Blu Notte "]
+    )
+    assert req.vendor_code == "HWVG871234"
+    assert req.barcode == "800000000017"
+    assert req.colors == ["rosso", "blu notte"]
+
+

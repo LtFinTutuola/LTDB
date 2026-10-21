@@ -976,6 +976,26 @@
 
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
                         <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                            <label for="mob-art-macro-cat" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Macro Categoria</label>
+                            <select id="mob-art-macro-cat" class="form-control category-select">
+                                <option value="">Macro Categoria...</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                            <label for="mob-art-sub-cat" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Sotto Categoria</label>
+                            <select id="mob-art-sub-cat" class="form-control category-select">
+                                <option value="">Sotto Categoria...</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-art-qty" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Quantità *</label>
+                        <input type="number" id="mob-art-qty" class="form-control" min="0" value="0" required>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
                             <label for="mob-art-vendor-code" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Codice Fornitore</label>
                             <input type="text" id="mob-art-vendor-code" class="form-control" placeholder="Es. HWVG87...">
                         </div>
@@ -1036,6 +1056,26 @@
                 <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
                     <label for="edit-article-name" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Nome Articolo *</label>
                     <input type="text" id="edit-article-name" class="form-control" required>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                        <label for="edit-article-macro-cat" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Macro Categoria</label>
+                        <select id="edit-article-macro-cat" class="form-control category-select">
+                            <option value="">Macro Categoria...</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                        <label for="edit-article-sub-cat" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Sotto Categoria</label>
+                        <select id="edit-article-sub-cat" class="form-control category-select">
+                            <option value="">Sotto Categoria...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="edit-article-qty" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Quantità *</label>
+                    <input type="number" id="edit-article-qty" class="form-control" min="0" value="0" required>
                 </div>
 
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">

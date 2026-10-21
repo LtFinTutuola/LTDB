@@ -205,7 +205,6 @@ async function handleSaveBrand(e) {
     try {
         if (editingBrandId) {
             await api.updateBrand(editingBrandId, { name, category_ids: checkedCats });
-            showToast('Brand aggiornato con successo.');
         } else {
             await api.createBrand({ name, category_ids: checkedCats });
             showToast('Nuovo brand creato con successo.');
@@ -320,7 +319,6 @@ async function handleSaveBrandMobile(e) {
     try {
         if (editingBrandId) {
             await api.updateBrand(editingBrandId, { name, category_ids: checkedCats });
-            showToast('Brand aggiornato con successo.');
         } else {
             await api.createBrand({ name, category_ids: checkedCats });
             showToast('Nuovo brand creato con successo.');

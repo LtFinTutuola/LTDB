@@ -37,9 +37,10 @@ def _make_category(db, name="Borse", description="Categoria borse", parent_id=No
 def _make_blueprint(db, brand_id, article_name="Borsa Milano",
                     description="Una bella borsa",
                     extended_description="Molto lunga descrizione.",
-                    tags=None, materials=None, embedding=None):
+                    tags=None, materials=None, embedding=None, category_id=None):
     bp = ArticleBlueprint(
         brand_id=brand_id,
+        category_id=category_id,
         article_name=article_name,
         description=description,
         extended_description=extended_description,
@@ -551,4 +552,112 @@ class TestScanBarcodeEndpoint:
         client = TestClient(app)
         res = client.post("/api/v1/catalog/scan-barcode", content=b"", headers={"Content-Type": "image/png"})
         assert res.status_code == 400
+
+
+class TestUpdateBlueprintQuantityAndCategory:
+    def test_update_blueprint_quantity_increase_and_decrease(self, db_session):
+        from datetime import date
+        from src.services import catalog_service
+        from src.schemas.catalog import CatalogUpdateRequest
+        from src.models.wms import Article, Batch, Supplier, ArticleStatus
+
+        brand = _make_brand(db_session)
+        cat = _make_category(db_session)
+        bp = _make_blueprint(db_session, brand.id, category_id=cat.id, article_name="Zaino Travel")
+
+        # Initial stock: 1 article
+        sup = Supplier(company_name="Test Supplier")
+        db_session.add(sup)
+        db_session.flush()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-001", document_date=date.today())
+        db_session.add(batch)
+        db_session.flush()
+
+        art = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="ZN-01",
+            status=ArticleStatus.AVAILABLE,
+            colors=["nero"]
+        )
+        db_session.add(art)
+        db_session.commit()
+
+        # Increase stock to 3
+        req_inc = CatalogUpdateRequest(quantity=3, color="nero")
+        res_inc = catalog_service.update_blueprint(db_session, bp.id, req_inc)
+        assert res_inc.status == "success"
+        assert "quantity" in res_inc.updated_fields
+
+        avail_count = db_session.query(Article).filter(
+            Article.article_blueprint_id == bp.id,
+            Article.status == ArticleStatus.AVAILABLE
+        ).count()
+        assert avail_count == 3
+
+        # Decrease stock to 1
+        req_dec = CatalogUpdateRequest(quantity=1, color="nero")
+        res_dec = catalog_service.update_blueprint(db_session, bp.id, req_dec)
+        assert res_dec.status == "success"
+
+        avail_count_dec = db_session.query(Article).filter(
+            Article.article_blueprint_id == bp.id,
+            Article.status == ArticleStatus.AVAILABLE
+        ).count()
+        assert avail_count_dec == 1
+
+        # Decrease stock to 0
+        req_zero = CatalogUpdateRequest(quantity=0, color="nero")
+        catalog_service.update_blueprint(db_session, bp.id, req_zero)
+        avail_count_zero = db_session.query(Article).filter(
+            Article.article_blueprint_id == bp.id,
+            Article.status == ArticleStatus.AVAILABLE
+        ).count()
+        assert avail_count_zero == 0
+
+    def test_update_blueprint_category_and_subcategory(self, db_session):
+        from src.services import catalog_service
+        from src.schemas.catalog import CatalogUpdateRequest
+        from src.models.pim import Category
+
+        brand = _make_brand(db_session)
+        macro_cat = Category(name="Valigeria", description="Valigeria")
+        db_session.add(macro_cat)
+        db_session.flush()
+
+        sub_cat = Category(name="Trolley", description="Trolley da viaggio", parent_id=macro_cat.id)
+        db_session.add(sub_cat)
+
+        other_macro = Category(name="Borse", description="Borse moda")
+        db_session.add(other_macro)
+        db_session.commit()
+
+        bp = _make_blueprint(db_session, brand.id, category_id=None, article_name="Trolley Rigido")
+
+        # Set to subcategory under Valigeria
+        req1 = CatalogUpdateRequest(category_name="Valigeria", sub_category_name="Trolley")
+        res1 = catalog_service.update_blueprint(db_session, bp.id, req1)
+        assert "category" in res1.updated_fields
+        db_session.refresh(bp)
+        assert bp.category_id == sub_cat.id
+
+        # Set to macro-category Borse
+        req2 = CatalogUpdateRequest(category_name="Borse", sub_category_name="")
+        res2 = catalog_service.update_blueprint(db_session, bp.id, req2)
+        assert "category" in res2.updated_fields
+        db_session.refresh(bp)
+        assert bp.category_id == other_macro.id
+
+    def test_warehouse_ui_quantity_and_category_elements_rendered(self, db_session):
+        client = TestClient(app)
+        res = client.get("/magazzino")
+        assert res.status_code == 200
+        # Desktop edit modal elements
+        assert "edit-article-qty" in res.text
+        assert "edit-article-macro-cat" in res.text
+        assert "edit-article-sub-cat" in res.text
+        # Mobile edit panel elements
+        assert "mob-art-qty" in res.text
+        assert "mob-art-macro-cat" in res.text
+        assert "mob-art-sub-cat" in res.text
 

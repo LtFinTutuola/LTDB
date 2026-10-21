@@ -135,7 +135,6 @@ async function handleSaveSettings(e) {
         const updated = await api.updateSettings(payload);
         initialSettings = { ...updated };
         populateForm(updated);
-        showToast('Impostazioni salvate con successo.');
     } catch (err) {
         showToast(`Errore durante il salvataggio: ${err.message}`, 'error');
     } finally {

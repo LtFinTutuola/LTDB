@@ -91,6 +91,7 @@ class SearchResultItem(BaseModel):
     blueprint_id: str
     article_name: str
     brand_name: str
+    brand_id: Optional[str] = None
     category_name: Optional[str] = None
     sub_category_name: Optional[str] = None
     description: Optional[str] = None
@@ -138,6 +139,9 @@ class CatalogUpdateRequest(BaseModel):
     vendor_code: Optional[str] = None
     barcode: Optional[str] = None
     color: Optional[str] = None
+    quantity: Optional[int] = None
+    category_name: Optional[str] = None
+    sub_category_name: Optional[str] = None
 
 
 class CatalogUpdateResponse(BaseModel):

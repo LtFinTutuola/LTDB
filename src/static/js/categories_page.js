@@ -331,7 +331,6 @@ async function handleSaveCategory(e) {
                 parent_id,
                 brand_ids: checkedBrands
             });
-            showToast('Categoria aggiornata con successo.');
         } else {
             await api.createCategory({
                 name,
@@ -493,7 +492,6 @@ async function handleSaveCategoryMobile(e) {
                 parent_id,
                 brand_ids: checkedBrands
             });
-            showToast('Categoria aggiornata con successo.');
         } else {
             await api.createCategory({
                 name,

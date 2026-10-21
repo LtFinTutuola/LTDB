@@ -59,7 +59,16 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
     has_barcode = "barcode" in update_data
     new_barcode = update_data.pop("barcode", None)
 
-    if not update_data and not has_vendor_code and not has_barcode:
+    has_category = "category_name" in update_data
+    has_sub_category = "sub_category_name" in update_data
+    category_name = update_data.pop("category_name", None)
+    sub_category_name = update_data.pop("sub_category_name", None)
+
+    has_quantity = "quantity" in update_data
+    new_quantity = update_data.pop("quantity", None)
+
+    if (not update_data and not has_vendor_code and not has_barcode 
+            and not has_category and not has_sub_category and not has_quantity):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No fields provided for update."
@@ -104,6 +113,88 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
         setattr(bp, field, value)
         if field in _DESCRIPTIVE_FIELDS:
             should_regenerate_embedding = True
+
+    # --- Apply category & sub-category ---
+    if has_category or has_sub_category:
+        clean_cat = category_name.strip() if category_name and isinstance(category_name, str) else None
+        clean_sub = sub_category_name.strip() if sub_category_name and isinstance(sub_category_name, str) else None
+
+        target_cat = None
+        if clean_sub:
+            sub_candidates = db.query(Category).filter(
+                Category.parent_id.isnot(None),
+                (func.lower(Category.name) == clean_sub.lower()) | (func.lower(Category.description) == clean_sub.lower())
+            ).all()
+            if clean_cat:
+                for sc in sub_candidates:
+                    parent = db.query(Category).filter(Category.id == sc.parent_id).first()
+                    if parent and (parent.name.lower() == clean_cat.lower() or parent.description.lower() == clean_cat.lower()):
+                        target_cat = sc
+                        break
+            if not target_cat and sub_candidates:
+                target_cat = sub_candidates[0]
+        elif clean_cat:
+            macro = db.query(Category).filter(
+                Category.parent_id.is_(None),
+                (func.lower(Category.name) == clean_cat.lower()) | (func.lower(Category.description) == clean_cat.lower())
+            ).first()
+            if macro:
+                target_cat = macro
+
+        bp.category_id = target_cat.id if target_cat else None
+        should_regenerate_embedding = True
+        updated_fields_list.append("category")
+
+    # --- Apply quantity (available stock) ---
+    if has_quantity:
+        if new_quantity is None or new_quantity < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La quantità deve essere un numero intero non negativo."
+            )
+
+        articles = db.query(Article).filter(Article.article_blueprint_id == bp.id).all()
+        if target_color and str(target_color).strip().lower() != "unknown":
+            norm_color = str(target_color).strip().lower()
+            target_articles = [
+                a for a in articles
+                if norm_color in [str(c).strip().lower() for c in (a.colors or [])]
+            ]
+        else:
+            target_articles = articles
+            norm_color = None
+
+        available_articles = [a for a in target_articles if a.status == ArticleStatus.AVAILABLE]
+        current_stock = len(available_articles)
+        diff = new_quantity - current_stock
+
+        if diff > 0:
+            from src.services.wms_service import register_inbound_movement
+            sup_code = next((a.supplier_code for a in target_articles if a.supplier_code), None)
+            ean_code = next((a.ean for a in target_articles if a.ean), None)
+            color_list = [norm_color] if norm_color else (target_articles[0].colors if target_articles and target_articles[0].colors else None)
+            register_inbound_movement(
+                db=db,
+                job_id=f"manual-{str(bp.id)[:8]}",
+                blueprint_id=str(bp.id),
+                quantity=diff,
+                supplier_code=sup_code,
+                ean=ean_code,
+                colors=color_list,
+                commit_changes=False
+            )
+        elif diff < 0:
+            to_remove = available_articles[:abs(diff)]
+            for art in to_remove:
+                db.query(ArticlePrice).filter(ArticlePrice.article_id == art.id).delete()
+                db.query(ArticleMovement).filter(ArticleMovement.article_id == art.id).delete()
+                db.query(SaleLine).filter(SaleLine.article_id == art.id).delete()
+                db.query(ExcelSale).filter(ExcelSale.article_id == art.id).update(
+                    {ExcelSale.article_id: None}
+                )
+                db.delete(art)
+
+        updated_fields_list.append("quantity")
 
     # --- Apply article variant fields (vendor_code / barcode) ---
     if has_vendor_code or has_barcode:
@@ -324,6 +415,7 @@ def list_latest_items(db: Session, limit: int = 50, offset: int = 0) -> dict:
                 blueprint_id=bp.id,
                 article_name=name,
                 brand_name=brand.name if brand else "Unknown",
+                brand_id=brand.id if brand else None,
                 category_name=main_category.name if main_category else None,
                 sub_category_name=sub_category.name if sub_category else None,
                 description=bp.description,

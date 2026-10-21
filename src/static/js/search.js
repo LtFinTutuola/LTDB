@@ -342,7 +342,6 @@ function _openEditPopup(item, cardEl) {
 
         try {
             await api.patchCatalogItem(item.blueprint_id, fields);
-            addMessage(`✅ Articolo "${item.article_name}" aggiornato.`, 'success');
             Object.assign(item, fields);
             overlay.remove();
             _doRender();

@@ -228,6 +228,7 @@ def _build_variant_items(
                 "blueprint_id": str(bp.id),
                 "article_name": name,
                 "brand_name": brand.name if brand else "Unknown",
+                "brand_id": str(brand.id) if brand else None,
                 "category_name": main_category.name if main_category else None,
                 "sub_category_name": sub_category.name if sub_category else None,
                 "description": bp.description,
