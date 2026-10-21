@@ -10,6 +10,7 @@
 #app-shell {
     display: flex;
     height: 100vh;
+    height: 100dvh;
     width: 100vw;
     overflow: hidden;
 }
@@ -20,9 +21,40 @@
     /* Default: Chat takes all remaining space, detail panel is 0px */
     grid-template-columns: 1fr 0px;
     height: 100vh;
+    height: 100dvh;
     transition: grid-template-columns 0.45s cubic-bezier(0.25, 0.1, 0.25, 1);
+    min-width: 0;
 }
 
 .canvas--split {
     grid-template-columns: 1fr 2fr;
+}
+
+/* ============================================================
+   RESPONSIVE CANVAS & APP SHELL (Mobile & Tablet <= 1024px)
+   ============================================================ */
+@media (max-width: 1024px) {
+    #app-shell {
+        flex-direction: column;
+        height: 100vh;
+        height: 100dvh;
+        width: 100vw;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .canvas {
+        height: calc(100dvh - var(--mobile-nav-height) - var(--safe-area-bottom));
+        grid-template-columns: 1fr 0px;
+        width: 100%;
+        overflow: hidden;
+    }
+
+    .canvas--split {
+        grid-template-columns: 1fr 0px;
+    }
+
+    .canvas.mobile-staging-open {
+        grid-template-columns: 0px 1fr !important;
+    }
 }

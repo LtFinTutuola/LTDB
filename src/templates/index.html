@@ -130,6 +130,17 @@
   .warehouse-toggle__input:checked ~ .warehouse-toggle__label {
     color: var(--text-primary);
   }
+  .warehouse-toggle__icon {
+    display: none;
+  }
+  .article-mobile-panel {
+    display: none !important;
+  }
+  .warehouse-row__mobile-meta,
+  .warehouse-row__mobile-meta-top,
+  .warehouse-row__mobile-meta-bottom {
+    display: none;
+  }
 
   /* Rounded Search Input (Center) */
   .search-input-wrapper {
@@ -355,12 +366,423 @@
   #form-edit-article .modal-footer {
     flex-shrink: 0;
   }
+
+  /* ---- Mobile & Tablet Responsive Styles (<= 768px / <= 1024px) ---- */
+  @media (max-width: 1024px) {
+    .magazzino-container {
+      height: 100%;
+      padding: var(--space-sm);
+    }
+    .magazzino-content {
+      padding: var(--space-sm);
+      border-radius: var(--radius-sm);
+    }
+  }
+
+  @media (max-width: 768px) {
+    .magazzino-header {
+      margin-bottom: var(--space-sm);
+      width: 100%;
+    }
+    #magazzino-tabs {
+      display: flex !important;
+      width: 100% !important;
+      box-sizing: border-box !important;
+      gap: 4px !important;
+    }
+    #magazzino-tabs .tab {
+      flex: 1 1 0 !important;
+      width: 33.333% !important;
+      min-width: 0 !important;
+      text-align: center !important;
+      padding: 8px 4px !important;
+      font-size: 12px !important;
+      font-weight: 500 !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      box-sizing: border-box !important;
+    }
+    .search-toolbar {
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+    }
+    .warehouse-toggle {
+      width: auto;
+      min-width: 0;
+      height: 38px;
+      padding: 0 10px;
+      gap: 6px;
+      flex-shrink: 0;
+      justify-content: center;
+      border-radius: var(--radius-pill);
+      box-sizing: border-box;
+    }
+    .warehouse-toggle__label {
+      display: none;
+    }
+    .warehouse-toggle__icon {
+      display: inline-flex;
+      font-size: 18px;
+      color: var(--text-muted);
+      transition: color var(--transition-fast);
+      order: 1;
+    }
+    .warehouse-toggle__slider {
+      width: 26px;
+      height: 15px;
+      order: 2;
+    }
+    .warehouse-toggle__slider::after {
+      width: 11px;
+      height: 11px;
+      top: 1px;
+      left: 1px;
+    }
+    .warehouse-toggle__input:checked + .warehouse-toggle__slider::after {
+      transform: translateX(11px);
+    }
+    .warehouse-toggle__input:checked ~ .warehouse-toggle__icon {
+      color: var(--accent);
+    }
+    .warehouse-toggle:has(.warehouse-toggle__input:checked) {
+      border-color: rgba(168, 199, 250, 0.45);
+      background: rgba(168, 199, 250, 0.12);
+    }
+    .search-input-wrapper {
+      flex: 1;
+      min-width: 0;
+      width: auto;
+    }
+    .search-input {
+      font-size: 15px;
+      height: 38px;
+      padding: 8px 30px 8px 34px;
+      box-sizing: border-box;
+    }
+    .search-input-icon {
+      left: 10px;
+      font-size: 18px;
+    }
+    .search-clear-btn {
+      right: 6px;
+      width: 22px;
+      height: 22px;
+    }
+    .search-btn {
+      width: 38px;
+      height: 38px;
+      min-width: 38px;
+      padding: 0;
+      border-radius: var(--radius-pill);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .search-btn span:not(.material-symbols-rounded) {
+      display: none;
+    }
+    #chat-panel.chat-panel {
+      height: 100% !important;
+      max-height: 100% !important;
+      overflow: hidden !important;
+    }
+    .magazzino-container {
+      height: 100% !important;
+      max-height: 100% !important;
+      position: relative !important;
+      overflow: hidden !important;
+    }
+    .warehouse-table thead {
+      display: none !important;
+    }
+    .warehouse-table {
+      display: block;
+      width: 100%;
+      border-collapse: collapse;
+      border-spacing: 0;
+    }
+    .warehouse-table tbody {
+      display: block;
+      width: 100%;
+    }
+    .warehouse-desktop-only {
+      display: none !important;
+    }
+    tr.warehouse-row {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      padding: 7px 4px;
+      margin: 0;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid var(--border-color);
+      border-radius: 0;
+      gap: 10px;
+      box-sizing: border-box;
+      width: 100%;
+      cursor: pointer;
+      transition: background var(--transition-fast);
+    }
+    tr.warehouse-row:hover,
+    tr.warehouse-row:active {
+      background: rgba(255, 255, 255, 0.04);
+    }
+    td.warehouse-row__cell--photo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      flex-shrink: 0;
+    }
+    td.warehouse-row__cell--photo .warehouse-row__photo {
+      width: 48px;
+      height: 48px;
+      border-radius: var(--radius-xs);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    td.warehouse-row__cell--photo img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    td.warehouse-row__cell--info {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      flex: 1;
+      min-width: 0;
+      padding: 0;
+      gap: 2px;
+    }
+    /* Line 1: Brand & Category */
+    .warehouse-row__mobile-meta-top {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      width: 100%;
+    }
+    .warehouse-row__mobile-brand {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex-shrink: 0;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .warehouse-row__mobile-cat-divider {
+      color: var(--text-muted);
+      font-size: 9px;
+      flex-shrink: 0;
+    }
+    .warehouse-row__mobile-category {
+      font-size: 11px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+      min-width: 0;
+    }
+    /* Line 2: Article Name */
+    .warehouse-row__title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.25;
+      width: 100%;
+    }
+    /* Line 3: Stock */
+    .warehouse-row__mobile-meta-bottom {
+      display: flex;
+      align-items: center;
+      margin-top: 1px;
+      white-space: nowrap;
+    }
+    .warehouse-row__mobile-meta-bottom .stock-badge {
+      font-size: 10.5px;
+      padding: 1px 7px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      line-height: 1.3;
+    }
+
+    /* Dedicated mobile panel for editing/deleting articles */
+    .article-mobile-panel {
+      position: absolute !important;
+      inset: 0 !important;
+      top: 0 !important;
+      left: 0 !important;
+      right: 0 !important;
+      bottom: 0 !important;
+      z-index: 60 !important;
+      background: var(--bg-surface) !important;
+      transform: translateX(100%) !important;
+      transition: transform 0.25s cubic-bezier(0.25, 0.1, 0.25, 1) !important;
+      display: flex !important;
+      flex-direction: column !important;
+      height: 100% !important;
+      max-height: 100% !important;
+      width: 100% !important;
+      min-height: 0 !important;
+      overflow: hidden !important;
+      box-sizing: border-box !important;
+    }
+    .magazzino-container.mobile-panel-open .article-mobile-panel {
+      transform: translateX(0) !important;
+    }
+    .article-mobile-panel__topbar {
+      position: relative !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+      padding: 0 8px !important;
+      background: var(--bg-elevated) !important;
+      border-bottom: 1px solid var(--border-color) !important;
+      flex-shrink: 0 !important;
+      height: 52px !important;
+      min-height: 52px !important;
+      box-sizing: border-box !important;
+    }
+    .article-panel-btn-back {
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      background: transparent !important;
+      border: none !important;
+      color: var(--text-secondary) !important;
+      cursor: pointer !important;
+      padding: 8px !important;
+      border-radius: var(--radius-sm) !important;
+      min-width: 40px !important;
+      min-height: 40px !important;
+      -webkit-tap-highlight-color: transparent !important;
+      z-index: 2 !important;
+      transition: color var(--transition-fast), background var(--transition-fast) !important;
+    }
+    .article-panel-btn-back:hover,
+    .article-panel-btn-back:focus {
+      color: var(--accent) !important;
+      background: rgba(255, 255, 255, 0.06) !important;
+    }
+    .article-panel-btn-back:active {
+      opacity: 0.7 !important;
+    }
+    .article-panel-title {
+      position: absolute !important;
+      left: 50% !important;
+      top: 50% !important;
+      transform: translate(-50%, -50%) !important;
+      margin: 0 !important;
+      font-size: 16px !important;
+      font-weight: 600 !important;
+      color: var(--text-primary) !important;
+      text-align: center !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      max-width: calc(100% - 100px) !important;
+      pointer-events: none !important;
+      line-height: 1 !important;
+    }
+    .article-panel-btn-delete {
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      background: transparent !important;
+      border: none !important;
+      color: var(--text-muted, #9AA0A6) !important;
+      cursor: pointer !important;
+      padding: 8px !important;
+      border-radius: var(--radius-sm) !important;
+      min-width: 40px !important;
+      min-height: 40px !important;
+      -webkit-tap-highlight-color: transparent !important;
+      z-index: 2 !important;
+      transition: color var(--transition-fast), background var(--transition-fast) !important;
+    }
+    .article-panel-btn-delete:hover,
+    .article-panel-btn-delete:focus {
+      color: var(--text-primary) !important;
+      background: rgba(255, 255, 255, 0.06) !important;
+    }
+    .article-panel-btn-delete:active {
+      color: var(--error) !important;
+      background: var(--error-dim) !important;
+    }
+    .article-panel-btn-back .material-symbols-rounded,
+    .article-panel-btn-delete .material-symbols-rounded {
+      font-size: 22px !important;
+      line-height: 1 !important;
+    }
+    .article-mobile-panel__body {
+      flex: 1 1 0% !important;
+      min-height: 0 !important;
+      height: 0 !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+      padding: 16px 16px 48px 16px !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      flex-direction: column !important;
+      -webkit-overflow-scrolling: touch !important;
+      overscroll-behavior-y: contain !important;
+    }
+    #form-article-mobile {
+      display: flex !important;
+      flex-direction: column !important;
+      flex-shrink: 0 !important;
+      width: 100% !important;
+      box-sizing: border-box !important;
+    }
+    .warehouse-table-wrapper {
+      -webkit-overflow-scrolling: touch;
+    }
+    .import-form-area {
+      padding-top: var(--space-md);
+      width: 100%;
+    }
+    #modal-edit-article .modal-card {
+      width: 95%;
+      max-height: 92vh;
+    }
+    #modal-edit-article .modal-card form .modal-body div[style*="grid-template-columns"] {
+      grid-template-columns: 1fr !important;
+    }
+    .action-btn {
+      min-width: 36px;
+      min-height: 36px;
+    }
+  }
 </style>
 {% endblock %}
 
 {% block content %}
 <section id="chat-panel" class="chat-panel" style="display: block; padding: 0;">
-    <div class="magazzino-container">
+    <div class="magazzino-container" id="magazzino-container">
         <div class="magazzino-header">
             <div class="tabs" id="magazzino-tabs">
                 <button class="tab active" data-tab="catalog">Magazzino</button>
@@ -374,14 +796,7 @@
             <div id="tab-catalog" class="tab-pane active">
                 <div class="search-bar-container">
                     <div class="search-toolbar">
-                        <!-- Toggle on the left -->
-                        <label class="warehouse-toggle" for="warehouse-stock-toggle">
-                            <input type="checkbox" id="warehouse-stock-toggle" class="warehouse-toggle__input">
-                            <span class="warehouse-toggle__slider"></span>
-                            <span class="warehouse-toggle__label">Mostra solo articoli disponibili</span>
-                        </label>
-
-                        <!-- Rounded search bar in the center -->
+                        <!-- Rounded search bar on the left -->
                         <div class="search-input-wrapper">
                             <span class="material-symbols-rounded search-input-icon">search</span>
                             <input type="text" id="warehouse-search-input" class="search-input" placeholder="Cerca articoli per nome, brand, categoria, codice o descrizione (es. borsa di Guess con tracolla)...">
@@ -390,8 +805,16 @@
                             </button>
                         </div>
 
+                        <!-- Toggle in the center -->
+                        <label class="warehouse-toggle" for="warehouse-stock-toggle" title="Mostra solo articoli disponibili">
+                            <input type="checkbox" id="warehouse-stock-toggle" class="warehouse-toggle__input">
+                            <span class="warehouse-toggle__slider"></span>
+                            <span class="material-symbols-rounded warehouse-toggle__icon">inventory_2</span>
+                            <span class="warehouse-toggle__label">Mostra solo articoli disponibili</span>
+                        </label>
+
                         <!-- Rounded search button on the right -->
-                        <button type="button" id="warehouse-search-btn" class="search-btn">
+                        <button type="button" id="warehouse-search-btn" class="search-btn" title="Cerca articoli">
                             <span class="material-symbols-rounded" style="font-size: 18px;">search</span>
                             <span>Cerca</span>
                         </button>
@@ -415,6 +838,77 @@
                 <div class="import-form-area" id="ddt-form-container">
                     <!-- Populated by JS -->
                 </div>
+            </div>
+        </div>
+
+        <!-- Dedicated Mobile Panel for Editing/Deleting Article -->
+        <div id="article-mobile-panel" class="article-mobile-panel" aria-label="Dettaglio e Modifica Articolo">
+            <div class="article-mobile-panel__topbar">
+                <button type="button" id="btn-article-panel-back" class="article-panel-btn-back" title="Torna al magazzino">
+                    <span class="material-symbols-rounded">arrow_back</span>
+                </button>
+                <h3 id="article-panel-title" class="article-panel-title">Dettaglio Articolo</h3>
+                <button type="button" id="btn-article-panel-delete" class="article-panel-btn-delete" title="Elimina Articolo">
+                    <span class="material-symbols-rounded">delete</span>
+                </button>
+            </div>
+            <div class="article-mobile-panel__body">
+                <form id="form-article-mobile" class="mobile-panel-form">
+                    <!-- Photo and Meta Preview Card -->
+                    <div class="mobile-art-preview" style="display: flex; gap: 14px; align-items: center; background: var(--bg-app); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-bottom: 14px;">
+                        <div id="mob-art-photo-wrap" style="width: 64px; height: 64px; border-radius: var(--radius-xs); overflow: hidden; background: var(--bg-elevated); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: zoom-in;">
+                            <img id="mob-art-photo" src="" alt="" style="width: 100%; height: 100%; object-fit: cover;">
+                            <span id="mob-art-photo-placeholder" style="font-size: 28px; display: none;">🖼</span>
+                        </div>
+                        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px;">
+                            <span id="mob-art-brand" style="color: var(--accent); font-weight: 600; font-size: 13px; text-transform: uppercase;"></span>
+                            <span id="mob-art-category" style="color: var(--text-secondary); font-size: 12px;"></span>
+                            <div>
+                                <span id="mob-art-stock" class="stock-badge"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-art-name" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Nome Articolo *</label>
+                        <input type="text" id="mob-art-name" class="form-control" required>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                            <label for="mob-art-vendor-code" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Codice Fornitore</label>
+                            <input type="text" id="mob-art-vendor-code" class="form-control" placeholder="Es. HWVG87...">
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                            <label for="mob-art-barcode" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Barcode (EAN)</label>
+                            <input type="text" id="mob-art-barcode" class="form-control" placeholder="Es. 800000...">
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-art-description" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Descrizione Breve *</label>
+                        <textarea id="mob-art-description" class="form-control" rows="2" required></textarea>
+                    </div>
+
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-art-ext-description" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Descrizione Estesa</label>
+                        <textarea id="mob-art-ext-description" class="form-control" rows="3"></textarea>
+                    </div>
+
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-art-tags" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Tags (separati da virgola) *</label>
+                        <input type="text" id="mob-art-tags" class="form-control" placeholder="Es. pelle, tracolla" required>
+                    </div>
+
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-art-materials" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Materiali (separati da virgola) *</label>
+                        <input type="text" id="mob-art-materials" class="form-control" placeholder="Es. ecopelle, metallo" required>
+                    </div>
+
+                    <button type="submit" id="btn-save-article-mobile" class="btn-primary" style="margin-top: 14px; margin-bottom: 24px; padding: 12px; width: 100%; font-weight: 600;">
+                        Salva Modifiche
+                    </button>
+                </form>
             </div>
         </div>
     </div>

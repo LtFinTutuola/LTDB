@@ -39,17 +39,22 @@ export function addMessage(text, type = 'system') {
 }
 
 export function enterSplitScreen() {
-    // If we're on the Magazzino page, the layout is just replacing the chat-panel with magazzino-container.
-    // The workspace is hidden by default. We should just show the detail-panel by modifying the grid layout.
     const canvas = document.getElementById('canvas');
     if (canvas) {
-        canvas.style.gridTemplateColumns = '550px 1fr';
+        if (window.innerWidth <= 1024) {
+            canvas.classList.add('mobile-staging-open');
+            canvas.style.gridTemplateColumns = '0px 1fr';
+        } else {
+            canvas.classList.remove('mobile-staging-open');
+            canvas.style.gridTemplateColumns = '550px 1fr';
+        }
     }
 }
 
 export function exitSplitScreen() {
     const canvas = document.getElementById('canvas');
     if (canvas) {
+        canvas.classList.remove('mobile-staging-open');
         canvas.style.gridTemplateColumns = '1fr 0px';
     }
 }

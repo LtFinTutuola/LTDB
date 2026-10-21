@@ -1,5 +1,15 @@
 import * as api from './api.js';
 
+function _esc(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 const CATEGORY_COLUMNS = [
     { index: 0, header: 'B' },
     { index: 1, header: 'Sam/AT' },
@@ -58,7 +68,9 @@ const dom = {
     substitutesSection: document.getElementById('substitutes-section'),
     substitutesContainer: document.getElementById('substitutes-container'),
     
-    page: document.querySelector('.sales-page')
+    page: document.querySelector('.sales-page'),
+    btnMobileOpenGemini: document.getElementById('btn-mobile-open-gemini'),
+    btnMobileBackToTable: document.getElementById('btn-mobile-back-to-table')
 };
 
 // Intersection Observer for lazy loading images
@@ -116,6 +128,7 @@ function init() {
         tab.addEventListener('click', () => {
             mainTabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
+            if (dom.page) dom.page.classList.remove('mobile-panel-open');
             
             const target = tab.dataset.tab;
             if (target === 'sales') {
@@ -167,6 +180,19 @@ function init() {
         e.stopPropagation();
         closeContextTab();
     });
+
+    if (dom.btnMobileOpenGemini) {
+        dom.btnMobileOpenGemini.addEventListener('click', () => {
+            switchTab('chat');
+            if (dom.page) dom.page.classList.add('mobile-panel-open');
+        });
+    }
+
+    if (dom.btnMobileBackToTable) {
+        dom.btnMobileBackToTable.addEventListener('click', () => {
+            if (dom.page) dom.page.classList.remove('mobile-panel-open');
+        });
+    }
 
     document.addEventListener('keydown', handleKeyNav);
 
@@ -290,38 +316,46 @@ function renderTable() {
         const tr = document.createElement('tr');
         tr.dataset.saleId = sale.id;
         tr.dataset.rowIndex = idx; // DOM row index
+        if (sale.status === 'ORPHAN') tr.classList.add('status-row--orphan');
+        else if (sale.status === 'UNPROCESSABLE') tr.classList.add('status-row--unprocessable');
+        else if (sale.status === 'RECONCILED') tr.classList.add('status-row--reconciled');
 
-        // Col 0: Status indicator
-        const tdStatus = document.createElement('td');
-        tdStatus.className = 'col-status';
-        if (sale.status === 'ORPHAN') tdStatus.classList.add('status-cell--orphan');
-        else if (sale.status === 'UNPROCESSABLE') tdStatus.classList.add('status-cell--unprocessable');
-        else if (sale.status === 'RECONCILED') tdStatus.classList.add('status-cell--reconciled');
+        // Col 0: Prezzo di listino
+        const tdPriceList = document.createElement('td');
+        tdPriceList.className = 'col-price-list';
+        tdPriceList.textContent = sale.starting_price !== null && sale.starting_price !== undefined
+            ? `€ ${Number(sale.starting_price).toFixed(2).replace(/\.00$/, '')}`
+            : '-';
+        tr.appendChild(tdPriceList);
 
-        tdStatus.textContent = sale.excel_row_index;
-        tr.appendChild(tdStatus);
-
-        // Col 1: PL (starting price)
-        const tdPL = document.createElement('td');
-        tdPL.textContent = sale.starting_price !== null ? sale.starting_price : '';
-        tr.appendChild(tdPL);
-
-        // Col 2-9: Categories
-        CATEGORY_COLUMNS.forEach(cat => {
-            const tdCat = document.createElement('td');
-            if (sale.excel_file_column === cat.index && sale.selling_price !== null) {
-                tdCat.textContent = sale.selling_price;
-                tdCat.style.fontWeight = 'bold';
+        // Col 1: Prezzo finale
+        const tdPriceFinal = document.createElement('td');
+        tdPriceFinal.className = 'col-price-final';
+        if (sale.selling_price !== null && sale.selling_price !== undefined) {
+            const formatted = `€ ${Number(sale.selling_price).toFixed(2).replace(/\.00$/, '')}`;
+            if (sale.is_exchange) {
+                tdPriceFinal.innerHTML = `${formatted} <span class="chip chip--small chip--exchange" title="Reso">Reso</span>`;
             } else {
-                tdCat.textContent = '';
+                tdPriceFinal.textContent = formatted;
             }
-            tr.appendChild(tdCat);
-        });
+        } else {
+            tdPriceFinal.textContent = '-';
+        }
+        tr.appendChild(tdPriceFinal);
 
-        // Col 10: Reconciliation
-        const tdRecon = document.createElement('td');
-        renderReconCell(tdRecon, sale);
-        tr.appendChild(tdRecon);
+        // Col 2: Colonna excel
+        const tdExcelCol = document.createElement('td');
+        tdExcelCol.className = 'col-excel-col';
+        const colDef = CATEGORY_COLUMNS.find(c => c.index === sale.excel_file_column);
+        const colLabel = colDef ? colDef.header : (sale.excel_file_column !== null && sale.excel_file_column !== undefined ? `Col ${sale.excel_file_column}` : '-');
+        tdExcelCol.innerHTML = `<span class="chip chip--small" style="font-weight: 600;">${_esc(colLabel)}</span>`;
+        tr.appendChild(tdExcelCol);
+
+        // Col 3: Articolo
+        const tdArticle = document.createElement('td');
+        tdArticle.className = 'col-article';
+        renderReconCell(tdArticle, sale);
+        tr.appendChild(tdArticle);
 
         // Cell click handling for active state
         Array.from(tr.children).forEach((td, colIdx) => {
@@ -367,41 +401,66 @@ function renderReconCell(td, sale) {
     container.className = 'recon-cell';
 
     if (sale.status === 'RECONCILED') {
+        const card = document.createElement('div');
+        card.className = 'search-preview-card search-preview-card--sale';
+
         const photoHtml = sale.photo_url
-            ? `<img data-src="${sale.photo_url}" class="recon-photo" alt="Foto">`
-            : ``;
+            ? `<img data-src="${sale.photo_url}" src="${sale.photo_url}" alt="${_esc(sale.article_name || 'Articolo')}" onerror="this.parentElement.innerHTML='<span class=\\'preview-card__photo-placeholder\\'>🖼</span>'">`
+            : `<span class="preview-card__photo-placeholder">🖼</span>`;
 
-        container.innerHTML = photoHtml;
-        
-        container.onclick = (e) => {
-            if (sale.photo_url) {
+        card.innerHTML = `
+            <div class="preview-card__photo">${photoHtml}</div>
+            <div class="preview-card__info">
+                <div class="preview-card__name" title="${_esc(sale.article_name || 'Articolo')}">${_esc(sale.article_name || 'Articolo')}</div>
+                <div class="preview-card__meta">
+                    ${sale.brand_name ? `<span class="preview-card__brand">${_esc(sale.brand_name)}</span>` : ''}
+                    ${sale.category_name ? `<span class="preview-card__cat">${_esc(sale.category_name)}</span>` : ''}
+                </div>
+            </div>
+            <span class="material-symbols-rounded preview-card__chevron">chevron_right</span>
+        `;
+
+        const photoEl = card.querySelector('.preview-card__photo');
+        if (photoEl && sale.photo_url) {
+            photoEl.addEventListener('click', (e) => {
+                e.stopPropagation();
                 openImageModal(sale.photo_url);
-            }
-        };
+            });
+        }
 
-        const img = container.querySelector('img');
+        card.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openContextTab(sale);
+        });
+
+        const img = card.querySelector('img[data-src]');
         if (img) lazyLoadObserver.observe(img);
 
+        container.appendChild(card);
     } else if (sale.status === 'UNPROCESSABLE') {
-        container.innerHTML = `<span style="color: var(--error)">Errore dati origine</span>`;
+        container.innerHTML = `<span class="stock-badge stock-badge--zero">Dati non validi</span>`;
     } else {
         // ORPHAN
         const defaultVal = sale.raw_article_code || '';
 
         const btn = document.createElement('button');
-        btn.className = 'btn-add-recon';
-        if (defaultVal) btn.classList.add('has-badge');
-        btn.innerHTML = '+';
+        btn.type = 'button';
+        btn.className = 'btn-add-recon-card';
+        btn.innerHTML = `
+            <span class="material-symbols-rounded" style="font-size: 18px;">add</span>
+            <span>Associa Articolo</span>
+            ${defaultVal ? `<span class="chip chip--small" style="margin-left: 6px;">${_esc(defaultVal)}</span>` : ''}
+        `;
 
         btn.onclick = (e) => {
             e.stopPropagation(); // Prevent td click from double firing if any
             const tr = dom.tbody.querySelector(`tr[data-sale-id="${sale.id}"]`);
             if (tr) {
                 const idx = parseInt(tr.dataset.rowIndex, 10);
-                if (!isNaN(idx)) setActiveCell(idx, 10, true, true);
+                if (!isNaN(idx)) setActiveCell(idx, 3, true, true);
             }
         };
-        
+
         container.appendChild(btn);
     }
     td.appendChild(container);
@@ -487,16 +546,16 @@ function handleCandidateConfirm(sale, cand) {
     // 1. Update local state
     sale.status = 'RECONCILED';
     sale.article_name = cand.article_name;
+    sale.brand_name = cand.brand_name || sale.brand_name;
+    sale.category_name = cand.category_name || sale.category_name;
     sale.photo_url = cand.photo_serving_endpoint_url;
 
     // 2. Update DOM row in place
     const tr = dom.tbody.querySelector(`tr[data-sale-id="${sale.id}"]`);
     if (tr) {
-        const tdStatus = tr.querySelector('.col-status');
-        tdStatus.className = 'col-status status-cell--reconciled';
-
-        const tdRecon = tr.querySelector('td:last-child');
-        renderReconCell(tdRecon, sale);
+        tr.className = 'status-row--reconciled';
+        const tdRecon = tr.querySelector('.col-article') || tr.querySelector('td:last-child');
+        if (tdRecon) renderReconCell(tdRecon, sale);
     }
 
     closeContextTab();
@@ -507,7 +566,7 @@ function handleCandidateConfirm(sale, cand) {
         const nextTr = dom.tbody.children[nextOrphanIdx];
         if (nextTr) {
             nextTr.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            setActiveCell(nextOrphanIdx, 10, true, true); // focus the recon cell
+            setActiveCell(nextOrphanIdx, 3, true, true); // focus the recon cell (col 3)
         }
     }
 }
@@ -535,6 +594,7 @@ function switchTab(mode) {
 function openContextTab(sale) {
     dom.workPanelTabs.style.display = 'flex';
     state.activeSaleId = sale.id;
+    if (dom.page) dom.page.classList.add('mobile-panel-open');
     
     if (sale.status === 'ORPHAN') {
         dom.tabContextTitle.textContent = 'Ricerca Articolo';
@@ -563,6 +623,7 @@ function closeContextTab() {
     state.activeSaleId = null;
     dom.tabContextTitle.textContent = 'Contesto';
     dom.workPanelTabs.style.display = 'none';
+    if (dom.page) dom.page.classList.remove('mobile-panel-open');
     switchTab('chat');
 }
 
@@ -670,7 +731,7 @@ function setActiveCell(rowIndex, colIndex, triggerContext = false, shouldFocus =
 
             // Only manage focus if explicitly requested (e.g. user clicked on cell or explicit navigation)
             if (shouldFocus) {
-                if (colIndex === 10) {
+                if (colIndex === 3) {
                     const input = newTd.querySelector('input');
                     if (input) input.focus();
                 } else {
@@ -699,7 +760,7 @@ function handleKeyNav(e) {
 
     let { row, col } = state.activeCell;
     const maxRow = state.sales.length - 1;
-    const maxCol = 10;
+    const maxCol = 3;
 
     let changed = false;
 

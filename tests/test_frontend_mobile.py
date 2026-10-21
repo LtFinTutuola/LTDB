@@ -1,0 +1,489 @@
+"""
+tests/test_frontend_mobile.py
+------------------------------
+Verifies that all frontend pages and assets include the responsive mobile
+optimizations, viewport meta tag, mobile navigation bars, and mobile CSS rules,
+ensuring seamless compatibility between desktop and mobile environments.
+"""
+from fastapi.testclient import TestClient
+from src.main import app
+
+
+def test_mobile_viewport_and_navigation_across_pages(db_session):
+    """
+    Verify that all key SPA pages render the responsive viewport tag with viewport-fit=cover
+    and include the mobile topbar and mobile bottom navigation with all 5 main links.
+    """
+    client = TestClient(app)
+    pages = [
+        ("/vendite", "Vendite"),
+        ("/magazzino", "Magazzino"),
+        ("/brands", "Brands"),
+        ("/categories", "Categorie"),
+        ("/settings", "Impostazioni"),
+    ]
+
+    for route, expected_title in pages:
+        res = client.get(route)
+        assert res.status_code == 200, f"Page {route} failed with status {res.status_code}"
+        html = res.text
+
+        # 1. Viewport meta tag
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">' in html, (
+            f"Page {route} missing viewport-fit=cover meta tag"
+        )
+
+        # 2. Mobile topbar contains only logo and page heading (no 'La Triestina', no admin chip)
+        assert 'id="mobile-topbar"' in html, f"Page {route} missing mobile topbar"
+        topbar_start = html.find('id="mobile-topbar"')
+        topbar_end = html.find('</header>', topbar_start)
+        topbar_html = html[topbar_start:topbar_end]
+        assert 'La Triestina' not in topbar_html, f"Page {route} topbar still contains 'La Triestina'"
+        assert 'chip--admin' not in topbar_html, f"Page {route} topbar still contains admin chip"
+        assert 'class="mobile-topbar__logo"' in topbar_html, f"Page {route} topbar missing logo"
+        assert 'class="mobile-topbar__page-title"' in topbar_html, f"Page {route} topbar missing page title"
+
+        # 3. Mobile bottom navigation with 5 routes
+        assert 'id="mobile-bottom-nav"' in html, f"Page {route} missing mobile bottom nav"
+        assert 'href="/vendite"' in html
+        assert 'href="/magazzino"' in html
+        assert 'href="/brands"' in html
+        assert 'href="/categories"' in html
+        assert 'href="/settings"' in html
+
+        # 4. Material symbols for mobile navigation
+        assert "point_of_sale" in html
+        assert "inventory_2" in html
+        assert "style" in html
+        assert "category" in html
+        assert "settings" in html
+
+
+def test_vendite_mobile_controls_rendered(db_session):
+    """
+    Verify that the Vendite page includes the mobile Gemini trigger button
+    and the mobile back button for returning from the work panel.
+    """
+    client = TestClient(app)
+    res = client.get("/vendite")
+    assert res.status_code == 200
+    html = res.text
+
+    assert 'id="btn-mobile-open-gemini"' in html
+    assert 'class="btn-mobile-gemini-trigger"' in html
+    assert 'id="btn-mobile-back-to-table"' in html
+    assert 'class="btn-mobile-back"' in html
+
+
+def test_responsive_css_rules_served():
+    """
+    Verify that layout.css, sidebar.css, sales_table.css, and pim_crud.css
+    contain responsive media queries and mobile rules.
+    """
+    client = TestClient(app)
+
+    # 1. layout.css
+    res_layout = client.get("/static/css/layout.css")
+    assert res_layout.status_code == 200
+    assert "100dvh" in res_layout.text
+    assert "@media (max-width: 1024px)" in res_layout.text
+
+    # 2. sidebar.css
+    res_sidebar = client.get("/static/css/sidebar.css")
+    assert res_sidebar.status_code == 200
+    assert ".mobile-bottom-nav" in res_sidebar.text
+    assert ".mobile-topbar" in res_sidebar.text
+    assert "@media (max-width: 1024px)" in res_sidebar.text
+    assert "@media (min-width: 1025px)" in res_sidebar.text
+
+    # 3. sales_table.css
+    res_sales = client.get("/static/css/sales_table.css")
+    assert res_sales.status_code == 200
+    assert "mobile-panel-open" in res_sales.text
+    assert ".btn-mobile-gemini-trigger" in res_sales.text
+    assert ".mobile-panel-topbar" in res_sales.text
+    assert "@media (max-width: 1024px)" in res_sales.text
+
+    # 4. pim_crud.css
+    res_pim = client.get("/static/css/pim_crud.css")
+    assert res_pim.status_code == 200
+    assert "@media (max-width: 768px)" in res_pim.text
+
+
+def test_sales_page_js_mobile_handlers():
+    """
+    Verify that sales_page.js contains handlers for mobile-panel-open.
+    """
+    client = TestClient(app)
+    res_js = client.get("/static/js/sales_page.js")
+    assert res_js.status_code == 200
+    assert "btnMobileOpenGemini" in res_js.text
+    assert "btnMobileBackToTable" in res_js.text
+    assert "mobile-panel-open" in res_js.text
+
+
+def test_categories_mobile_elements_rendered(db_session):
+    """
+    Verify that /categories renders the mobile elements:
+    - Small '+' mobile button in the toolbar
+    - Dedicated mobile category panel with back button, title, delete button, and form
+    """
+    client = TestClient(app)
+    res = client.get("/categories")
+    assert res.status_code == 200
+    html = res.text
+
+    # 1. Container has categories-page class
+    assert 'class="pim-page categories-page"' in html
+
+    # 2. Add category mobile button sitting in toolbar row
+    assert 'id="btn-new-category-mobile"' in html
+    assert 'class="btn-add-category-mobile"' in html
+
+    # 3. Dedicated mobile panel structure
+    assert 'id="category-mobile-panel"' in html
+    assert 'id="btn-category-panel-back"' in html
+    assert 'id="category-panel-title"' in html
+    assert 'id="btn-category-panel-delete"' in html
+    assert 'id="form-category-mobile"' in html
+    assert 'id="mob-cat-name"' in html
+    assert 'id="mob-cat-description"' in html
+    assert 'id="mob-cat-parent"' in html
+    assert 'id="btn-save-category-mobile"' in html
+
+
+def test_categories_mobile_css_and_js():
+    """
+    Verify that pim_crud.css and categories_page.js contain all mobile rules
+    and logic for categories, including 2-row layout, centered header, and discreet delete button.
+    """
+    client = TestClient(app)
+
+    # 1. pim_crud.css
+    res_css = client.get("/static/css/pim_crud.css")
+    assert res_css.status_code == 200
+    css = res_css.text
+    assert ".categories-page" in css
+    assert ".btn-add-category-mobile" in css
+    assert ".category-mobile-panel" in css
+    assert "mobile-panel-open" in css
+    assert ".cat-type-icon--macro" in css
+    assert ".cat-name-text" in css
+    assert ".cat-desc-text" in css
+    assert "flex-direction: column" in css
+    assert "left: 50%" in css
+    assert "top: 50%" in css
+    assert ".category-panel-btn-delete" in css
+
+    # 2. categories_page.js
+    res_js = client.get("/static/js/categories_page.js")
+    assert res_js.status_code == 200
+    js = res_js.text
+    assert "openCategoryMobilePanel" in js
+    assert "closeCategoryMobilePanel" in js
+    assert "handleSaveCategoryMobile" in js
+    assert "btn-new-category-mobile" in js
+    assert "cat-type-icon" in js
+    assert "mobile-panel-open" in js
+    assert "Aggiungi Categoria" in js
+    assert "Modifica Categoria" in js
+
+
+def test_brands_mobile_elements_rendered(db_session):
+    """
+    Verify that /brands renders the mobile elements:
+    - Small '+' mobile button in the toolbar
+    - Dedicated mobile brand panel with back button, title, delete button, and form
+    """
+    client = TestClient(app)
+    res = client.get("/brands")
+    assert res.status_code == 200
+    html = res.text
+
+    # 1. Container has brands-page class
+    assert 'class="pim-page brands-page"' in html
+
+    # 2. Add brand mobile button sitting in toolbar row
+    assert 'id="btn-new-brand-mobile"' in html
+    assert 'class="btn-add-brand-mobile"' in html
+
+    # 3. Dedicated mobile panel structure
+    assert 'id="brand-mobile-panel"' in html
+    assert 'id="btn-brand-panel-back"' in html
+    assert 'id="brand-panel-title"' in html
+    assert 'id="btn-brand-panel-delete"' in html
+    assert 'id="form-brand-mobile"' in html
+    assert 'id="mob-brand-name"' in html
+    assert 'id="mob-brand-categories-list"' in html
+    assert 'id="btn-save-brand-mobile"' in html
+
+
+def test_brands_mobile_css_and_js():
+    """
+    Verify that pim_crud.css and brands_page.js contain all mobile rules
+    and logic for brands, including 2-row layout with category chips, centered header, and discreet delete button.
+    """
+    client = TestClient(app)
+
+    # 1. pim_crud.css
+    res_css = client.get("/static/css/pim_crud.css")
+    assert res_css.status_code == 200
+    css = res_css.text
+    assert ".brands-page" in css
+    assert ".btn-add-brand-mobile" in css
+    assert ".brand-mobile-panel" in css
+    assert ".brand-name-text" in css
+    assert ".brand-panel-title" in css
+    assert ".brand-panel-btn-delete" in css
+
+    # 2. brands_page.js
+    res_js = client.get("/static/js/brands_page.js")
+    assert res_js.status_code == 200
+    js = res_js.text
+    assert "openBrandMobilePanel" in js
+    assert "closeBrandMobilePanel" in js
+    assert "handleSaveBrandMobile" in js
+    assert "btn-new-brand-mobile" in js
+    assert "Aggiungi Brand" in js
+    assert "Modifica Brand" in js
+
+
+def test_magazzino_mobile_toolbar_elements(db_session):
+    """
+    Verify that /magazzino renders the mobile-optimized single-row toolbar elements:
+    - Search toolbar containing toggle, search bar, and search button
+    - Compact toggle containing inventory icon, slider, and label
+    - Search button with icon and text span
+    - Mobile CSS rules maintaining single-row layout and hiding button text and toggle label on mobile
+    """
+    client = TestClient(app)
+    res = client.get("/magazzino")
+    assert res.status_code == 200
+    html = res.text
+
+    # 1. Markup verification
+    assert 'class="search-toolbar"' in html
+    assert 'id="warehouse-stock-toggle"' in html
+    assert 'warehouse-toggle__icon' in html
+    assert 'inventory_2' in html
+    assert 'warehouse-toggle__label' in html
+    assert 'id="warehouse-search-input"' in html
+    assert 'id="warehouse-search-btn"' in html
+
+    # Verify inverted order: search input precedes stock toggle in the toolbar
+    search_pos = html.find('id="warehouse-search-input"')
+    toggle_pos = html.find('id="warehouse-stock-toggle"')
+    assert search_pos != -1 and toggle_pos != -1
+    assert search_pos < toggle_pos, "Expected search input to precede stock toggle in toolbar markup"
+
+    # 2. Desktop CSS verification (toggle icon hidden)
+    assert '.warehouse-toggle__icon {\n    display: none;\n  }' in html
+
+    # 3. Mobile CSS verification (@media (max-width: 768px))
+    assert 'flex-direction: row;' in html
+    assert '.warehouse-toggle__label {\n      display: none;\n    }' in html
+    assert '.search-btn span:not(.material-symbols-rounded) {\n      display: none;\n    }' in html
+
+
+def test_magazzino_mobile_articles_list_and_panel(db_session):
+    """
+    Verify that /magazzino renders:
+    - Tabs formatting where each tab takes exactly 1/3 of the space
+    - Dedicated mobile article panel with header (back, centered title, delete), scrollable body, and full form
+    - Mobile CSS rules: table headers hidden, table as non-card list with reduced padding, 3-row content (brand+cat, title, stock)
+    - Warehouse JS exports and references for mobile panel and 3-row list rendering
+    """
+    client = TestClient(app)
+    res = client.get("/magazzino")
+    assert res.status_code == 200
+    html = res.text
+
+    # 1. 1/3 tabs formatting
+    assert '#magazzino-tabs .tab {' in html
+    assert 'width: 33.333% !important;' in html
+    assert 'flex: 1 1 0 !important;' in html
+
+    # 2. Dedicated mobile article panel in markup
+    assert 'id="article-mobile-panel"' in html
+    assert 'id="btn-article-panel-back"' in html
+    assert 'id="article-panel-title"' in html
+    assert 'id="btn-article-panel-delete"' in html
+    assert 'id="form-article-mobile"' in html
+    assert 'id="mob-art-photo-wrap"' in html
+    assert 'id="mob-art-photo"' in html
+    assert 'id="mob-art-brand"' in html
+    assert 'id="mob-art-stock"' in html
+    assert 'id="mob-art-name"' in html
+    assert 'id="mob-art-vendor-code"' in html
+    assert 'id="mob-art-barcode"' in html
+    assert 'id="mob-art-description"' in html
+    assert 'id="mob-art-ext-description"' in html
+    assert 'id="mob-art-tags"' in html
+    assert 'id="mob-art-materials"' in html
+    assert 'id="btn-save-article-mobile"' in html
+
+    # 3. CSS rules for mobile list and scrollable panel
+    assert '.warehouse-table thead {\n      display: none !important;\n    }' in html
+    assert 'tr.warehouse-row {\n      display: flex;' in html
+    assert 'border-bottom: 1px solid var(--border-color);' in html
+    assert 'background: transparent;' in html
+    assert 'td.warehouse-row__cell--photo' in html
+    assert 'td.warehouse-row__cell--info' in html
+    assert '.warehouse-row__mobile-meta-top' in html
+    assert '.warehouse-row__mobile-brand' in html
+    assert '.warehouse-row__mobile-category' in html
+    assert '.warehouse-row__title' in html
+    assert '.warehouse-row__mobile-meta-bottom' in html
+    assert '.article-mobile-panel' in html
+    assert '.magazzino-container.mobile-panel-open .article-mobile-panel' in html
+    assert 'overflow-y: auto !important;' in html
+    assert '.warehouse-desktop-only {\n      display: none !important;\n    }' in html
+
+    # 4. Warehouse JS verification
+    res_js = client.get("/static/js/warehouse.js")
+    assert res_js.status_code == 200
+    js = res_js.text
+    assert "warehouse-row__cell--photo" in js
+    assert "warehouse-row__cell--info" in js
+    assert "warehouse-row__mobile-meta-top" in js
+    assert "warehouse-row__mobile-meta-bottom" in js
+    assert "warehouse-desktop-only" in js
+    assert "openArticleMobilePanel" in js
+    assert "closeArticleMobilePanel" in js
+    assert "_handleSaveArticleMobile" in js
+    assert "btn-article-panel-back" in js
+    assert "btn-article-panel-delete" in js
+
+
+def test_staging_mobile_elements_and_css(db_session):
+    """
+    Verify that workspace.css and staging.js contain the mobile responsive rules
+    and markup structure for staging items (single article import and DDT import):
+    - Flat continuous mobile list (.staging-mobile-list, .staging-mobile-item)
+    - Dedicated slide-in edit/delete panel (#staging-mobile-panel, .staging-mobile-panel)
+    - Mobile panel topbar with back button, centered title, discreet delete button
+    - Scrollable form with full fields (name, categories, codes, quantity, colors, descriptions, tags, materials)
+    - Photo proposal actions (Google search, manual URL, AI retry)
+    - Operations queue support for delete_item and update mutations
+    """
+    client = TestClient(app)
+
+    # 1. workspace.css rules
+    res_css = client.get("/static/css/workspace.css")
+    assert res_css.status_code == 200
+    css = res_css.text
+
+    assert ".staging-desktop-view" in css
+    assert ".staging-mobile-view" in css
+    assert ".staging-mobile-panel" in css
+    assert ".btn-close-panel--mobile" in css
+    assert ".btn-close-panel--desktop" in css
+    assert "@media (max-width: 768px)" in css
+    assert ".staging-mobile-list" in css
+    assert ".staging-mobile-item" in css
+    assert "mobile-staging-panel-open" in css
+    assert "transform: translateX(100%)" in css
+    assert "transform: translateX(0)" in css
+
+    # 2. staging.js functions and template markup
+    res_js = client.get("/static/js/staging.js")
+    assert res_js.status_code == 200
+    js = res_js.text
+
+    assert "openStagingMobilePanel" in js
+    assert "closeStagingMobilePanel" in js
+    assert "_buildMobileStagingList" in js
+    assert "_buildMobileStagingPanel" in js
+    assert "staging-mobile-item" in js
+    assert "staging-mobile-panel" in js
+    assert "btn-staging-mobile-back" in js
+    assert "staging-mobile-title" in js
+    assert "btn-staging-mobile-delete" in js
+    assert "form-staging-mobile" in js
+    assert "mob-staging-photo" in js
+    assert "mob-staging-btn-search" in js
+    assert "mob-staging-btn-manual" in js
+    assert "mob-staging-btn-retry" in js
+    assert "mob-staging-name" in js
+    assert "mob-staging-macro-cat" in js
+    assert "mob-staging-sub-cat" in js
+    assert "mob-staging-vendor-code" in js
+    assert "mob-staging-barcode" in js
+    assert "mob-staging-qty" in js
+    assert "mob-staging-colors" in js
+    assert "mob-staging-desc" in js
+    assert "mob-staging-ext-desc" in js
+    assert "mob-staging-tags" in js
+    assert "mob-staging-materials" in js
+    assert "btn-save-staging-mobile" in js
+    assert "_handleMobileSave" in js
+    assert "_handleMobileDelete" in js
+    assert "_enqueueDelete" in js
+    assert "delete_item" in js
+
+
+def test_vendite_four_columns_and_gemini_article_card(db_session):
+    """
+    Verify the simplified 4-column sales table and the Gemini preview card visualization for articles:
+    1. Vendite template renders exactly 4 columns: Prezzo di listino, Prezzo finale, Colonna excel, Articolo.
+    2. Old 11-column headers are removed from sales table.
+    3. Tabs 'Giornata' and 'Storico' are removed, keeping only 'Vendite di giornata' title.
+    4. CSS defines 4 column layout classes and .search-preview-card--sale styling.
+    5. JS constructs .search-preview-card.search-preview-card--sale with photo, info, name, brand, cat, chevron.
+    """
+    client = TestClient(app)
+
+    # 1. Template check
+    res = client.get("/vendite")
+    assert res.status_code == 200
+    html = res.text
+
+    assert 'id="sales-table"' in html
+    sales_table_html = html.split('id="sales-table"')[1].split('</table>')[0]
+    assert '<th class="col-price-list">Prezzo di listino</th>' in sales_table_html
+    assert '<th class="col-price-final">Prezzo finale</th>' in sales_table_html
+    assert '<th class="col-excel-col">Colonna excel</th>' in sales_table_html
+    assert '<th class="col-article">Articolo</th>' in sales_table_html
+
+    # Confirm old 11-column th are removed from sales-table
+    assert '<th class="col-status">#</th>' not in sales_table_html
+    assert '<th class="col-price">PL</th>' not in sales_table_html
+    assert '<th class="col-recon">Articolo</th>' not in sales_table_html
+
+    # Confirm tabs Giornata and Storico are removed
+    assert '<button class="tab" data-tab="stats">Giornata</button>' not in html
+    assert '<button class="tab" data-tab="history">Storico</button>' not in html
+    assert 'Vendite di giornata' in html
+
+    # 2. CSS check
+    res_css = client.get("/static/css/sales_table.css")
+    assert res_css.status_code == 200
+    css = res_css.text
+    assert ".col-price-list" in css
+    assert ".col-price-final" in css
+    assert ".col-excel-col" in css
+    assert ".col-article" in css
+    assert ".search-preview-card--sale" in css
+    assert ".search-preview-card--sale .preview-card__photo" in css
+    assert ".search-preview-card--sale .preview-card__meta" in css
+
+    # 3. JS check
+    res_js = client.get("/static/js/sales_page.js")
+    assert res_js.status_code == 200
+    js = res_js.text
+    assert "search-preview-card--sale" in js
+    assert "preview-card__photo" in js
+    assert "preview-card__name" in js
+    assert "preview-card__brand" in js
+    assert "preview-card__cat" in js
+    assert "preview-card__chevron" in js
+    assert "col-price-list" in js
+    assert "col-price-final" in js
+    assert "col-excel-col" in js
+    assert "col-article" in js
+
+
+
+
+
+

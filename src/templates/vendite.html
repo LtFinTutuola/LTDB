@@ -13,11 +13,7 @@
         <div class="sales-page__wrapper">
             <div class="sales-page__header">
                 <div class="sales-page__header-left">
-                    <div class="tabs">
-                        <button class="tab active" data-tab="sales">Vendite</button>
-                        <button class="tab" data-tab="stats">Giornata</button>
-                        <button class="tab" data-tab="history">Storico</button>
-                    </div>
+                    <h2 class="sales-page__title" style="margin: 0; font-size: 1.15rem; font-weight: 600; color: var(--text-primary);">Vendite di giornata</h2>
                 </div>
                 <div class="sales-page__header-right" style="display: flex; gap: 12px; align-items: center;">
                     <div class="sync-indicator" id="syncIndicator" title="Ultima sincronizzazione: in attesa..."
@@ -27,6 +23,10 @@
                         <span class="sync-text">Ultima sincronizzazione: ...</span>
                     </div>
                     <input type="date" id="date-picker" class="form-control form-control--sm" title="Seleziona data">
+                    <button id="btn-mobile-open-gemini" class="btn-mobile-gemini-trigger" type="button" title="Apri Assistente Gemini">
+                        <img src="/static/assets/google-gemini-icon.webp" alt="Gemini" class="btn-mobile-gemini-trigger__icon">
+                        <span>Gemini</span>
+                    </button>
                 </div>
             </div>
 
@@ -34,17 +34,10 @@
                 <table class="sales-table" id="sales-table">
                     <thead>
                         <tr>
-                            <th class="col-status">#</th>
-                            <th class="col-price">PL</th>
-                            <th class="col-cat">B</th>
-                            <th class="col-cat">Sam/AT</th>
-                            <th class="col-cat">V</th>
-                            <th class="col-cat">PP</th>
-                            <th class="col-cat">C</th>
-                            <th class="col-cat">CAR</th>
-                            <th class="col-cat">BORSELLI</th>
-                            <th class="col-cat">O+A</th>
-                            <th class="col-recon">Articolo</th>
+                            <th class="col-price-list">Prezzo di listino</th>
+                            <th class="col-price-final">Prezzo finale</th>
+                            <th class="col-excel-col">Colonna excel</th>
+                            <th class="col-article">Articolo</th>
                         </tr>
                     </thead>
                     <tbody id="sales-tbody">
@@ -131,6 +124,12 @@
     <div class="sales-page__panel" id="work-panel">
         <div class="work-panel__resizer" id="work-panel-resizer"
             title="Trascina il bordo per ridimensionare il pannello"></div>
+        <div class="mobile-panel-topbar" id="mobile-panel-topbar">
+            <button type="button" id="btn-mobile-back-to-table" class="btn-mobile-back">
+                <span class="material-symbols-rounded">arrow_back</span>
+                <span>Torna alla tabella vendite</span>
+            </button>
+        </div>
         <div class="tabs" id="work-panel-tabs"
             style="display: none; padding: var(--space-md) var(--space-md) 0 var(--space-md);">
             <button class="tab active" data-mode="chat" id="tab-chat">Gemini</button>

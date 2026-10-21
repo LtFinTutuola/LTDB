@@ -7,7 +7,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="pim-page">
+<div class="pim-page categories-page">
     <!-- Header -->
     <header class="pim-header">
         <div class="pim-header__title-group">
@@ -27,7 +27,7 @@
 
     <!-- Toolbar -->
     <div class="pim-toolbar">
-        <div style="display: flex; gap: var(--space-md); flex: 1; align-items: center;">
+        <div class="pim-toolbar__row" style="display: flex; gap: var(--space-md); flex: 1; align-items: center;">
             <div class="pim-search">
                 <span class="material-symbols-rounded">search</span>
                 <input type="text" id="search-categories" placeholder="Cerca categoria per nome o descrizione...">
@@ -39,6 +39,9 @@
                     <option value="sub">Solo Sottocategorie</option>
                 </select>
             </div>
+            <button id="btn-new-category-mobile" class="btn-add-category-mobile" type="button" title="Nuova Categoria">
+                <span class="material-symbols-rounded">add</span>
+            </button>
         </div>
         <div id="categories-count" class="pim-stats">Caricamento...</div>
     </div>
@@ -71,6 +74,59 @@
         <div id="empty-state" class="pim-empty-state" style="display: none;">
             <span class="material-symbols-rounded">category</span>
             <p>Nessuna categoria trovata.</p>
+        </div>
+    </div>
+
+    <!-- Mobile Dedicated Panel: Create / Edit Category -->
+    <div id="category-mobile-panel" class="category-mobile-panel">
+        <div class="category-mobile-panel__topbar">
+            <button type="button" id="btn-category-panel-back" class="category-panel-btn-back" title="Torna indietro" aria-label="Torna indietro">
+                <span class="material-symbols-rounded">arrow_back</span>
+            </button>
+            <h3 id="category-panel-title" class="category-panel-title">Modifica Categoria</h3>
+            <button type="button" id="btn-category-panel-delete" class="category-panel-btn-delete" title="Elimina Categoria" aria-label="Elimina Categoria">
+                <span class="material-symbols-rounded">delete</span>
+            </button>
+        </div>
+        <div class="category-mobile-panel__body">
+            <form id="form-category-mobile">
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px;">
+                    <label for="mob-cat-name" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Nome Categoria *</label>
+                    <input type="text" id="mob-cat-name" class="form-control" placeholder="Es. Valigie, Borse..." required>
+                </div>
+
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px;">
+                    <label for="mob-cat-description" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Descrizione</label>
+                    <textarea id="mob-cat-description" class="form-control" rows="3" placeholder="Breve descrizione merceologica..."></textarea>
+                </div>
+
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px;">
+                    <label for="mob-cat-parent" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Livello / Categoria Padre</label>
+                    <select id="mob-cat-parent" class="form-control">
+                        <!-- Populated by JS -->
+                    </select>
+                </div>
+
+                <div id="mob-section-brands" class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px;">
+                    <label style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Brand Trattanti</label>
+                    <span style="font-size: 11px; color: var(--text-muted);">Seleziona i marchi che producono o distribuiscono questa macro-categoria:</span>
+                    <div id="mob-cat-brands-list" class="multi-select-box">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <div id="mob-sub-inherit-hint" style="display: none; padding: 10px; background: rgba(168, 199, 250, 0.08); border: 1px solid var(--accent-dim); border-radius: var(--radius-sm); font-size: 12px; color: var(--accent); margin-bottom: 14px;">
+                    <span class="material-symbols-rounded" style="font-size: 16px; vertical-align: middle;">info</span>
+                    Questa sottocategoria eredita automaticamente i brand dalla macro-categoria genitore selezionata.
+                </div>
+
+                <div style="margin-top: auto; padding-top: 16px;">
+                    <button type="submit" id="btn-save-category-mobile" class="btn-primary" style="width: 100%; justify-content: center; min-height: 44px;">
+                        <span class="material-symbols-rounded">check</span>
+                        Salva Categoria
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 </div>

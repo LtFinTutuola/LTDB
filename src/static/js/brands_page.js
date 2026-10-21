@@ -60,8 +60,18 @@ const dom = {
     searchInput: document.getElementById('search-brands'),
     statsCount: document.getElementById('brands-count'),
     btnNew: document.getElementById('btn-new-brand'),
+    btnNewMobile: document.getElementById('btn-new-brand-mobile'),
     loading: document.getElementById('loading-indicator'),
     empty: document.getElementById('empty-state'),
+
+    // Mobile Dedicated Panel
+    mobilePanel: document.getElementById('brand-mobile-panel'),
+    btnPanelBack: document.getElementById('btn-brand-panel-back'),
+    panelBrandTitle: document.getElementById('brand-panel-title'),
+    btnPanelDelete: document.getElementById('btn-brand-panel-delete'),
+    formBrandMobile: document.getElementById('form-brand-mobile'),
+    mobInputBrandName: document.getElementById('mob-brand-name'),
+    mobCategoriesList: document.getElementById('mob-brand-categories-list'),
     
     // Modal Brand Form
     modalBrand: document.getElementById('modal-brand'),
@@ -132,7 +142,7 @@ function renderTable() {
         return `
             <tr data-id="${_esc(b.id)}">
                 <td>
-                    <span style="font-weight: 600; font-size: 14px;">${_esc(b.name)}</span>
+                    <span class="brand-name-text" style="font-weight: 600; font-size: 14px;">${_esc(b.name)}</span>
                 </td>
                 <td>${catBadges}</td>
                 <td>
@@ -238,6 +248,84 @@ async function handleConfirmDelete() {
         await api.deleteBrand(deletingBrand.id);
         showToast('Brand eliminato con successo.');
         closeDeleteModal();
+        closeBrandMobilePanel();
+        await loadData();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+// Mobile Panel Logic
+let currentMobileBrand = null;
+
+function openBrandMobilePanel(brand = null) {
+    currentMobileBrand = brand;
+    editingBrandId = brand ? brand.id : null;
+
+    if (dom.panelBrandTitle) {
+        dom.panelBrandTitle.textContent = brand ? 'Modifica Brand' : 'Aggiungi Brand';
+    }
+    if (dom.btnPanelDelete) {
+        dom.btnPanelDelete.style.visibility = brand ? 'visible' : 'hidden';
+        dom.btnPanelDelete.style.display = brand ? 'inline-flex' : 'none';
+    }
+
+    const saveBtn = document.getElementById('btn-save-brand-mobile');
+    if (saveBtn) {
+        saveBtn.innerHTML = brand
+            ? '<span class="material-symbols-rounded">check</span> Salva Modifiche'
+            : '<span class="material-symbols-rounded">add</span> Aggiungi Brand';
+    }
+
+    if (dom.mobInputBrandName) dom.mobInputBrandName.value = brand ? brand.name : '';
+
+    const selectedIds = new Set(brand && brand.category_ids ? brand.category_ids : []);
+    if (dom.mobCategoriesList) {
+        dom.mobCategoriesList.innerHTML = allMacroCategories.map(cat => {
+            const isChecked = selectedIds.has(cat.id) ? 'checked' : '';
+            return `
+                <label class="checkbox-item">
+                    <input type="checkbox" value="${_esc(cat.id)}" ${isChecked}>
+                    <span>${_esc(cat.name)}</span>
+                </label>
+            `;
+        }).join('');
+    }
+
+    const page = document.querySelector('.pim-page');
+    if (page) page.classList.add('mobile-panel-open');
+    if (dom.mobInputBrandName) setTimeout(() => dom.mobInputBrandName.focus(), 150);
+}
+
+function closeBrandMobilePanel() {
+    const page = document.querySelector('.pim-page');
+    if (page) page.classList.remove('mobile-panel-open');
+    currentMobileBrand = null;
+    editingBrandId = null;
+    if (dom.formBrandMobile) dom.formBrandMobile.reset();
+}
+
+async function handleSaveBrandMobile(e) {
+    e.preventDefault();
+    const name = dom.mobInputBrandName ? dom.mobInputBrandName.value.trim() : '';
+    if (!name) {
+        showToast('Inserisci il nome del brand.', 'error');
+        return;
+    }
+
+    const checkedCats = !dom.mobCategoriesList ? [] : Array.from(
+        dom.mobCategoriesList.querySelectorAll('input[type="checkbox"]:checked')
+    ).map(cb => cb.value);
+
+    try {
+        if (editingBrandId) {
+            await api.updateBrand(editingBrandId, { name, category_ids: checkedCats });
+            showToast('Brand aggiornato con successo.');
+        } else {
+            await api.createBrand({ name, category_ids: checkedCats });
+            showToast('Nuovo brand creato con successo.');
+        }
+        closeBrandMobilePanel();
         await loadData();
     } catch (err) {
         showToast(err.message, 'error');
@@ -251,9 +339,27 @@ document.addEventListener('DOMContentLoaded', () => {
     dom.searchInput.addEventListener('input', renderTable);
 
     dom.btnNew.addEventListener('click', () => openBrandModal(null));
+    if (dom.btnNewMobile) {
+        dom.btnNewMobile.addEventListener('click', () => openBrandMobilePanel(null));
+    }
     dom.btnCancelBrand.addEventListener('click', closeBrandModal);
     dom.btnCloseBrand.addEventListener('click', closeBrandModal);
     dom.formBrand.addEventListener('submit', handleSaveBrand);
+
+    // Mobile Panel listeners
+    if (dom.btnPanelBack) {
+        dom.btnPanelBack.addEventListener('click', closeBrandMobilePanel);
+    }
+    if (dom.btnPanelDelete) {
+        dom.btnPanelDelete.addEventListener('click', () => {
+            if (currentMobileBrand) {
+                openDeleteModal(currentMobileBrand);
+            }
+        });
+    }
+    if (dom.formBrandMobile) {
+        dom.formBrandMobile.addEventListener('submit', handleSaveBrandMobile);
+    }
 
     dom.btnCancelDelete.addEventListener('click', closeDeleteModal);
     dom.btnCloseDelete.addEventListener('click', closeDeleteModal);
@@ -273,6 +379,18 @@ document.addEventListener('DOMContentLoaded', () => {
             const id = deleteBtn.dataset.id;
             const b = allBrands.find(x => x.id === id);
             if (b) openDeleteModal(b);
+            return;
+        }
+
+        // On mobile view: tapping anywhere on the brand row opens dedicated edit panel
+        if (window.innerWidth <= 768) {
+            const row = e.target.closest('tr');
+            if (row && row.dataset.id) {
+                const b = allBrands.find(x => x.id === row.dataset.id);
+                if (b) {
+                    openBrandMobilePanel(b);
+                }
+            }
         }
     });
 

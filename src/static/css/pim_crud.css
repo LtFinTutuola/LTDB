@@ -517,3 +517,805 @@
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
+
+/* Mobile elements hidden by default on desktop */
+.btn-add-category-mobile,
+.btn-add-brand-mobile {
+    display: none;
+}
+.category-mobile-panel,
+.brand-mobile-panel {
+    display: none;
+}
+.cat-type-icon--sub {
+    display: none;
+}
+
+/* ============================================================
+   RESPONSIVE STYLES FOR PIM & CRUD (Mobile & Tablet <= 1024px)
+   ============================================================ */
+@media (max-width: 1024px) {
+    .pim-page {
+        height: 100%;
+        padding: var(--space-sm);
+    }
+}
+
+@media (max-width: 768px) {
+    .pim-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--space-sm);
+        margin-bottom: var(--space-sm);
+    }
+
+    .pim-header__title-group {
+        display: none; /* Titolo già presente nell'intestazione mobile superiore */
+    }
+
+    .settings-container .pim-header {
+        margin-bottom: 0 !important;
+        display: none;
+    }
+
+    .pim-actions {
+        width: 100%;
+    }
+
+    .pim-actions .btn-primary {
+        width: 100%;
+        justify-content: center;
+        min-height: 40px;
+    }
+
+    .pim-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--space-sm);
+    }
+
+    .pim-toolbar > div[style*="display: flex"] {
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--space-sm);
+        width: 100%;
+    }
+
+    .pim-search {
+        max-width: 100%;
+        width: 100%;
+    }
+
+    .pim-search input {
+        font-size: 16px;
+        padding: 10px 12px 10px 38px;
+    }
+
+    .pim-filter-group {
+        width: 100%;
+    }
+
+    .pim-select {
+        width: 100%;
+        font-size: 16px;
+        min-height: 42px;
+    }
+
+    .pim-stats {
+        text-align: right;
+    }
+
+    .pim-table-container {
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .pim-table th,
+    .pim-table td {
+        padding: 8px 10px;
+    }
+
+    /* Larger touch targets for action buttons */
+    .action-buttons {
+        gap: 8px;
+    }
+
+    .action-btn {
+        min-width: 36px;
+        min-height: 36px;
+        padding: 6px;
+    }
+
+    /* Modals responsive */
+    .modal-card {
+        width: 95%;
+        max-height: 92vh;
+    }
+
+    .modal-header {
+        padding: 12px 16px;
+    }
+
+    .modal-body {
+        padding: 16px;
+        gap: 12px;
+    }
+
+    .modal-footer {
+        padding: 12px 16px;
+        flex-direction: column-reverse;
+        gap: 8px;
+    }
+
+    .modal-footer button {
+        width: 100%;
+        justify-content: center;
+        min-height: 42px;
+    }
+
+    .multi-select-box {
+        max-height: 160px;
+    }
+
+    .checkbox-item {
+        min-height: 38px;
+        padding: 8px;
+        font-size: 14px;
+    }
+
+    .checkbox-item input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+    }
+
+    /* Form controls font size on mobile to prevent iOS zoom */
+    .form-control {
+        font-size: 16px;
+    }
+
+    /* Settings Page mobile styles */
+    .settings-container {
+        padding: 0 0 60px 0;
+        width: 100%;
+    }
+
+    .settings-card {
+        padding: 16px;
+        gap: 14px;
+        margin-bottom: 16px;
+    }
+
+    .settings-card__header {
+        padding-bottom: 10px;
+    }
+
+    .settings-actions {
+        flex-direction: column-reverse;
+        gap: 10px;
+        width: 100%;
+    }
+
+    .settings-actions button {
+        width: 100%;
+        justify-content: center;
+        min-height: 44px;
+    }
+
+    /* ============================================================
+       Categories Page Mobile Optimizations
+       ============================================================ */
+    .categories-page {
+        position: relative !important;
+        overflow: hidden !important;
+        padding: max(12px, var(--safe-area-top)) 12px 12px 12px !important;
+    }
+
+    /* Hide page top header completely on mobile to recover space */
+    .categories-page .pim-header {
+        display: none !important;
+    }
+
+    .categories-page .pim-toolbar {
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 8px !important;
+        margin-bottom: var(--space-sm) !important;
+    }
+
+    .categories-page .pim-toolbar__row {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 8px !important;
+        width: 100% !important;
+    }
+
+    .categories-page .pim-search {
+        flex: 1 !important;
+        max-width: none !important;
+        width: auto !important;
+    }
+
+    .categories-page .pim-search input {
+        font-size: 14px !important;
+        padding: 8px 12px 8px 36px !important;
+        height: 38px !important;
+        box-sizing: border-box !important;
+    }
+
+    /* Requirement: dropdown to select macro vs sub disappears completely */
+    .categories-page .pim-filter-group {
+        display: none !important;
+    }
+
+    .categories-page #categories-count {
+        display: none !important;
+    }
+
+    /* Requirement: add category button smaller, only '+' icon, on same row as search bar at right */
+    .categories-page .btn-add-category-mobile {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 38px !important;
+        height: 38px !important;
+        min-width: 38px !important;
+        border-radius: var(--radius-sm) !important;
+        background: var(--accent) !important;
+        color: #131314 !important;
+        border: none !important;
+        cursor: pointer !important;
+        flex-shrink: 0 !important;
+        box-sizing: border-box !important;
+        padding: 0 !important;
+        transition: background var(--transition-fast), transform 0.1s ease !important;
+    }
+
+    .categories-page .btn-add-category-mobile:active {
+        transform: scale(0.95) !important;
+    }
+
+    .categories-page .btn-add-category-mobile .material-symbols-rounded {
+        font-size: 22px !important;
+        font-weight: 600 !important;
+        line-height: 1 !important;
+    }
+
+    /* Requirement: Category list organized on TWO horizontal rows:
+       Row 1 (top): category name (and macro icon if macro) on the left
+       Row 2 (bottom): category description
+       No text wrapping: clipped with ellipsis if exceeds screen width */
+    .categories-page #categories-table thead {
+        display: none !important;
+    }
+
+    .categories-page #categories-table,
+    .categories-page #categories-table tbody {
+        display: block !important;
+        width: 100% !important;
+    }
+
+    .categories-page #categories-table tr {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        justify-content: center !important;
+        padding: 10px 14px !important;
+        border-bottom: 1px solid var(--border-color) !important;
+        cursor: pointer !important;
+        box-sizing: border-box !important;
+        gap: 3px !important;
+        background: var(--bg-surface) !important;
+        min-height: 52px !important;
+        width: 100% !important;
+        -webkit-tap-highlight-color: transparent !important;
+    }
+
+    .categories-page #categories-table tr:active {
+        background: var(--bg-hover) !important;
+    }
+
+    /* Subcategory visual indentation on mobile */
+    .categories-page #categories-table tr.sub-row {
+        padding-left: 28px !important;
+    }
+
+    /* Hide columns 3 through 6 (Brand Associati, Sottocat, Articoli, Azioni) */
+    .categories-page #categories-table th:nth-child(n+3),
+    .categories-page #categories-table td:nth-child(n+3) {
+        display: none !important;
+    }
+
+    /* Hide desktop category badges and unicode tree branch on mobile */
+    .categories-page .badge-category {
+        display: none !important;
+    }
+
+    .categories-page .tree-branch {
+        display: none !important;
+    }
+
+    /* Row 1 (top): Category icon (if macro) + Name */
+    .categories-page #categories-table td:first-child {
+        display: flex !important;
+        align-items: center !important;
+        padding: 0 !important;
+        border: none !important;
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    .categories-page #categories-table td:first-child .cat-cell-left {
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    .categories-page .cat-type-icon {
+        font-size: 18px !important;
+        flex-shrink: 0 !important;
+    }
+
+    .categories-page .cat-type-icon--macro {
+        color: var(--accent) !important;
+    }
+
+    /* Subcategories have NO icon on mobile */
+    .categories-page .sub-row .cat-type-icon {
+        display: none !important;
+    }
+
+    .categories-page .cat-name-text {
+        font-size: 14px !important;
+        font-weight: 500 !important;
+        color: var(--text-primary) !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        display: block !important;
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    /* Row 2 (bottom): Category description */
+    .categories-page #categories-table td:nth-child(2) {
+        display: block !important;
+        width: 100% !important;
+        padding: 0 !important;
+        border: none !important;
+        min-width: 0 !important;
+        text-align: left !important;
+    }
+
+    .categories-page .cat-desc-text {
+        font-size: 12px !important;
+        color: var(--text-muted) !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        text-align: left !important;
+        display: block !important;
+        width: 100% !important;
+        min-width: 0 !important;
+        line-height: 1.3 !important;
+    }
+
+    .categories-page .cat-desc-text:empty {
+        display: none !important;
+    }
+
+    /* Requirement: Dedicated mobile panel for editing/creating categories */
+    .category-mobile-panel {
+        position: absolute !important;
+        inset: 0 !important;
+        z-index: 60 !important;
+        background: var(--bg-surface) !important;
+        transform: translateX(100%) !important;
+        transition: transform 0.25s cubic-bezier(0.25, 0.1, 0.25, 1) !important;
+        display: flex !important;
+        flex-direction: column !important;
+        height: 100% !important;
+        width: 100% !important;
+        min-height: 0 !important;
+        box-sizing: border-box;
+    }
+
+    .categories-page.mobile-panel-open .category-mobile-panel {
+        transform: translateX(0) !important;
+    }
+
+    .category-mobile-panel__topbar {
+        position: relative !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        padding: 0 8px !important;
+        background: var(--bg-elevated) !important;
+        border-bottom: 1px solid var(--border-color) !important;
+        flex-shrink: 0 !important;
+        height: 52px !important;
+        min-height: 52px !important;
+        box-sizing: border-box !important;
+    }
+
+    .category-panel-btn-back {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        background: transparent !important;
+        border: none !important;
+        color: var(--text-secondary) !important;
+        cursor: pointer !important;
+        padding: 8px !important;
+        border-radius: var(--radius-sm) !important;
+        min-width: 40px !important;
+        min-height: 40px !important;
+        -webkit-tap-highlight-color: transparent !important;
+        z-index: 2 !important;
+        transition: color var(--transition-fast), background var(--transition-fast) !important;
+    }
+
+    .category-panel-btn-back:hover,
+    .category-panel-btn-back:focus {
+        color: var(--accent) !important;
+        background: rgba(255, 255, 255, 0.06) !important;
+    }
+
+    .category-panel-btn-back:active {
+        opacity: 0.7 !important;
+    }
+
+    /* Centered horizontally relative to screen, and vertically relative to header items */
+    .category-panel-title {
+        position: absolute !important;
+        left: 50% !important;
+        top: 50% !important;
+        transform: translate(-50%, -50%) !important;
+        margin: 0 !important;
+        font-size: 16px !important;
+        font-weight: 600 !important;
+        color: var(--text-primary) !important;
+        text-align: center !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        max-width: calc(100% - 100px) !important;
+        pointer-events: none !important;
+        line-height: 1 !important;
+    }
+
+    /* Delete button: discreet, gray icon, less prominent */
+    .category-panel-btn-delete {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        background: transparent !important;
+        border: none !important;
+        color: var(--text-muted, #9AA0A6) !important;
+        cursor: pointer !important;
+        padding: 8px !important;
+        border-radius: var(--radius-sm) !important;
+        min-width: 40px !important;
+        min-height: 40px !important;
+        -webkit-tap-highlight-color: transparent !important;
+        z-index: 2 !important;
+        transition: color var(--transition-fast), background var(--transition-fast) !important;
+    }
+
+    .category-panel-btn-delete:hover,
+    .category-panel-btn-delete:focus {
+        color: var(--text-primary) !important;
+        background: rgba(255, 255, 255, 0.06) !important;
+    }
+
+    .category-panel-btn-delete:active {
+        color: var(--error) !important;
+        background: var(--error-dim) !important;
+    }
+
+    .category-panel-btn-back .material-symbols-rounded,
+    .category-panel-btn-delete .material-symbols-rounded {
+        font-size: 22px !important;
+        line-height: 1 !important;
+    }
+
+    .category-mobile-panel__body {
+        flex: 1 !important;
+        overflow-y: auto !important;
+        padding: 16px !important;
+        box-sizing: border-box !important;
+        display: flex !important;
+        flex-direction: column !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+
+    /* ============================================================
+       Brands Page Mobile Optimizations
+       ============================================================ */
+    .brands-page {
+        position: relative !important;
+        overflow: hidden !important;
+        padding: max(12px, var(--safe-area-top)) 12px 12px 12px !important;
+    }
+
+    /* Hide page top header completely on mobile to recover space */
+    .brands-page .pim-header {
+        display: none !important;
+    }
+
+    .brands-page .pim-toolbar {
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 8px !important;
+        margin-bottom: var(--space-sm) !important;
+    }
+
+    .brands-page .pim-toolbar__row {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 8px !important;
+        width: 100% !important;
+    }
+
+    .brands-page .pim-search {
+        flex: 1 !important;
+        max-width: none !important;
+        width: auto !important;
+    }
+
+    .brands-page .pim-search input {
+        font-size: 14px !important;
+        padding: 8px 12px 8px 36px !important;
+        height: 38px !important;
+        box-sizing: border-box !important;
+    }
+
+    .brands-page #brands-count {
+        display: none !important;
+    }
+
+    /* Add brand mobile button (small '+' button next to search) */
+    .brands-page .btn-add-brand-mobile {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 38px !important;
+        height: 38px !important;
+        min-width: 38px !important;
+        border-radius: var(--radius-sm) !important;
+        background: var(--accent) !important;
+        color: #131314 !important;
+        border: none !important;
+        cursor: pointer !important;
+        flex-shrink: 0 !important;
+        box-sizing: border-box !important;
+        padding: 0 !important;
+        transition: background var(--transition-fast), transform 0.1s ease !important;
+    }
+
+    .brands-page .btn-add-brand-mobile:active {
+        transform: scale(0.95) !important;
+    }
+
+    .brands-page .btn-add-brand-mobile .material-symbols-rounded {
+        font-size: 22px !important;
+        font-weight: 600 !important;
+        line-height: 1 !important;
+    }
+
+    /* Brands list organized on TWO horizontal rows:
+       Row 1 (top): brand name on the left
+       Row 2 (bottom): chips with associated categories
+       No text wrapping: clipped if exceeds screen width */
+    .brands-page #brands-table thead {
+        display: none !important;
+    }
+
+    .brands-page #brands-table,
+    .brands-page #brands-table tbody {
+        display: block !important;
+        width: 100% !important;
+    }
+
+    .brands-page #brands-table tr {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        justify-content: center !important;
+        padding: 10px 14px !important;
+        border-bottom: 1px solid var(--border-color) !important;
+        cursor: pointer !important;
+        box-sizing: border-box !important;
+        gap: 5px !important;
+        background: var(--bg-surface) !important;
+        min-height: 54px !important;
+        width: 100% !important;
+        -webkit-tap-highlight-color: transparent !important;
+    }
+
+    .brands-page #brands-table tr:active {
+        background: var(--bg-hover) !important;
+    }
+
+    /* Hide columns 3 & 4 (Articoli, Azioni) */
+    .brands-page #brands-table th:nth-child(n+3),
+    .brands-page #brands-table td:nth-child(n+3) {
+        display: none !important;
+    }
+
+    /* Row 1 (top): Brand Name */
+    .brands-page #brands-table td:first-child {
+        display: flex !important;
+        align-items: center !important;
+        padding: 0 !important;
+        border: none !important;
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    .brands-page .brand-name-text {
+        font-size: 14px !important;
+        font-weight: 600 !important;
+        color: var(--text-primary) !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        display: block !important;
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    /* Row 2 (bottom): Associated category chips */
+    .brands-page #brands-table td:nth-child(2) {
+        display: block !important;
+        width: 100% !important;
+        padding: 0 !important;
+        border: none !important;
+        min-width: 0 !important;
+        text-align: left !important;
+    }
+
+    .brands-page .tags-list {
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        gap: 4px !important;
+        overflow: hidden !important;
+        white-space: nowrap !important;
+        width: 100% !important;
+    }
+
+    .brands-page .mini-chip {
+        white-space: nowrap !important;
+        flex-shrink: 0 !important;
+        font-size: 11px !important;
+        padding: 2px 7px !important;
+    }
+
+    /* Dedicated mobile panel for editing/creating brands */
+    .brand-mobile-panel {
+        position: absolute !important;
+        inset: 0 !important;
+        z-index: 60 !important;
+        background: var(--bg-surface) !important;
+        transform: translateX(100%) !important;
+        transition: transform 0.25s cubic-bezier(0.25, 0.1, 0.25, 1) !important;
+        display: flex !important;
+        flex-direction: column !important;
+        height: 100% !important;
+        width: 100% !important;
+        min-height: 0 !important;
+        box-sizing: border-box;
+    }
+
+    .brands-page.mobile-panel-open .brand-mobile-panel {
+        transform: translateX(0) !important;
+    }
+
+    .brand-mobile-panel__topbar {
+        position: relative !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        padding: 0 8px !important;
+        background: var(--bg-elevated) !important;
+        border-bottom: 1px solid var(--border-color) !important;
+        flex-shrink: 0 !important;
+        height: 52px !important;
+        min-height: 52px !important;
+        box-sizing: border-box !important;
+    }
+
+    .brand-panel-btn-back {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        background: transparent !important;
+        border: none !important;
+        color: var(--text-secondary) !important;
+        cursor: pointer !important;
+        padding: 8px !important;
+        border-radius: var(--radius-sm) !important;
+        min-width: 40px !important;
+        min-height: 40px !important;
+        -webkit-tap-highlight-color: transparent !important;
+        z-index: 2 !important;
+        transition: color var(--transition-fast), background var(--transition-fast) !important;
+    }
+
+    .brand-panel-btn-back:hover,
+    .brand-panel-btn-back:focus {
+        color: var(--accent) !important;
+        background: rgba(255, 255, 255, 0.06) !important;
+    }
+
+    .brand-panel-btn-back:active {
+        opacity: 0.7 !important;
+    }
+
+    /* Centered horizontally relative to screen, and vertically relative to header items */
+    .brand-panel-title {
+        position: absolute !important;
+        left: 50% !important;
+        top: 50% !important;
+        transform: translate(-50%, -50%) !important;
+        margin: 0 !important;
+        font-size: 16px !important;
+        font-weight: 600 !important;
+        color: var(--text-primary) !important;
+        text-align: center !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        max-width: calc(100% - 100px) !important;
+        pointer-events: none !important;
+        line-height: 1 !important;
+    }
+
+    /* Delete button: discreet, gray icon, less prominent */
+    .brand-panel-btn-delete {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        background: transparent !important;
+        border: none !important;
+        color: var(--text-muted, #9AA0A6) !important;
+        cursor: pointer !important;
+        padding: 8px !important;
+        border-radius: var(--radius-sm) !important;
+        min-width: 40px !important;
+        min-height: 40px !important;
+        -webkit-tap-highlight-color: transparent !important;
+        z-index: 2 !important;
+        transition: color var(--transition-fast), background var(--transition-fast) !important;
+    }
+
+    .brand-panel-btn-delete:hover,
+    .brand-panel-btn-delete:focus {
+        color: var(--text-primary) !important;
+        background: rgba(255, 255, 255, 0.06) !important;
+    }
+
+    .brand-panel-btn-delete:active {
+        color: var(--error) !important;
+        background: var(--error-dim) !important;
+    }
+
+    .brand-panel-btn-back .material-symbols-rounded,
+    .brand-panel-btn-delete .material-symbols-rounded {
+        font-size: 22px !important;
+        line-height: 1 !important;
+    }
+
+    .brand-mobile-panel__body {
+        flex: 1 !important;
+        overflow-y: auto !important;
+        padding: 16px !important;
+        box-sizing: border-box !important;
+        display: flex !important;
+        flex-direction: column !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+}

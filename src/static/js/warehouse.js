@@ -3,6 +3,7 @@ import * as api from './api.js';
 let _controlsBound = false;
 let _editingItem = null;
 let _deletingItem = null;
+let _currentMobileArticle = null;
 
 export async function initWarehouse() {
     if (!_controlsBound) {
@@ -168,26 +169,38 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
             chipsHtml = `<div class="tags-list">${visibleChips}${moreBadge}</div>`;
         }
 
+        let catText = item.category_name || '';
+        if (item.sub_category_name) {
+            catText = catText ? `${catText} ↳ ${item.sub_category_name}` : item.sub_category_name;
+        }
+
         tr.innerHTML = `
-            <td>
+            <td class="warehouse-row__cell--photo">
                 <div class="warehouse-row__photo ${hasPhoto ? 'warehouse-row__photo--zoomable' : ''}">
                     ${photoHtml}
                 </div>
             </td>
-            <td>
+            <td class="warehouse-row__cell--info">
+                <div class="warehouse-row__mobile-meta-top">
+                    <span class="warehouse-row__mobile-brand">${_esc(item.brand_name || '')}</span>
+                    ${catText ? `<span class="warehouse-row__mobile-cat-divider">•</span><span class="warehouse-row__mobile-category">${_esc(catText)}</span>` : ''}
+                </div>
                 <div class="warehouse-row__title" title="${_esc(item.article_name)}">${_esc(item.article_name)}</div>
-                ${item.description ? `<div class="warehouse-row__desc" title="${_esc(item.description)}">${_esc(item.description)}</div>` : ''}
+                ${item.description ? `<div class="warehouse-row__desc warehouse-desktop-only" title="${_esc(item.description)}">${_esc(item.description)}</div>` : ''}
+                <div class="warehouse-row__mobile-meta-bottom">
+                    <span class="stock-badge stock-badge--${stockClass}">${stockLabel}</span>
+                </div>
             </td>
-            <td>
+            <td class="warehouse-desktop-only">
                 <span style="color: var(--accent); font-weight: 500;">${_esc(item.brand_name)}</span>
             </td>
-            <td>${categoryHtml}</td>
-            <td>${codesHtml}</td>
-            <td>${chipsHtml}</td>
-            <td>
+            <td class="warehouse-desktop-only">${categoryHtml}</td>
+            <td class="warehouse-desktop-only">${codesHtml}</td>
+            <td class="warehouse-desktop-only">${chipsHtml}</td>
+            <td class="warehouse-desktop-only">
                 <span class="stock-badge stock-badge--${stockClass}">${stockLabel}</span>
             </td>
-            <td style="text-align: right;">
+            <td class="warehouse-desktop-only" style="text-align: right;">
                 <div class="action-buttons" style="justify-content: flex-end;">
                     <button type="button" class="action-btn btn-edit-article" title="Modifica Articolo">
                         <span class="material-symbols-rounded" style="font-size: 18px;">edit</span>
@@ -199,12 +212,14 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
             </td>
         `;
 
-        // Photo click -> fullscreen image
+        // Photo click -> fullscreen image (desktop only; on mobile entire row navigates to detail panel)
         const photoEl = tr.querySelector('.warehouse-row__photo');
         if (photoEl && hasPhoto) {
             photoEl.addEventListener('click', (e) => {
-                e.stopPropagation();
-                showImageFullscreen(photoUrl, item.article_name);
+                if (window.innerWidth > 768) {
+                    e.stopPropagation();
+                    showImageFullscreen(photoUrl, item.article_name);
+                }
             });
         }
 
@@ -226,9 +241,13 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
             });
         }
 
-        // Row click -> fullscreen article detail
+        // Row click -> mobile navigation panel or fullscreen article detail
         tr.addEventListener('click', () => {
-            showArticleFullscreen(item);
+            if (window.innerWidth <= 768) {
+                openArticleMobilePanel(item);
+            } else {
+                showArticleFullscreen(item);
+            }
         });
 
         tbody.appendChild(tr);
@@ -424,6 +443,29 @@ function _bindArticleModals() {
             if (e.target === modalDelete) closeDeleteArticleModal();
         });
     }
+
+    // Mobile Article Panel Controls
+    const btnBackMobile = document.getElementById('btn-article-panel-back');
+    const btnDeleteMobile = document.getElementById('btn-article-panel-delete');
+    const formMobile = document.getElementById('form-article-mobile');
+    const photoWrapMobile = document.getElementById('mob-art-photo-wrap');
+
+    if (btnBackMobile) btnBackMobile.addEventListener('click', closeArticleMobilePanel);
+    if (btnDeleteMobile) {
+        btnDeleteMobile.addEventListener('click', () => {
+            if (_currentMobileArticle) {
+                openDeleteArticleModal(_currentMobileArticle);
+            }
+        });
+    }
+    if (formMobile) formMobile.addEventListener('submit', _handleSaveArticleMobile);
+    if (photoWrapMobile) {
+        photoWrapMobile.addEventListener('click', () => {
+            if (_currentMobileArticle && _currentMobileArticle.photo_id) {
+                showImageFullscreen(api.getPhotoUrl(_currentMobileArticle.photo_id), _currentMobileArticle.article_name);
+            }
+        });
+    }
 }
 
 function openEditArticleModal(item) {
@@ -577,6 +619,8 @@ async function _handleConfirmDeleteArticle() {
         const detailOverlay = document.getElementById('article-fullscreen-modal');
         if (detailOverlay) detailOverlay.style.display = 'none';
 
+        closeArticleMobilePanel();
+
         await _refreshWarehouseView();
     } catch (err) {
         _showToast(err.message || 'Errore durante l\'eliminazione.', 'error');
@@ -584,6 +628,153 @@ async function _handleConfirmDeleteArticle() {
         if (btnConfirm) {
             btnConfirm.disabled = false;
             btnConfirm.textContent = 'Elimina';
+        }
+    }
+}
+
+// ============================================================================
+// Mobile Article Panel Logic
+// ============================================================================
+
+export function openArticleMobilePanel(item) {
+    _currentMobileArticle = item;
+    const container = document.getElementById('magazzino-container');
+    const panel = document.getElementById('article-mobile-panel');
+    if (!container || !panel) return;
+
+    const photoImg = document.getElementById('mob-art-photo');
+    const photoPlaceholder = document.getElementById('mob-art-photo-placeholder');
+    const brandEl = document.getElementById('mob-art-brand');
+    const catEl = document.getElementById('mob-art-category');
+    const stockEl = document.getElementById('mob-art-stock');
+
+    const nameInput = document.getElementById('mob-art-name');
+    const vendorInput = document.getElementById('mob-art-vendor-code');
+    const barcodeInput = document.getElementById('mob-art-barcode');
+    const descInput = document.getElementById('mob-art-description');
+    const extDescInput = document.getElementById('mob-art-ext-description');
+    const tagsInput = document.getElementById('mob-art-tags');
+    const materialsInput = document.getElementById('mob-art-materials');
+
+    const hasPhoto = Boolean(item.photo_id);
+    const photoUrl = hasPhoto ? api.getPhotoUrl(item.photo_id) : '';
+
+    if (photoImg && photoPlaceholder) {
+        if (hasPhoto) {
+            photoImg.src = photoUrl;
+            photoImg.style.display = 'block';
+            photoPlaceholder.style.display = 'none';
+        } else {
+            photoImg.src = '';
+            photoImg.style.display = 'none';
+            photoPlaceholder.style.display = 'block';
+        }
+    }
+
+    if (brandEl) brandEl.textContent = item.brand_name || '';
+    if (catEl) {
+        if (item.category_name && item.sub_category_name) {
+            catEl.textContent = `${item.category_name} ↳ ${item.sub_category_name}`;
+        } else {
+            catEl.textContent = item.category_name || item.sub_category_name || '-';
+        }
+    }
+    if (stockEl) {
+        const stockLabel = item.stock > 0 ? `Disponibile (${item.stock})` : 'Esaurito';
+        const stockClass = item.stock > 5 ? 'available' : (item.stock > 0 ? 'low' : 'zero');
+        stockEl.className = `stock-badge stock-badge--${stockClass}`;
+        stockEl.textContent = stockLabel;
+    }
+
+    if (nameInput) nameInput.value = _extractBaseArticleName(item);
+    if (vendorInput) vendorInput.value = item.vendor_code || '';
+    if (barcodeInput) barcodeInput.value = item.barcode || '';
+    if (descInput) descInput.value = item.description || '';
+    if (extDescInput) extDescInput.value = item.extended_description || '';
+    if (tagsInput) tagsInput.value = (item.tags || []).join(', ');
+    if (materialsInput) materialsInput.value = (item.materials || []).join(', ');
+
+    container.classList.add('mobile-panel-open');
+}
+
+export function closeArticleMobilePanel() {
+    const container = document.getElementById('magazzino-container');
+    if (container) container.classList.remove('mobile-panel-open');
+    _currentMobileArticle = null;
+}
+
+async function _handleSaveArticleMobile(e) {
+    e.preventDefault();
+    if (!_currentMobileArticle) return;
+
+    const nameInput = document.getElementById('mob-art-name');
+    const vendorInput = document.getElementById('mob-art-vendor-code');
+    const barcodeInput = document.getElementById('mob-art-barcode');
+    const descInput = document.getElementById('mob-art-description');
+    const extDescInput = document.getElementById('mob-art-ext-description');
+    const tagsInput = document.getElementById('mob-art-tags');
+    const materialsInput = document.getElementById('mob-art-materials');
+    const btnSave = document.getElementById('btn-save-article-mobile');
+
+    const articleName = nameInput ? nameInput.value.trim() : '';
+    const vendorCode = vendorInput ? vendorInput.value.trim() : '';
+    const barcode = barcodeInput ? barcodeInput.value.trim() : '';
+    const description = descInput ? descInput.value.trim() : '';
+    const extendedDescription = extDescInput ? extDescInput.value.trim() : '';
+    const tags = (tagsInput ? tagsInput.value : '')
+        .split(',')
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean);
+    const materials = (materialsInput ? materialsInput.value : '')
+        .split(',')
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean);
+
+    if (!articleName) {
+        _showToast('Il nome dell\'articolo non può essere vuoto.', 'error');
+        return;
+    }
+    if (!description) {
+        _showToast('La descrizione breve non può essere vuota.', 'error');
+        return;
+    }
+    if (tags.length === 0) {
+        _showToast('Inserisci almeno un tag.', 'error');
+        return;
+    }
+    if (materials.length === 0) {
+        _showToast('Inserisci almeno un materiale.', 'error');
+        return;
+    }
+
+    const color = _currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : null;
+    const payload = {
+        article_name: articleName,
+        description: description,
+        extended_description: extendedDescription,
+        tags: tags,
+        materials: materials,
+        vendor_code: vendorCode,
+        barcode: barcode,
+        color: color,
+    };
+
+    if (btnSave) {
+        btnSave.disabled = true;
+        btnSave.textContent = 'Salvataggio...';
+    }
+
+    try {
+        await api.patchCatalogItem(_currentMobileArticle.blueprint_id, payload);
+        _showToast('Articolo aggiornato con successo.');
+        closeArticleMobilePanel();
+        await _refreshWarehouseView();
+    } catch (err) {
+        _showToast(err.message || 'Errore durante l\'aggiornamento.', 'error');
+    } finally {
+        if (btnSave) {
+            btnSave.disabled = false;
+            btnSave.textContent = 'Salva Modifiche';
         }
     }
 }

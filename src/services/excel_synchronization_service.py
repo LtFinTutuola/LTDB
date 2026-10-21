@@ -363,6 +363,8 @@ def find_candidates(db: Session, search_code: str, is_exchange: bool) -> List[Di
             "article_id": str(article.id),
             "article_name": blueprint.article_name if blueprint else None,
             "article_description": blueprint.description if blueprint else None,
+            "brand_name": blueprint.brand.name if blueprint and blueprint.brand else None,
+            "category_name": blueprint.category.name if blueprint and blueprint.category else None,
             "colors": article.colors,
             "inventory": inventory_counts[color_key],
             "photo_serving_endpoint_url": photo_url
@@ -394,7 +396,7 @@ def get_pending_sales(db: Session, target_date: Optional[date] = None) -> List[D
 
 def get_daily_sales(db: Session, target_date: date) -> List[Dict[str, Any]]:
     """
-    Returns all sales records for the specified date, including photo URL and article name for reconciled items.
+    Returns all sales records for the specified date, including photo URL, article name, brand and category for reconciled items.
     """
     records = excel_synchronization_repo.get_all_by_date(db, target_date)
     
@@ -402,10 +404,14 @@ def get_daily_sales(db: Session, target_date: date) -> List[Dict[str, Any]]:
     for r in records:
         photo_url = None
         article_name = None
+        brand_name = None
+        category_name = None
         
         if r.status == ExcelSaleStatus.RECONCILED and r.article:
             blueprint = r.article.blueprint
             article_name = blueprint.article_name if blueprint else None
+            brand_name = blueprint.brand.name if blueprint and blueprint.brand else None
+            category_name = blueprint.category.name if blueprint and blueprint.category else None
             
             colors_list = [c.lower() for c in (r.article.colors or [])]
             photo = None
@@ -432,6 +438,8 @@ def get_daily_sales(db: Session, target_date: date) -> List[Dict[str, Any]]:
             "is_exchange": r.is_exchange,
             "raw_article_code": r.raw_article_code,
             "article_name": article_name,
+            "brand_name": brand_name,
+            "category_name": category_name,
             "photo_url": photo_url
         })
     return results

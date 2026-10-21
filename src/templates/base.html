@@ -2,18 +2,46 @@
 <html lang="it">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>{% block title %}LTDB{% endblock %}</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=20261019b">
+  <link rel="stylesheet" href="/static/css/app.css?v=20261021">
   {% block extra_head %}{% endblock %}
 </head>
 <body>
   <div id="app-shell">
+    <header class="mobile-topbar" id="mobile-topbar">
+      <div class="mobile-topbar__brand">
+        <img src="/static/assets/logo.png" alt="Logo" class="mobile-topbar__logo">
+        <h1 class="mobile-topbar__page-title">{% if active_page == 'vendite' %}Vendite{% elif active_page == 'magazzino' or active_page == 'dashboard' %}Magazzino{% elif active_page == 'brands' %}Gestione Brand{% elif active_page == 'categories' %}Gestione Categorie{% elif active_page == 'settings' %}Impostazioni{% else %}LTDB{% endif %}</h1>
+      </div>
+    </header>
     {% include 'partials/sidebar.html' %}
     <main id="canvas" class="canvas">
       {% block content %}
       {% endblock %}
     </main>
+    <nav class="mobile-bottom-nav" id="mobile-bottom-nav" aria-label="Navigazione principale mobile">
+      <a href="/vendite" class="mobile-nav-item {% if active_page == 'vendite' %}mobile-nav-item--active{% endif %}">
+        <span class="material-symbols-rounded">point_of_sale</span>
+        <span class="mobile-nav-label">Vendite</span>
+      </a>
+      <a href="/magazzino" class="mobile-nav-item {% if active_page == 'magazzino' or active_page == 'dashboard' %}mobile-nav-item--active{% endif %}">
+        <span class="material-symbols-rounded">inventory_2</span>
+        <span class="mobile-nav-label">Magazzino</span>
+      </a>
+      <a href="/brands" class="mobile-nav-item {% if active_page == 'brands' %}mobile-nav-item--active{% endif %}">
+        <span class="material-symbols-rounded">style</span>
+        <span class="mobile-nav-label">Brands</span>
+      </a>
+      <a href="/categories" class="mobile-nav-item {% if active_page == 'categories' %}mobile-nav-item--active{% endif %}">
+        <span class="material-symbols-rounded">category</span>
+        <span class="mobile-nav-label">Categorie</span>
+      </a>
+      <a href="/settings" class="mobile-nav-item {% if active_page == 'settings' %}mobile-nav-item--active{% endif %}">
+        <span class="material-symbols-rounded">settings</span>
+        <span class="mobile-nav-label">Impostazioni</span>
+      </a>
+    </nav>
   </div>
   {% block scripts %}{% endblock %}
   {% block extra_scripts %}{% endblock %}

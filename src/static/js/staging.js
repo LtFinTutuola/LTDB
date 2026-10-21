@@ -18,6 +18,8 @@ let _jobId = null;
 let _stagingData = null;
 let _operationsQueue = [];
 let _categoryHierarchy = null;
+let _currentMobileBp = null;
+let _currentMobileItem = null;
 
 // Fields treated as comma-separated arrays in the UI
 const LIST_FIELDS = new Set(['colors', 'tags', 'materials']);
@@ -74,21 +76,32 @@ export async function submitRevisions() {
 
 function _render() {
     const panel = getDetailPanel();
+    if (!panel) return;
+
     const oldContent = document.getElementById('staging-content');
     const scrollPos = oldContent ? oldContent.scrollTop : 0;
+    const wasMobilePanelOpen = panel.classList.contains('mobile-staging-panel-open');
+    const activeItemId = _currentMobileItem?.item_id;
+    const activeBpId = _currentMobileBp?.id;
 
     const grouped = _groupByBlueprint(_stagingData);
     const photoProposals = _stagingData?.photo_proposals || {};
+    const itemsCount = (_stagingData?.items || []).length;
 
     let html = `
         <div class="detail-panel__header">
+            <button class="btn-close-panel btn-close-panel--mobile" title="Torna">
+                <span class="material-symbols-rounded">arrow_back</span>
+            </button>
             <div class="detail-panel__header-title-box">
                 <h2 class="detail-panel__title">Revisione dati</h2>
-                <span style="font-size:12px;color:var(--text-muted)">${(_stagingData?.items || []).length} elementi</span>
+                <span class="detail-panel__count" style="font-size:12px;color:var(--text-muted)">${itemsCount} elementi</span>
             </div>
-            <div>
-                <button class="btn-refresh-panel" title="Ricarica" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--text-secondary);margin-right:8px;">🔄</button>
-                <button class="btn-close-panel" title="Chiudi">✕</button>
+            <div class="detail-panel__header-actions">
+                <button class="btn-refresh-panel" title="Ricarica">
+                    <span class="material-symbols-rounded" style="font-size:20px;">refresh</span>
+                </button>
+                <button class="btn-close-panel btn-close-panel--desktop" title="Chiudi">✕</button>
             </div>
         </div>
         <div class="detail-panel__content" id="staging-content" style="flex:1;overflow-y:auto;">
@@ -97,9 +110,17 @@ function _render() {
     if (grouped.size === 0) {
         html += `<div class="empty-state"><span class="empty-state__icon">📋</span><p class="empty-state__text">Nessun elemento da rivedere</p></div>`;
     } else {
+        // Desktop View: Blueprint Cards with Tables
+        html += `<div class="staging-desktop-view">`;
         for (const [bpId, { blueprint, items }] of grouped) {
             html += _buildBlueprintCard(blueprint, items, photoProposals);
         }
+        html += `</div>`;
+
+        // Mobile View: Flat continuous list of items
+        html += `<div class="staging-mobile-view">`;
+        html += _buildMobileStagingList(grouped, photoProposals);
+        html += `</div>`;
     }
 
     html += '</div>';
@@ -114,6 +135,9 @@ function _render() {
         </div>
     `;
 
+    // Dedicated Mobile Panel for Editing/Deleting Staged Article
+    html += _buildMobileStagingPanel();
+
     panel.innerHTML = html;
 
     const newContent = document.getElementById('staging-content');
@@ -121,11 +145,13 @@ function _render() {
         newContent.scrollTop = scrollPos;
     }
 
-    const closeBtn = panel.querySelector('.btn-close-panel');
-    if (closeBtn) closeBtn.addEventListener('click', exitSplitScreen);
+    panel.querySelectorAll('.btn-close-panel').forEach(btn => {
+        btn.addEventListener('click', exitSplitScreen);
+    });
 
-    const refreshBtn = panel.querySelector('.btn-refresh-panel');
-    if (refreshBtn) refreshBtn.addEventListener('click', _handleRefresh);
+    panel.querySelectorAll('.btn-refresh-panel').forEach(btn => {
+        btn.addEventListener('click', _handleRefresh);
+    });
 
     const applyBtn = panel.querySelector('.btn-apply-changes');
     if (applyBtn) applyBtn.addEventListener('click', submitRevisions);
@@ -134,6 +160,187 @@ function _render() {
     if (confirmBtn) confirmBtn.addEventListener('click', _handleConfirm);
 
     _attachListeners();
+
+    // Preserve mobile edit panel state if open during refresh or photo retry
+    if (wasMobilePanelOpen && activeItemId && activeBpId) {
+        const refreshedBp = _stagingData?.blueprints?.find(b => b.id === activeBpId);
+        const refreshedIt = _stagingData?.items?.find(i => i.item_id === activeItemId);
+        if (refreshedBp && refreshedIt) {
+            openStagingMobilePanel(refreshedBp, refreshedIt);
+        } else {
+            panel.classList.remove('mobile-staging-panel-open');
+        }
+    } else {
+        panel.classList.remove('mobile-staging-panel-open');
+    }
+}
+
+function _buildMobileStagingList(grouped, photoProposals) {
+    let listHtml = '<div class="staging-mobile-list">';
+    const brandName = _stagingData?.brand_name || 'Brand';
+
+    for (const [bpId, { blueprint, items }] of grouped) {
+        const catDesc = blueprint.category?.description || '';
+        const subCatDesc = blueprint.sub_category?.description || '';
+        let catText = catDesc;
+        if (subCatDesc) {
+            catText = catText ? `${catText} ↳ ${subCatDesc}` : subCatDesc;
+        }
+
+        const isNewBadge = blueprint.is_new ? '<span class="badge-new" style="margin-left: 6px; font-size: 10px; padding: 1px 6px;">Nuovo</span>' : '';
+
+        for (const item of items) {
+            const proposal = _findProposal(photoProposals, item.item_id);
+            const photoUrl = proposal?.url || proposal?.photo_url || null;
+
+            const photoHtml = photoUrl
+                ? `<img src="${_esc(photoUrl)}" alt="" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='block';"><span class="photo-placeholder" style="display:none;font-size:24px;">🖼</span>`
+                : `<span class="photo-placeholder" style="font-size:24px;">🖼</span>`;
+
+            let codeInfo = '';
+            if (item.vendor_code && item.barcode) {
+                codeInfo = `Cod: ${_esc(item.vendor_code)} • EAN: ${_esc(item.barcode)}`;
+            } else if (item.vendor_code) {
+                codeInfo = `Cod: ${_esc(item.vendor_code)}`;
+            } else if (item.barcode) {
+                codeInfo = `EAN: ${_esc(item.barcode)}`;
+            }
+
+            const colorsStr = (item.colors || []).join(', ');
+            let metaBottomText = `Qtà: ${item.quantity ?? 1}`;
+            if (codeInfo) {
+                metaBottomText = `${codeInfo} • ${metaBottomText}`;
+            }
+            if (colorsStr) {
+                metaBottomText = `${metaBottomText} • ${_esc(colorsStr)}`;
+            }
+
+            listHtml += `
+                <div class="staging-mobile-item" data-item-id="${_esc(item.item_id)}" data-bp-id="${_esc(blueprint.id)}">
+                    <div class="warehouse-row__cell--photo">
+                        <div class="warehouse-row__photo">
+                            ${photoHtml}
+                        </div>
+                    </div>
+                    <div class="warehouse-row__cell--info">
+                        <div class="warehouse-row__mobile-meta-top">
+                            <span class="warehouse-row__mobile-brand">${_esc(brandName)}</span>
+                            ${catText ? `<span class="warehouse-row__mobile-cat-divider">•</span><span class="warehouse-row__mobile-category">${_esc(catText)}</span>` : ''}
+                        </div>
+                        <div class="warehouse-row__title">${_esc(blueprint.article_name || 'Articolo')}${isNewBadge}</div>
+                        <div class="warehouse-row__mobile-meta-bottom">
+                            <span class="stock-badge stock-badge--available">${metaBottomText}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+    }
+
+    listHtml += '</div>';
+    return listHtml;
+}
+
+function _buildMobileStagingPanel() {
+    return `
+        <div id="staging-mobile-panel" class="article-mobile-panel staging-mobile-panel" aria-label="Dettaglio e Modifica Articolo Staging">
+            <div class="article-mobile-panel__topbar">
+                <button type="button" id="btn-staging-mobile-back" class="article-panel-btn-back" title="Torna alla lista">
+                    <span class="material-symbols-rounded">arrow_back</span>
+                </button>
+                <h3 id="staging-mobile-title" class="article-panel-title">Dettaglio Staging</h3>
+                <button type="button" id="btn-staging-mobile-delete" class="article-panel-btn-delete" title="Rimuovi Articolo">
+                    <span class="material-symbols-rounded">delete</span>
+                </button>
+            </div>
+            <div class="article-mobile-panel__body">
+                <form id="form-staging-mobile" class="mobile-panel-form">
+                    <!-- Photo and Meta Preview Card -->
+                    <div class="mobile-art-preview" style="display: flex; gap: 14px; align-items: center; background: var(--bg-app); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-bottom: 14px;">
+                        <div id="mob-staging-photo-wrap" style="width: 64px; height: 64px; border-radius: var(--radius-xs); overflow: hidden; background: var(--bg-elevated); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: zoom-in;">
+                            <img id="mob-staging-photo" src="" alt="" style="width: 100%; height: 100%; object-fit: cover;">
+                            <span id="mob-staging-photo-placeholder" style="font-size: 28px; display: none;">🖼</span>
+                        </div>
+                        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px;">
+                            <span id="mob-staging-brand" style="color: var(--accent); font-weight: 600; font-size: 13px; text-transform: uppercase;"></span>
+                            <span id="mob-staging-item-meta" style="color: var(--text-secondary); font-size: 12px;"></span>
+                            <div style="display: flex; gap: 6px; margin-top: 4px;">
+                                <button type="button" id="mob-staging-btn-search" class="action-btn" title="Cerca su Google" style="padding: 2px 8px; font-size: 11px; height: 26px; border-radius: var(--radius-xs); background: var(--bg-surface); border: 1px solid var(--border-color); color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">🔍 Cerca</button>
+                                <button type="button" id="mob-staging-btn-manual" class="action-btn" title="Inserisci URL" style="padding: 2px 8px; font-size: 11px; height: 26px; border-radius: var(--radius-xs); background: var(--bg-surface); border: 1px solid var(--border-color); color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">🔗 URL</button>
+                                <button type="button" id="mob-staging-btn-retry" class="action-btn" title="Riprova con AI" style="padding: 2px 8px; font-size: 11px; height: 26px; border-radius: var(--radius-xs); background: var(--bg-surface); border: 1px solid var(--border-color); color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">🔄 Riprova</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-staging-name" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Nome Articolo *</label>
+                        <input type="text" id="mob-staging-name" class="form-control" required>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                            <label for="mob-staging-macro-cat" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Macro Categoria</label>
+                            <select id="mob-staging-macro-cat" class="form-control category-select">
+                                <option value="">Macro Categoria...</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                            <label for="mob-staging-sub-cat" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Sotto Categoria</label>
+                            <select id="mob-staging-sub-cat" class="form-control category-select">
+                                <option value="">Sotto Categoria...</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                            <label for="mob-staging-vendor-code" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Codice Fornitore</label>
+                            <input type="text" id="mob-staging-vendor-code" class="form-control" placeholder="Es. HWVG87...">
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                            <label for="mob-staging-barcode" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Barcode (EAN)</label>
+                            <input type="text" id="mob-staging-barcode" class="form-control" placeholder="Es. 800000...">
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 10px; margin-bottom: 12px;">
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                            <label for="mob-staging-qty" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Quantità</label>
+                            <input type="number" id="mob-staging-qty" class="form-control" min="1" value="1">
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                            <label for="mob-staging-colors" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Colori (separati da virgola)</label>
+                            <input type="text" id="mob-staging-colors" class="form-control" placeholder="Es. Nero, Cognac">
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-staging-desc" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Descrizione Breve</label>
+                        <textarea id="mob-staging-desc" class="form-control" rows="2" placeholder="Descrizione breve..."></textarea>
+                    </div>
+
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-staging-ext-desc" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Descrizione Estesa</label>
+                        <textarea id="mob-staging-ext-desc" class="form-control" rows="3" placeholder="Descrizione estesa..."></textarea>
+                    </div>
+
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-staging-tags" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Tags (separati da virgola)</label>
+                        <input type="text" id="mob-staging-tags" class="form-control" placeholder="Es. borsa, tracolla">
+                    </div>
+
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-staging-materials" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Materiali (separati da virgola)</label>
+                        <input type="text" id="mob-staging-materials" class="form-control" placeholder="Es. ecopelle, metallo">
+                    </div>
+
+                    <button type="submit" id="btn-save-staging-mobile" class="btn-primary" style="margin-top: 14px; margin-bottom: 24px; padding: 12px; width: 100%; font-weight: 600;">
+                        Salva Modifiche
+                    </button>
+                </form>
+            </div>
+        </div>
+    `;
 }
 
 function _groupByBlueprint(data) {
@@ -398,6 +605,310 @@ function _attachListeners() {
             _render();
         });
     });
+
+    _attachMobileListeners(getDetailPanel());
+}
+
+function _attachMobileListeners(panel) {
+    if (!panel) return;
+
+    // Mobile staging list rows click -> open mobile panel
+    panel.querySelectorAll('.staging-mobile-item').forEach(row => {
+        row.addEventListener('click', () => {
+            const itemId = row.dataset.itemId;
+            const bpId = row.dataset.bpId;
+            const bp = _stagingData?.blueprints?.find(b => b.id === bpId);
+            const item = _stagingData?.items?.find(i => i.item_id === itemId);
+            if (bp && item) {
+                openStagingMobilePanel(bp, item);
+            }
+        });
+    });
+
+    // Mobile panel back button
+    const backBtn = panel.querySelector('#btn-staging-mobile-back');
+    if (backBtn) backBtn.addEventListener('click', closeStagingMobilePanel);
+
+    // Mobile panel delete button
+    const deleteBtn = panel.querySelector('#btn-staging-mobile-delete');
+    if (deleteBtn) deleteBtn.addEventListener('click', _handleMobileDelete);
+
+    // Mobile panel form submit
+    const form = panel.querySelector('#form-staging-mobile');
+    if (form) form.addEventListener('submit', _handleMobileSave);
+
+    // Mobile panel photo actions
+    const btnSearch = panel.querySelector('#mob-staging-btn-search');
+    if (btnSearch) btnSearch.addEventListener('click', _handleSearchPhoto);
+
+    const btnManual = panel.querySelector('#mob-staging-btn-manual');
+    if (btnManual) btnManual.addEventListener('click', _handleManualPhoto);
+
+    const btnRetry = panel.querySelector('#mob-staging-btn-retry');
+    if (btnRetry) btnRetry.addEventListener('click', _handleRetryPhoto);
+}
+
+export function openStagingMobilePanel(bp, item) {
+    _currentMobileBp = bp;
+    _currentMobileItem = item;
+    const panel = getDetailPanel();
+    const mobilePanel = document.getElementById('staging-mobile-panel');
+    if (!panel || !mobilePanel) return;
+
+    // 1. Photo and preview
+    const photoProposals = _stagingData?.photo_proposals || {};
+    const proposal = _findProposal(photoProposals, item.item_id);
+    const photoUrl = proposal?.url || proposal?.photo_url || null;
+    const searchQuery = _getPhotoSearchQuery(bp.id, item, proposal);
+
+    const photoImg = document.getElementById('mob-staging-photo');
+    const photoPlaceholder = document.getElementById('mob-staging-photo-placeholder');
+    const photoWrap = document.getElementById('mob-staging-photo-wrap');
+
+    if (photoImg && photoPlaceholder) {
+        if (photoUrl) {
+            photoImg.src = photoUrl;
+            photoImg.style.display = 'block';
+            photoPlaceholder.style.display = 'none';
+            if (photoWrap) {
+                photoWrap.onclick = () => window._openImageModal(photoUrl);
+            }
+        } else {
+            photoImg.src = '';
+            photoImg.style.display = 'none';
+            photoPlaceholder.style.display = 'block';
+            if (photoWrap) photoWrap.onclick = null;
+        }
+    }
+
+    const brandEl = document.getElementById('mob-staging-brand');
+    if (brandEl) brandEl.textContent = _stagingData?.brand_name || 'Brand';
+
+    const itemMetaEl = document.getElementById('mob-staging-item-meta');
+    if (itemMetaEl) {
+        const parts = [];
+        if (item.vendor_code) parts.push(`Cod: ${item.vendor_code}`);
+        if (item.barcode) parts.push(`EAN: ${item.barcode}`);
+        parts.push(`Qtà: ${item.quantity ?? 1}`);
+        itemMetaEl.textContent = parts.join(' • ');
+    }
+
+    const btnSearch = document.getElementById('mob-staging-btn-search');
+    if (btnSearch) {
+        btnSearch.dataset.searchQuery = searchQuery;
+    }
+    const btnManual = document.getElementById('mob-staging-btn-manual');
+    if (btnManual) {
+        btnManual.dataset.itemId = item.item_id;
+        btnManual.dataset.jobId = _jobId;
+    }
+    const btnRetry = document.getElementById('mob-staging-btn-retry');
+    if (btnRetry) {
+        btnRetry.dataset.itemId = item.item_id;
+        btnRetry.dataset.jobId = _jobId;
+    }
+
+    // 2. Categories
+    const macroCatSelect = document.getElementById('mob-staging-macro-cat');
+    const subCatSelect = document.getElementById('mob-staging-sub-cat');
+    const currentMacro = bp.category?.description || '';
+    const currentSub = bp.sub_category?.description || '';
+
+    const hasHierarchy = _categoryHierarchy && Object.keys(_categoryHierarchy).length > 0;
+    if (macroCatSelect) {
+        let macroHtml = '<option value="">Macro Categoria...</option>';
+        if (hasHierarchy) {
+            macroHtml += Object.keys(_categoryHierarchy).map(c =>
+                `<option value="${_esc(c)}" ${c === currentMacro ? 'selected' : ''}>${_esc(c)}</option>`
+            ).join('');
+        } else if (currentMacro) {
+            macroHtml += `<option value="${_esc(currentMacro)}" selected>${_esc(currentMacro)}</option>`;
+        }
+        macroCatSelect.innerHTML = macroHtml;
+    }
+
+    function _updateSubCatDropdown(selectedMacro, selectedSub) {
+        if (!subCatSelect) return;
+        let subHtml = '<option value="">Sotto Categoria...</option>';
+        if (hasHierarchy && selectedMacro && _categoryHierarchy[selectedMacro]) {
+            const subs = Object.keys(_categoryHierarchy[selectedMacro].sub_categories || {});
+            subHtml += subs.map(sc =>
+                `<option value="${_esc(sc)}" ${sc === selectedSub ? 'selected' : ''}>${_esc(sc)}</option>`
+            ).join('');
+        } else if (selectedSub) {
+            subHtml += `<option value="${_esc(selectedSub)}" selected>${_esc(selectedSub)}</option>`;
+        }
+        subCatSelect.innerHTML = subHtml;
+    }
+
+    _updateSubCatDropdown(currentMacro, currentSub);
+
+    if (macroCatSelect) {
+        macroCatSelect.onchange = () => {
+            _updateSubCatDropdown(macroCatSelect.value, '');
+        };
+    }
+
+    // 3. Inputs
+    const nameInput = document.getElementById('mob-staging-name');
+    if (nameInput) nameInput.value = bp.article_name || '';
+
+    const vendorInput = document.getElementById('mob-staging-vendor-code');
+    if (vendorInput) vendorInput.value = item.vendor_code || '';
+
+    const barcodeInput = document.getElementById('mob-staging-barcode');
+    if (barcodeInput) barcodeInput.value = item.barcode || '';
+
+    const qtyInput = document.getElementById('mob-staging-qty');
+    if (qtyInput) qtyInput.value = item.quantity ?? 1;
+
+    const colorsInput = document.getElementById('mob-staging-colors');
+    if (colorsInput) colorsInput.value = (item.colors || []).join(', ');
+
+    const descInput = document.getElementById('mob-staging-desc');
+    if (descInput) descInput.value = bp.description || '';
+
+    const extDescInput = document.getElementById('mob-staging-ext-desc');
+    if (extDescInput) extDescInput.value = bp.extended_description || '';
+
+    const tagsInput = document.getElementById('mob-staging-tags');
+    if (tagsInput) tagsInput.value = (bp.tags || []).join(', ');
+
+    const materialsInput = document.getElementById('mob-staging-materials');
+    if (materialsInput) materialsInput.value = (bp.materials || item.materials || []).join(', ');
+
+    // 4. Slide in panel
+    panel.classList.add('mobile-staging-panel-open');
+}
+
+export function closeStagingMobilePanel() {
+    const panel = getDetailPanel();
+    if (panel) panel.classList.remove('mobile-staging-panel-open');
+    _currentMobileBp = null;
+    _currentMobileItem = null;
+}
+
+function _handleMobileDelete(e) {
+    if (e) e.preventDefault();
+    if (!_currentMobileItem || !_currentMobileBp) return;
+
+    if (!confirm('Rimuovere questo articolo dallo staging?')) return;
+
+    const itemId = _currentMobileItem.item_id;
+    const bpId = _currentMobileBp.id;
+
+    _enqueueDelete(itemId);
+
+    // Remove item from local staging data
+    _stagingData.items = (_stagingData.items || []).filter(i => i.item_id !== itemId);
+    const hasRemaining = (_stagingData.items || []).some(i => i.article_blueprint_id === bpId);
+    if (!hasRemaining) {
+        _stagingData.blueprints = (_stagingData.blueprints || []).filter(b => b.id !== bpId);
+    }
+
+    closeStagingMobilePanel();
+    _render();
+    addMessage('Articolo rimosso dallo staging.', 'system');
+}
+
+function _handleMobileSave(e) {
+    if (e) e.preventDefault();
+    if (!_currentMobileItem || !_currentMobileBp) return;
+
+    const bp = _currentMobileBp;
+    const item = _currentMobileItem;
+
+    const nameInput = document.getElementById('mob-staging-name');
+    const macroCatSelect = document.getElementById('mob-staging-macro-cat');
+    const subCatSelect = document.getElementById('mob-staging-sub-cat');
+    const vendorInput = document.getElementById('mob-staging-vendor-code');
+    const barcodeInput = document.getElementById('mob-staging-barcode');
+    const qtyInput = document.getElementById('mob-staging-qty');
+    const colorsInput = document.getElementById('mob-staging-colors');
+    const descInput = document.getElementById('mob-staging-desc');
+    const extDescInput = document.getElementById('mob-staging-ext-desc');
+    const tagsInput = document.getElementById('mob-staging-tags');
+    const materialsInput = document.getElementById('mob-staging-materials');
+
+    const newName = nameInput ? nameInput.value.trim() : '';
+    const newMacroCat = macroCatSelect ? macroCatSelect.value.trim() : '';
+    const newSubCat = subCatSelect ? subCatSelect.value.trim() : '';
+    const newVendor = vendorInput ? vendorInput.value.trim() : '';
+    const newBarcode = barcodeInput ? barcodeInput.value.trim() : '';
+    const newQty = qtyInput ? (parseInt(qtyInput.value, 10) || 1) : 1;
+    const newColors = colorsInput ? colorsInput.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : [];
+    const newDesc = descInput ? descInput.value.trim() : '';
+    const newExtDesc = extDescInput ? extDescInput.value.trim() : '';
+    const newTags = tagsInput ? tagsInput.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : [];
+    const newMaterials = materialsInput ? materialsInput.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : [];
+
+    // Check Blueprint modifications
+    if (newName && newName !== (bp.article_name || '')) {
+        bp.article_name = newName;
+        _enqueueUpdate('blueprint', bp.id, 'article_name', newName);
+    }
+
+    const curMacro = bp.category?.description || '';
+    const curSub = bp.sub_category?.description || '';
+    if (newMacroCat !== curMacro) {
+        bp.category = newMacroCat ? { description: newMacroCat } : null;
+        _enqueueUpdate('blueprint', bp.id, 'category', bp.category);
+    }
+    if (newSubCat !== curSub) {
+        bp.sub_category = newSubCat ? { description: newSubCat } : null;
+        _enqueueUpdate('blueprint', bp.id, 'sub_category', bp.sub_category);
+    }
+
+    if (newDesc !== (bp.description || '')) {
+        bp.description = newDesc;
+        _enqueueUpdate('blueprint', bp.id, 'description', newDesc);
+    }
+
+    if (newExtDesc !== (bp.extended_description || '')) {
+        bp.extended_description = newExtDesc;
+        _enqueueUpdate('blueprint', bp.id, 'extended_description', newExtDesc);
+    }
+
+    const curTagsStr = (bp.tags || []).join(',');
+    const newTagsStr = newTags.join(',');
+    if (newTagsStr !== curTagsStr) {
+        bp.tags = newTags;
+        _enqueueUpdate('blueprint', bp.id, 'tags', newTags);
+    }
+
+    const curMaterialsStr = (bp.materials || []).join(',');
+    const newMaterialsStr = newMaterials.join(',');
+    if (newMaterialsStr !== curMaterialsStr) {
+        bp.materials = newMaterials;
+        _enqueueUpdate('blueprint', bp.id, 'materials', newMaterials);
+    }
+
+    // Check Item modifications
+    if (newVendor !== (item.vendor_code || '')) {
+        item.vendor_code = newVendor;
+        _enqueueUpdate('item', item.item_id, 'vendor_code', newVendor);
+    }
+
+    if (newBarcode !== (item.barcode || '')) {
+        item.barcode = newBarcode;
+        _enqueueUpdate('item', item.item_id, 'barcode', newBarcode);
+    }
+
+    if (newQty !== (item.quantity ?? 1)) {
+        item.quantity = newQty;
+        _enqueueUpdate('item', item.item_id, 'quantity', newQty);
+    }
+
+    const curColorsStr = (item.colors || []).join(',');
+    const newColorsStr = newColors.join(',');
+    if (newColorsStr !== curColorsStr) {
+        item.colors = newColors;
+        _enqueueUpdate('item', item.item_id, 'colors', newColors);
+    }
+
+    closeStagingMobilePanel();
+    _render();
+    addMessage('Modifiche salvate in staging.', 'success');
 }
 
 function _handleRemoveTag(e) {
@@ -655,6 +1166,13 @@ function _enqueueUpdate(entity, id, field, value) {
             _operationsQueue.push({ op: 'update_blueprint', blueprint_id: id, fields: { [field]: value } });
         }
     }
+}
+
+function _enqueueDelete(itemId) {
+    _operationsQueue = _operationsQueue.filter(
+        op => !(op.op === 'update_item' && op.item_id === itemId)
+    );
+    _operationsQueue.push({ op: 'delete_item', item_id: itemId });
 }
 
 async function _handleRefresh() {

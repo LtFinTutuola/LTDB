@@ -7,7 +7,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="pim-page">
+<div class="pim-page brands-page">
     <!-- Header -->
     <header class="pim-header">
         <div class="pim-header__title-group">
@@ -27,9 +27,14 @@
 
     <!-- Toolbar -->
     <div class="pim-toolbar">
-        <div class="pim-search">
-            <span class="material-symbols-rounded">search</span>
-            <input type="text" id="search-brands" placeholder="Cerca brand per nome...">
+        <div class="pim-toolbar__row" style="display: flex; gap: var(--space-md); flex: 1; align-items: center;">
+            <div class="pim-search">
+                <span class="material-symbols-rounded">search</span>
+                <input type="text" id="search-brands" placeholder="Cerca brand per nome...">
+            </div>
+            <button id="btn-new-brand-mobile" class="btn-add-brand-mobile" type="button" title="Nuovo Brand">
+                <span class="material-symbols-rounded">add</span>
+            </button>
         </div>
         <div id="brands-count" class="pim-stats">Caricamento...</div>
     </div>
@@ -60,6 +65,42 @@
         <div id="empty-state" class="pim-empty-state" style="display: none;">
             <span class="material-symbols-rounded">style</span>
             <p>Nessun brand trovato.</p>
+        </div>
+    </div>
+
+    <!-- Mobile Dedicated Panel: Create / Edit Brand -->
+    <div id="brand-mobile-panel" class="brand-mobile-panel">
+        <div class="brand-mobile-panel__topbar">
+            <button type="button" id="btn-brand-panel-back" class="brand-panel-btn-back" title="Torna indietro" aria-label="Torna indietro">
+                <span class="material-symbols-rounded">arrow_back</span>
+            </button>
+            <h3 id="brand-panel-title" class="brand-panel-title">Modifica Brand</h3>
+            <button type="button" id="btn-brand-panel-delete" class="brand-panel-btn-delete" title="Elimina Brand" aria-label="Elimina Brand">
+                <span class="material-symbols-rounded">delete</span>
+            </button>
+        </div>
+        <div class="brand-mobile-panel__body">
+            <form id="form-brand-mobile">
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px;">
+                    <label for="mob-brand-name" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Nome Brand *</label>
+                    <input type="text" id="mob-brand-name" class="form-control" placeholder="Es. Samsonite, The Bridge..." required>
+                </div>
+
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px;">
+                    <label style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Macro-Categorie Trattate</label>
+                    <span style="font-size: 11px; color: var(--text-muted);">Seleziona le macro-categorie merceologiche offerte da questo brand:</span>
+                    <div id="mob-brand-categories-list" class="multi-select-box">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <div style="margin-top: auto; padding-top: 16px;">
+                    <button type="submit" id="btn-save-brand-mobile" class="btn-primary" style="width: 100%; justify-content: center; min-height: 44px;">
+                        <span class="material-symbols-rounded">check</span>
+                        Salva Brand
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
