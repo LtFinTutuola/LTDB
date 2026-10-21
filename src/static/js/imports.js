@@ -1,6 +1,7 @@
 import * as api from './api.js';
 import * as staging from './staging.js';
 import { addMessage, enterSplitScreen, exitSplitScreen, _esc } from './main.js';
+import { setupBarcodeScanner } from './barcode_scanner.js';
 
 let _activeJobId = null;
 let _pollingInterval = null;
@@ -55,7 +56,12 @@ export function renderForms() {
             </div>
             <div class="form-group">
                 <label>Barcode / EAN</label>
-                <input id="single-barcode" class="form-control" type="text" placeholder="Inserisci il barcode o EAN">
+                <div class="barcode-input-wrapper">
+                    <input id="single-barcode" class="form-control" type="text" placeholder="Inserisci il barcode o EAN">
+                    <button type="button" id="btn-scan-single-barcode" class="btn-scan-field btn-scan-field--mobile-only" title="Scansiona barcode con la fotocamera">
+                        <span class="material-symbols-rounded" style="font-size: 18px;">photo_camera</span>
+                    </button>
+                </div>
             </div>
             <div class="form-group">
                 <label>Quantità</label>
@@ -72,6 +78,22 @@ export function renderForms() {
     
     document.getElementById('btn-submit-ddt').addEventListener('click', submitDDTForm);
     document.getElementById('btn-submit-single').addEventListener('click', submitSingleItemForm);
+
+    setupBarcodeScanner({
+        cameraInputId: 'single-barcode-camera-input',
+        triggerBtnIds: ['btn-scan-single-barcode'],
+        onSuccess: (barcode) => {
+            const barcodeInput = document.getElementById('single-barcode');
+            if (barcodeInput) {
+                barcodeInput.value = barcode;
+                barcodeInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        },
+        onError: () => {},
+        showToastFn: (msg, type) => {
+            addMessage(msg, type === 'error' ? 'error' : 'system');
+        }
+    });
 }
 
 function _val(id) { return document.getElementById(id)?.value?.trim() ?? ''; }

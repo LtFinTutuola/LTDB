@@ -511,3 +511,44 @@ class TestDeleteWithLegacyEmbeddingMeta:
             'SELECT COUNT(*) FROM blueprint_embedding_meta WHERE blueprint_id = :i'
         ), {'i': bp.id}).scalar()
         assert left == 0
+
+
+class TestScanBarcodeEndpoint:
+    def test_scan_barcode_endpoint_success(self, db_session):
+        from fastapi.testclient import TestClient
+        from src.main import app
+        from src.services.barcode_service import create_ean13_test_image
+        client = TestClient(app)
+        test_code = "8000000000019"
+        png_bytes = create_ean13_test_image(test_code)
+
+        res = client.post("/api/v1/catalog/scan-barcode", content=png_bytes, headers={"Content-Type": "image/png"})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert data["barcode"] == test_code
+        assert data["format"] == "EAN-13"
+
+    def test_scan_barcode_endpoint_no_barcode(self, db_session):
+        from fastapi.testclient import TestClient
+        from src.main import app
+        from PIL import Image
+        import io
+        client = TestClient(app)
+        # Blank white image with no barcode
+        img = Image.new("RGB", (200, 100), color=(255, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+
+        res = client.post("/api/v1/catalog/scan-barcode", content=buf.getvalue(), headers={"Content-Type": "image/png"})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "not_found"
+
+    def test_scan_barcode_endpoint_empty_file(self, db_session):
+        from fastapi.testclient import TestClient
+        from src.main import app
+        client = TestClient(app)
+        res = client.post("/api/v1/catalog/scan-barcode", content=b"", headers={"Content-Type": "image/png"})
+        assert res.status_code == 400
+

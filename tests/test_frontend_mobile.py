@@ -483,6 +483,86 @@ def test_vendite_four_columns_and_gemini_article_card(db_session):
     assert "col-article" in js
 
 
+def test_magazzino_camera_barcode_elements(db_session):
+    """
+    Verify that the Magazzino page includes:
+    1. The camera barcode scan button in the search toolbar.
+    2. The hidden camera file input with capture="environment" for plain HTTP non-SSL camera access.
+    3. The mobile article panel barcode scan button.
+    4. The barcode_scanner.js module and its decoding methods.
+    """
+    client = TestClient(app)
+
+    # 1. Page template check
+    res = client.get("/magazzino")
+    assert res.status_code == 200
+    html = res.text
+
+    assert 'id="warehouse-barcode-scan-btn"' in html
+    assert 'id="warehouse-search-scan-btn"' in html
+    assert 'id="warehouse-barcode-camera-input"' in html
+    assert 'capture="environment"' in html
+    assert 'accept="image/*"' in html
+    assert 'id="btn-scan-mob-art-barcode"' in html
+    assert 'class="search-scan-btn"' in html
+
+    # 2. JS module check
+    res_js = client.get("/static/js/barcode_scanner.js")
+    assert res_js.status_code == 200
+    js = res_js.text
+
+    assert "capture" in js
+    assert "environment" in js
+    assert "decodeBarcodeFromFile" in js
+    assert "decodeBarcodeFromCanvas" in js
+    assert "setupBarcodeScanner" in js
+    assert "BarcodeDetector" in js
+    assert "/api/v1/catalog/scan-barcode" in js
+
+
+def test_single_article_import_camera_barcode_scanner(db_session):
+    """
+    Verify that single article import includes camera barcode scanning functionality
+    that is strictly active/visible only within the mobile layout:
+    1. CSS rules in index.html hiding .btn-scan-field--mobile-only on desktop and enabling it on mobile.
+    2. imports.js single article import form contains the scan button with .btn-scan-field--mobile-only
+       and wires setupBarcodeScanner to populate #single-barcode.
+    3. staging.js mobile panel contains the scan button for editing barcode in staging.
+    """
+    client = TestClient(app)
+
+    # 1. Desktop & Mobile CSS rules in /magazzino template
+    res = client.get("/magazzino")
+    assert res.status_code == 200
+    html = res.text
+
+    assert '.btn-scan-field--mobile-only {\n    display: none !important;\n  }' in html
+    assert '.btn-scan-field--mobile-only {\n      display: inline-flex !important;' in html
+    assert '.barcode-input-wrapper {' in html
+
+    # 2. imports.js single article form
+    res_imports = client.get("/static/js/imports.js")
+    assert res_imports.status_code == 200
+    imports_js = res_imports.text
+
+    assert 'btn-scan-single-barcode' in imports_js
+    assert 'btn-scan-field--mobile-only' in imports_js
+    assert 'setupBarcodeScanner' in imports_js
+    assert 'single-barcode-camera-input' in imports_js
+    assert 'single-barcode' in imports_js
+
+    # 3. staging.js mobile staging panel
+    res_staging = client.get("/static/js/staging.js")
+    assert res_staging.status_code == 200
+    staging_js = res_staging.text
+
+    assert 'btn-scan-mob-staging-barcode' in staging_js
+    assert 'mob-staging-barcode-camera-input' in staging_js
+    assert 'setupBarcodeScanner' in staging_js
+
+
+
+
 
 
 

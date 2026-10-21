@@ -12,7 +12,7 @@ Endpoints:
 import time
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -35,7 +35,7 @@ from src.schemas.catalog import (
     SemanticSearchResponse,
     CatalogItemsResponse,
 )
-from src.services import catalog_service, search_service
+from src.services import catalog_service, search_service, barcode_service
 
 logger = get_logger()
 
@@ -501,4 +501,36 @@ def delete_blueprint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(exc) if str(exc).strip() else "unknown server error",
         )
+
+
+@router.post("/scan-barcode", status_code=status.HTTP_200_OK)
+async def scan_barcode_from_photo(
+    request: Request,
+):
+    """
+    Decodes a 1D barcode (EAN-13, EAN-8, UPC) from an uploaded image.
+    Works over plain HTTP with HTML file input capture="environment" without requiring SSL/HTTPS.
+    Accepts raw binary image data (e.g. image/jpeg, image/png) in request body.
+    """
+    try:
+        content = await request.body()
+        if not content:
+            raise HTTPException(status_code=400, detail="File vuoto")
+        result = barcode_service.decode_barcode_from_image(content)
+        if result:
+            return {
+                "status": "success",
+                "barcode": result["barcode"],
+                "format": result.get("format", "EAN-13")
+            }
+        return {
+            "status": "not_found",
+            "message": "Nessun codice a barre rilevato nell'immagine"
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.log_execution("catalog_router", "scan_barcode_err", "err", exc=exc)
+        raise HTTPException(status_code=500, detail="Errore durante l'elaborazione dell'immagine")
+
 

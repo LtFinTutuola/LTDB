@@ -1,4 +1,5 @@
 import * as api from './api.js';
+import { setupBarcodeScanner } from './barcode_scanner.js';
 
 let _controlsBound = false;
 let _editingItem = null;
@@ -407,6 +408,38 @@ function _bindSearchControls() {
             } else {
                 fetchLatestItems(Boolean(stockToggle.checked));
             }
+        });
+    }
+
+    // Camera Barcode Scanner for warehouse search bar (works on HTTP without SSL)
+    setupBarcodeScanner({
+        cameraInputId: 'warehouse-barcode-camera-input',
+        triggerBtnIds: ['warehouse-barcode-scan-btn', 'warehouse-search-scan-btn'],
+        onSuccess: (barcode) => {
+            if (searchInput) {
+                searchInput.value = barcode;
+                if (clearBtn) clearBtn.style.display = 'inline-flex';
+                executeWarehouseSearch();
+            }
+        },
+        onError: () => {},
+        showToastFn: _showToast,
+    });
+
+    // Camera Barcode Scanner for mobile article edit panel
+    const btnScanMobArt = document.getElementById('btn-scan-mob-art-barcode');
+    if (btnScanMobArt) {
+        setupBarcodeScanner({
+            cameraInputId: 'mob-art-barcode-camera-input',
+            triggerBtnIds: ['btn-scan-mob-art-barcode'],
+            onSuccess: (barcode) => {
+                const mobInput = document.getElementById('mob-art-barcode');
+                if (mobInput) {
+                    mobInput.value = barcode;
+                }
+            },
+            onError: () => {},
+            showToastFn: _showToast,
         });
     }
 }

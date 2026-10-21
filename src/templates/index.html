@@ -227,6 +227,82 @@
     box-shadow: none;
   }
 
+  /* Barcode Scanner Button (Camera) */
+  .search-scan-btn {
+    padding: 10px 18px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-app);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-weight: 500;
+    cursor: pointer;
+    font-size: 14px;
+    white-space: nowrap;
+    transition: background var(--transition-fast), border-color var(--transition-fast), transform 0.1s ease;
+  }
+  .search-scan-btn:hover {
+    background: var(--bg-elevated);
+    border-color: rgba(168, 199, 250, 0.45);
+    color: var(--accent);
+  }
+  .search-scan-btn:active {
+    transform: scale(0.98);
+  }
+  .search-scan-icon-btn {
+    display: none;
+    position: absolute;
+    right: 36px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+  .search-scan-icon-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--accent);
+  }
+  .btn-scan-field {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-xs);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .btn-scan-field:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--bg-surface-elevated, var(--bg-elevated));
+  }
+  .btn-scan-field--mobile-only {
+    display: none !important;
+  }
+  .barcode-input-wrapper {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+  }
+  .barcode-input-wrapper .form-control {
+    flex: 1;
+    min-width: 0;
+  }
+
   /* ---- Borderless Warehouse Table (No Excel Gridlines) ---- */
   .warehouse-table-wrapper {
     flex: 1;
@@ -475,7 +551,8 @@
       width: 22px;
       height: 22px;
     }
-    .search-btn {
+    .search-btn,
+    .search-scan-btn {
       width: 38px;
       height: 38px;
       min-width: 38px;
@@ -488,6 +565,17 @@
     }
     .search-btn span:not(.material-symbols-rounded) {
       display: none;
+    }
+    .search-scan-btn span:not(.material-symbols-rounded) {
+      display: none;
+    }
+    .btn-scan-field--mobile-only {
+      display: inline-flex !important;
+      height: 38px;
+      min-width: 40px;
+      padding: 0 10px;
+      border-radius: var(--radius-xs);
+      box-sizing: border-box;
     }
     #chat-panel.chat-panel {
       height: 100% !important;
@@ -800,6 +888,9 @@
                         <div class="search-input-wrapper">
                             <span class="material-symbols-rounded search-input-icon">search</span>
                             <input type="text" id="warehouse-search-input" class="search-input" placeholder="Cerca articoli per nome, brand, categoria, codice o descrizione (es. borsa di Guess con tracolla)...">
+                            <button type="button" id="warehouse-search-scan-btn" class="search-scan-icon-btn" title="Scansiona codice a barre con la fotocamera">
+                                <span class="material-symbols-rounded" style="font-size: 19px;">barcode_scanner</span>
+                            </button>
                             <button type="button" id="warehouse-search-clear" class="search-clear-btn" title="Cancella ricerca">
                                 <span class="material-symbols-rounded" style="font-size: 18px;">close</span>
                             </button>
@@ -813,11 +904,20 @@
                             <span class="warehouse-toggle__label">Mostra solo articoli disponibili</span>
                         </label>
 
+                        <!-- Barcode Scanner Button (Camera) -->
+                        <button type="button" id="warehouse-barcode-scan-btn" class="search-scan-btn" title="Scansiona codice a barre con la fotocamera">
+                            <span class="material-symbols-rounded" style="font-size: 20px;">photo_camera</span>
+                            <span>Scansiona Barcode</span>
+                        </button>
+
                         <!-- Rounded search button on the right -->
                         <button type="button" id="warehouse-search-btn" class="search-btn" title="Cerca articoli">
                             <span class="material-symbols-rounded" style="font-size: 18px;">search</span>
                             <span>Cerca</span>
                         </button>
+
+                        <!-- Hidden camera capture input for non-SSL mobile devices -->
+                        <input type="file" id="warehouse-barcode-camera-input" accept="image/*" capture="environment" style="display: none;">
                     </div>
                     <div id="warehouse-search-feedback" style="margin-top: 8px; font-size: 13px; color: var(--text-secondary); display: none;"></div>
                 </div>
@@ -881,7 +981,12 @@
                         </div>
                         <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
                             <label for="mob-art-barcode" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Barcode (EAN)</label>
-                            <input type="text" id="mob-art-barcode" class="form-control" placeholder="Es. 800000...">
+                            <div style="display: flex; gap: 6px;">
+                                <input type="text" id="mob-art-barcode" class="form-control" placeholder="Es. 800000...">
+                                <button type="button" id="btn-scan-mob-art-barcode" class="btn-scan-field" title="Scansiona barcode con fotocamera">
+                                    <span class="material-symbols-rounded" style="font-size: 18px;">photo_camera</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
 

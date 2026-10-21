@@ -11,6 +11,7 @@ import {
     appState, Mode, setMode,
     addMessage, getDetailPanel, exitSplitScreen, _esc,
 } from './main.js';
+import { setupBarcodeScanner } from './barcode_scanner.js';
 
 // ---- Module state ----
 let _activePhotoIndices = {};
@@ -299,7 +300,12 @@ function _buildMobileStagingPanel() {
                         </div>
                         <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
                             <label for="mob-staging-barcode" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Barcode (EAN)</label>
-                            <input type="text" id="mob-staging-barcode" class="form-control" placeholder="Es. 800000...">
+                            <div style="display: flex; gap: 6px;">
+                                <input type="text" id="mob-staging-barcode" class="form-control" placeholder="Es. 800000...">
+                                <button type="button" id="btn-scan-mob-staging-barcode" class="btn-scan-field" title="Scansiona barcode con la fotocamera">
+                                    <span class="material-symbols-rounded" style="font-size: 18px;">photo_camera</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -646,6 +652,26 @@ function _attachMobileListeners(panel) {
 
     const btnRetry = panel.querySelector('#mob-staging-btn-retry');
     if (btnRetry) btnRetry.addEventListener('click', _handleRetryPhoto);
+
+    // Mobile panel barcode scanner
+    const btnScanBarcode = panel.querySelector('#btn-scan-mob-staging-barcode');
+    if (btnScanBarcode) {
+        setupBarcodeScanner({
+            cameraInputId: 'mob-staging-barcode-camera-input',
+            triggerBtnIds: ['btn-scan-mob-staging-barcode'],
+            onSuccess: (barcode) => {
+                const barcodeInput = panel.querySelector('#mob-staging-barcode');
+                if (barcodeInput) {
+                    barcodeInput.value = barcode;
+                    barcodeInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            },
+            onError: () => {},
+            showToastFn: (msg, type) => {
+                addMessage(msg, type === 'error' ? 'error' : 'system');
+            }
+        });
+    }
 }
 
 export function openStagingMobilePanel(bp, item) {
