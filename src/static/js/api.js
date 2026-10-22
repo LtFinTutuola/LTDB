@@ -76,6 +76,11 @@ export function getPhotoUrl(photoId) {
 
 // --- Catalog ---
 
+export async function getCatalogItems(limit = 50, offset = 0, inStockOnly = false) {
+    const res = await fetch(`${API_BASE}/catalog/items?limit=${limit}&offset=${offset}&in_stock_only=${inStockOnly}`);
+    return _handleResponse(res);
+}
+
 export async function semanticSearch(query, inStockOnly = false) {
     const res = await fetch(`${API_BASE}/catalog/search/semantic`, {
         method: 'POST',

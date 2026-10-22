@@ -5,6 +5,7 @@ Service for direct (non-staging) catalog mutations.
 Supports patching a confirmed ArticleBlueprint's mutable fields
 and optionally regenerating its embedding vector.
 """
+from datetime import date, datetime
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -335,7 +336,11 @@ def delete_catalog_item(
         deleted_articles_count=deleted_articles_count,
     )
 
-def list_latest_items(db: Session, limit: int = 50, offset: int = 0) -> dict:
+def list_latest_items(db: Session, limit: int = 50, offset: int = 0, in_stock_only: bool = False) -> dict:
+    brands_map = {b.id: b for b in db.query(Brand).all()}
+    cats_map = {c.id: c for c in db.query(Category).all()}
+    batches_map = {b.id: b for b in db.query(Batch).all()}
+
     latest_article_subq = (
         db.query(
             Article.article_blueprint_id,
@@ -348,38 +353,58 @@ def list_latest_items(db: Session, limit: int = 50, offset: int = 0) -> dict:
     query = (
         db.query(ArticleBlueprint, latest_article_subq.c.latest_article_date)
         .outerjoin(latest_article_subq, ArticleBlueprint.id == latest_article_subq.c.article_blueprint_id)
-        .order_by(
-            func.coalesce(latest_article_subq.c.latest_article_date, ArticleBlueprint.created_at).desc(),
-            ArticleBlueprint.id
-        )
     )
 
-    total_blueprints = query.count()
-    blueprint_rows = query.offset(offset).limit(limit).all()
+    if in_stock_only:
+        avail_article_subq = (
+            db.query(Article.article_blueprint_id)
+            .filter(Article.status == ArticleStatus.AVAILABLE)
+            .distinct()
+            .subquery()
+        )
+        query = query.join(avail_article_subq, ArticleBlueprint.id == avail_article_subq.c.article_blueprint_id)
 
-    results = []
+    query = query.order_by(
+        func.coalesce(latest_article_subq.c.latest_article_date, ArticleBlueprint.created_at).desc(),
+        ArticleBlueprint.id
+    )
+
+    blueprint_rows = query.all()
+    bp_ids = [bp.id for bp, _ in blueprint_rows]
+
+    all_articles = db.query(Article).filter(Article.article_blueprint_id.in_(bp_ids)).all() if bp_ids else []
+    articles_by_bp = {}
+    for a in all_articles:
+        articles_by_bp.setdefault(a.article_blueprint_id, []).append(a)
+
+    all_photos = db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id.in_(bp_ids)).all() if bp_ids else []
+    photos_by_bp = {}
+    for p in all_photos:
+        photos_by_bp.setdefault(p.article_blueprint_id, []).append(p)
+
+    all_results = []
+    matched_blueprint_ids = set()
+
     for bp, _ in blueprint_rows:
-        brand = db.query(Brand).filter(Brand.id == bp.brand_id).first()
-        category = db.query(Category).filter(Category.id == bp.category_id).first() if bp.category_id else None
+        brand = brands_map.get(bp.brand_id)
+        category = cats_map.get(bp.category_id) if bp.category_id else None
         
         main_category = None
         sub_category = None
         if category:
             if category.parent_id:
                 sub_category = category
-                main_category = db.query(Category).filter(Category.id == category.parent_id).first()
+                main_category = cats_map.get(category.parent_id)
             else:
                 main_category = category
-        
-        articles = db.query(Article).filter(Article.article_blueprint_id == bp.id).all()
 
-        articles_with_batch = []
-        for a in articles:
-            batch = db.query(Batch).filter(Batch.id == a.batch_id).first()
-            if batch:
-                articles_with_batch.append((a, batch))
-        
-        articles_with_batch.sort(key=lambda x: x[1].document_date, reverse=True)
+        articles = articles_by_bp.get(bp.id, [])
+        def _get_sort_key(a):
+            batch = batches_map.get(a.batch_id)
+            doc_date = batch.document_date if batch and batch.document_date else date.min
+            created = a.created_at or datetime.min
+            return (doc_date, created)
+        articles.sort(key=_get_sort_key, reverse=True)
 
         colors_dict = {}
         for a in articles:
@@ -394,24 +419,24 @@ def list_latest_items(db: Session, limit: int = 50, offset: int = 0) -> dict:
         if not colors_dict:
             colors_dict["unknown"] = []
 
+        bp_photos = photos_by_bp.get(bp.id, [])
+
         for color, variant_articles in colors_dict.items():
             stock = len([a for a in variant_articles if a.status == ArticleStatus.AVAILABLE])
-            
+            if in_stock_only and stock <= 0:
+                continue
+
             photo = None
             if color != "unknown":
-                photo = db.query(ArticlePhoto).filter(
-                    ArticlePhoto.article_blueprint_id == bp.id,
-                    ArticlePhoto.canonical_color_name == color
-                ).first()
-            if not photo:
-                photo = db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp.id).first()
-                
-            name = f"{bp.article_name} - {color.capitalize()}" if color and color != "unknown" else bp.article_name
+                photo = next((p for p in bp_photos if p.canonical_color_name == color), None)
+            if not photo and bp_photos:
+                photo = bp_photos[0]
 
+            name = f"{bp.article_name} - {color.capitalize()}" if color and color != "unknown" else bp.article_name
             vendor_code = next((a.supplier_code for a in variant_articles if a.supplier_code), None)
             barcode = next((a.ean for a in variant_articles if a.ean), None)
 
-            results.append(SearchResultItem(
+            all_results.append(SearchResultItem(
                 blueprint_id=bp.id,
                 article_name=name,
                 brand_name=brand.name if brand else "Unknown",
@@ -428,8 +453,22 @@ def list_latest_items(db: Session, limit: int = 50, offset: int = 0) -> dict:
                 materials=list(bp.materials or []),
                 stock=stock
             ))
-            
+            matched_blueprint_ids.add(bp.id)
+
+    total_items = len(all_results)
+    total_blueprints = len(matched_blueprint_ids)
+    page_results = all_results[offset : offset + limit]
+
+    page = (offset // limit) + 1 if limit > 0 else 1
+    total_pages = (total_items + limit - 1) // limit if limit > 0 else 1
+    if total_items == 0:
+        total_pages = 1
+
     return {
-        "results": results,
-        "total_blueprints": total_blueprints
+        "results": page_results,
+        "total_items": total_items,
+        "total_blueprints": total_blueprints,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
     }

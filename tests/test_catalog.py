@@ -298,6 +298,200 @@ def test_list_items(db_session):
     data = response.json()
     assert "results" in data
     assert "total_blueprints" in data
+    assert "page" in data
+    assert "total_pages" in data
+
+
+class TestCatalogPaginationAndStock:
+    def test_list_items_pagination_metadata_and_slices(self, db_session):
+        brand = _make_brand(db_session, name="BrandPagination")
+        bp1 = _make_blueprint(db_session, brand.id, article_name="Item 1")
+        bp2 = _make_blueprint(db_session, brand.id, article_name="Item 2")
+        bp3 = _make_blueprint(db_session, brand.id, article_name="Item 3")
+
+        client = TestClient(app)
+        
+        # Page 1 (limit=2, offset=0)
+        res1 = client.get("/api/v1/catalog/items?limit=2&offset=0")
+        assert res1.status_code == 200
+        data1 = res1.json()
+        assert data1["total_blueprints"] == 3
+        assert data1["page"] == 1
+        assert data1["limit"] == 2
+        assert data1["total_pages"] == 2
+        assert len(data1["results"]) == 2
+
+        # Page 2 (limit=2, offset=2)
+        res2 = client.get("/api/v1/catalog/items?limit=2&offset=2")
+        assert res2.status_code == 200
+        data2 = res2.json()
+        assert data2["total_blueprints"] == 3
+        assert data2["page"] == 2
+        assert data2["limit"] == 2
+        assert data2["total_pages"] == 2
+        assert len(data2["results"]) == 1
+
+        # Check distinct items
+        names1 = {it["article_name"] for it in data1["results"]}
+        names2 = {it["article_name"] for it in data2["results"]}
+        assert names1.isdisjoint(names2)
+
+    def test_list_items_in_stock_only_filter(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article, ArticleStatus
+
+        brand = _make_brand(db_session, name="BrandStock")
+        bp_avail = _make_blueprint(db_session, brand.id, article_name="Available Bag")
+        bp_sold = _make_blueprint(db_session, brand.id, article_name="Sold Bag")
+
+        sup = Supplier(company_name="StockSupplier")
+        db_session.add(sup)
+        db_session.commit()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-STK", document_date=date(2026, 1, 1))
+        db_session.add(batch)
+        db_session.commit()
+
+        # Available article for bp_avail
+        art_avail = Article(
+            article_blueprint_id=bp_avail.id,
+            batch_id=batch.id,
+            status=ArticleStatus.AVAILABLE,
+            colors=["blue"],
+        )
+        # Sold article for bp_sold
+        art_sold = Article(
+            article_blueprint_id=bp_sold.id,
+            batch_id=batch.id,
+            status=ArticleStatus.SOLD,
+            colors=["black"],
+        )
+        db_session.add_all([art_avail, art_sold])
+        db_session.commit()
+
+        client = TestClient(app)
+
+        # In stock only = False: both returned
+        res_all = client.get("/api/v1/catalog/items?in_stock_only=false")
+        assert res_all.status_code == 200
+        data_all = res_all.json()
+        assert data_all["total_blueprints"] == 2
+        all_names = [it["article_name"] for it in data_all["results"]]
+        assert any("Available Bag" in n for n in all_names)
+        assert any("Sold Bag" in n for n in all_names)
+
+        # In stock only = True: only available returned
+        res_stock = client.get("/api/v1/catalog/items?in_stock_only=true")
+        assert res_stock.status_code == 200
+        data_stock = res_stock.json()
+        assert data_stock["total_blueprints"] == 1
+        stock_names = [it["article_name"] for it in data_stock["results"]]
+        assert len(stock_names) == 1
+        assert "Available Bag" in stock_names[0]
+
+    def test_list_items_variant_stock_filtering(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article, ArticleStatus
+        from src.services import catalog_service
+
+        brand = _make_brand(db_session, name="BrandVariants")
+        bp = _make_blueprint(db_session, brand.id, article_name="MultiColor Bag")
+
+        sup = Supplier(company_name="VarSupplier")
+        db_session.add(sup)
+        db_session.commit()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-VAR", document_date=date(2026, 1, 1))
+        db_session.add(batch)
+        db_session.commit()
+
+        art_red = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            status=ArticleStatus.AVAILABLE,
+            colors=["red"],
+        )
+        art_green = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            status=ArticleStatus.SOLD,
+            colors=["green"],
+        )
+        db_session.add_all([art_red, art_green])
+        db_session.commit()
+
+        # Service level check with in_stock_only=True
+        result_stock = catalog_service.list_latest_items(db_session, in_stock_only=True)
+        assert result_stock["total_blueprints"] == 1
+        assert len(result_stock["results"]) == 1
+        assert "Red" in result_stock["results"][0].article_name
+
+        # in_stock_only=False returns both variants
+        result_all = catalog_service.list_latest_items(db_session, in_stock_only=False)
+        assert result_all["total_blueprints"] == 1
+        assert len(result_all["results"]) == 2
+
+    def test_pagination_slices_by_variant_row(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article, ArticleStatus
+
+        brand = _make_brand(db_session, name="BrandMultiVar")
+        bp = _make_blueprint(db_session, brand.id, article_name="T-Shirt")
+
+        sup = Supplier(company_name="MultiVarSupplier")
+        db_session.add(sup)
+        db_session.commit()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-MV", document_date=date(2026, 1, 1))
+        db_session.add(batch)
+        db_session.commit()
+
+        # 3 variants for the same blueprint
+        a_white = Article(article_blueprint_id=bp.id, batch_id=batch.id, colors=["white"], status=ArticleStatus.AVAILABLE)
+        a_black = Article(article_blueprint_id=bp.id, batch_id=batch.id, colors=["black"], status=ArticleStatus.AVAILABLE)
+        a_blue = Article(article_blueprint_id=bp.id, batch_id=batch.id, colors=["blue"], status=ArticleStatus.AVAILABLE)
+        db_session.add_all([a_white, a_black, a_blue])
+        db_session.commit()
+
+        client = TestClient(app)
+
+        # Total variants = 3, Blueprint = 1
+        # Page 1 (limit=2, offset=0)
+        res1 = client.get("/api/v1/catalog/items?limit=2&offset=0")
+        assert res1.status_code == 200
+        d1 = res1.json()
+        assert d1["total_blueprints"] == 1
+        assert d1["total_items"] == 3
+        assert d1["page"] == 1
+        assert d1["total_pages"] == 2
+        assert len(d1["results"]) == 2
+
+        # Page 2 (limit=2, offset=2)
+        res2 = client.get("/api/v1/catalog/items?limit=2&offset=2")
+        assert res2.status_code == 200
+        d2 = res2.json()
+        assert d2["total_blueprints"] == 1
+        assert d2["total_items"] == 3
+        assert d2["page"] == 2
+        assert d2["total_pages"] == 2
+        assert len(d2["results"]) == 1
+
+        # The variant names across pages should not overlap
+        p1_names = {it["article_name"] for it in d1["results"]}
+        p2_names = {it["article_name"] for it in d2["results"]}
+        assert p1_names.isdisjoint(p2_names)
+        assert len(p1_names | p2_names) == 3
+
+    def test_warehouse_ui_pagination_styles_and_scripts_rendered(self, db_session):
+        client = TestClient(app)
+        res = client.get("/magazzino")
+        assert res.status_code == 200
+        assert "warehouse-pagination" in res.text
+        assert "warehouse-pagination__btn" in res.text
+        assert "warehouse-pagination__info" in res.text
+        assert "main.js?v=" in res.text
+        # Verify scrollbar rules for desktop and tablet/mobile
+        assert "#catalog-results.warehouse-table-wrapper::-webkit-scrollbar" in res.text
+        assert "scrollbar-color: var(--border-color) transparent" in res.text
+        # Verify pagination banner is not sticky
+        assert "position: sticky;\n    bottom: 0;\n    z-index: 30;\n    display: flex;\n    align-items: center;\n    justify-content: space-between;\n    padding: 10px 16px;\n    margin-top: 14px;\n    margin-bottom: 2px;\n    background: var(--bg-surface);\n    border: 1px solid var(--border-color);\n    border-radius: var(--radius-md);\n    box-shadow:" not in res.text
 
 
 class TestListLatestItemsCodes:

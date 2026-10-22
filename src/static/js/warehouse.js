@@ -1,10 +1,15 @@
-import * as api from './api.js';
-import { setupBarcodeScanner } from './barcode_scanner.js';
+import * as api from './api.js?v=20261022_4';
+import { setupBarcodeScanner } from './barcode_scanner.js?v=20261022_4';
 
 let _controlsBound = false;
 let _editingItem = null;
 let _deletingItem = null;
 let _currentMobileArticle = null;
+let _currentPage = 1;
+const _pageSize = 50;
+let _totalItems = 0;
+let _totalBlueprints = 0;
+let _totalPages = 1;
 
 export async function initWarehouse() {
     if (!_controlsBound) {
@@ -25,7 +30,7 @@ async function _refreshWarehouseView() {
     if (query) {
         await executeWarehouseSearch();
     } else {
-        await fetchLatestItems(inStockOnly);
+        await fetchLatestItems(inStockOnly, _currentPage);
     }
 }
 
@@ -257,18 +262,23 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
     container.appendChild(table);
 }
 
-async function fetchLatestItems(inStockOnly = false) {
+async function fetchLatestItems(inStockOnly = false, page = 1) {
+    _currentPage = Math.max(1, page);
     const container = document.getElementById('catalog-results');
     if (!container) return;
 
     try {
-        const res = await fetch('/api/v1/catalog/items?limit=50&offset=0');
-        if (!res.ok) throw new Error('Failed to fetch items');
-        const data = await res.json();
+        const offset = (_currentPage - 1) * _pageSize;
+        const data = await api.getCatalogItems(_pageSize, offset, inStockOnly);
 
         let items = data.results || [];
-        if (inStockOnly) {
-            items = items.filter(it => (it.stock || 0) > 0);
+        _totalItems = typeof data.total_items === 'number' ? data.total_items : (typeof data.total_blueprints === 'number' ? data.total_blueprints : items.length);
+        _totalBlueprints = typeof data.total_blueprints === 'number' ? data.total_blueprints : 0;
+        _totalPages = Math.max(1, Math.ceil(_totalItems / _pageSize));
+
+        if (_currentPage > _totalPages && _totalItems > 0) {
+            _currentPage = _totalPages;
+            return await fetchLatestItems(inStockOnly, _currentPage);
         }
 
         _renderResults(
@@ -276,10 +286,119 @@ async function fetchLatestItems(inStockOnly = false) {
             container,
             inStockOnly ? 'Nessun articolo con giacenza disponibile.' : 'Nessun articolo presente a magazzino.'
         );
+
+        _renderPagination(container, inStockOnly);
     } catch (e) {
-        console.error(e);
+        console.error('fetchLatestItems error:', e);
         container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--error);">Errore nel caricamento del magazzino.</div>';
     }
+}
+
+function _renderPagination(container, inStockOnly) {
+    if (!container) return;
+
+    // Clean up any existing pagination elements
+    container.querySelectorAll('.warehouse-pagination').forEach(el => el.remove());
+    document.querySelectorAll('.warehouse-pagination').forEach(el => el.remove());
+
+    if (_totalItems <= 0) return;
+
+    const paginationEl = document.createElement('div');
+    paginationEl.id = 'warehouse-pagination';
+    paginationEl.className = 'warehouse-pagination';
+
+    const startItem = (_currentPage - 1) * _pageSize + 1;
+    const endItem = Math.min(_currentPage * _pageSize, _totalItems);
+
+    const bpInfo = _totalBlueprints > 0 && _totalBlueprints !== _totalItems 
+        ? ` (${_totalBlueprints} modelli)` 
+        : '';
+
+    let html = `
+        <div class="warehouse-pagination__info">
+            Mostrando <strong>${startItem}-${endItem}</strong> di <strong>${_totalItems}</strong> articoli${bpInfo}
+            &nbsp;•&nbsp; Pagina <strong>${_currentPage}</strong> di <strong>${_totalPages}</strong>
+        </div>
+        <div class="warehouse-pagination__controls">
+            <button type="button" class="warehouse-pagination__btn" data-page="PREV" title="Pagina precedente" ${_currentPage <= 1 ? 'disabled' : ''}>
+                <span class="material-symbols-rounded" style="font-size: 18px;">chevron_left</span>
+                <span class="warehouse-pagination__btn-label">Precedente</span>
+            </button>
+    `;
+
+    const pages = [];
+    if (_totalPages <= 7) {
+        for (let i = 1; i <= _totalPages; i++) pages.push(i);
+    } else {
+        pages.push(1);
+        if (_currentPage > 3) {
+            pages.push('...');
+        }
+        const start = Math.max(2, _currentPage - 1);
+        const end = Math.min(_totalPages - 1, _currentPage + 1);
+        for (let i = start; i <= end; i++) {
+            pages.push(i);
+        }
+        if (_currentPage < _totalPages - 2) {
+            pages.push('...');
+        }
+        pages.push(_totalPages);
+    }
+
+    pages.forEach(p => {
+        if (p === '...') {
+            html += `<span class="warehouse-pagination__ellipsis">…</span>`;
+        } else {
+            const isActive = p === _currentPage;
+            html += `
+                <button type="button" class="warehouse-pagination__btn ${isActive ? 'warehouse-pagination__btn--active' : ''}" data-page="${p}" ${isActive ? 'aria-current="page" disabled' : ''}>
+                    ${p}
+                </button>
+            `;
+        }
+    });
+
+    html += `
+            <button type="button" class="warehouse-pagination__btn" data-page="NEXT" title="Pagina successiva" ${_currentPage >= _totalPages ? 'disabled' : ''}>
+                <span class="warehouse-pagination__btn-label">Successivo</span>
+                <span class="material-symbols-rounded" style="font-size: 18px;">chevron_right</span>
+            </button>
+        </div>
+    `;
+
+    paginationEl.innerHTML = html;
+
+    // Robust event delegation on the pagination container
+    paginationEl.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.warehouse-pagination__btn');
+        if (!btn) return;
+        if (btn.disabled || btn.hasAttribute('disabled') || btn.classList.contains('warehouse-pagination__btn--active')) {
+            return;
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const targetPageStr = btn.dataset.page;
+        let targetPage = _currentPage;
+        if (targetPageStr === 'PREV') {
+            targetPage = _currentPage - 1;
+        } else if (targetPageStr === 'NEXT') {
+            targetPage = _currentPage + 1;
+        } else {
+            targetPage = parseInt(targetPageStr, 10);
+        }
+
+        if (!isNaN(targetPage) && targetPage >= 1 && targetPage <= _totalPages && targetPage !== _currentPage) {
+            const stockToggle = document.getElementById('warehouse-stock-toggle');
+            const currentInStockOnly = stockToggle ? Boolean(stockToggle.checked) : inStockOnly;
+
+            container.scrollTop = 0;
+            await fetchLatestItems(currentInStockOnly, targetPage);
+        }
+    });
+
+    container.appendChild(paginationEl);
 }
 
 async function executeWarehouseSearch() {
@@ -292,6 +411,10 @@ async function executeWarehouseSearch() {
 
     if (!container || !searchInput) return;
 
+    // Clean up any pagination elements during search
+    container.querySelectorAll('.warehouse-pagination').forEach(el => el.remove());
+    document.querySelectorAll('.warehouse-pagination').forEach(el => el.remove());
+
     const query = searchInput.value.trim();
     const inStockOnly = stockToggle ? Boolean(stockToggle.checked) : false;
 
@@ -301,7 +424,8 @@ async function executeWarehouseSearch() {
             feedbackEl.style.display = 'none';
             feedbackEl.textContent = '';
         }
-        await fetchLatestItems(inStockOnly);
+        _currentPage = 1;
+        await fetchLatestItems(inStockOnly, 1);
         return;
     }
 
@@ -366,7 +490,8 @@ function _bindSearchControls() {
                     feedbackEl.textContent = '';
                 }
                 const inStockOnly = stockToggle ? Boolean(stockToggle.checked) : false;
-                fetchLatestItems(inStockOnly);
+                _currentPage = 1;
+                fetchLatestItems(inStockOnly, 1);
             }
         });
 
@@ -396,7 +521,8 @@ function _bindSearchControls() {
                 feedbackEl.textContent = '';
             }
             const inStockOnly = stockToggle ? Boolean(stockToggle.checked) : false;
-            fetchLatestItems(inStockOnly);
+            _currentPage = 1;
+            fetchLatestItems(inStockOnly, 1);
         });
     }
 
@@ -406,7 +532,8 @@ function _bindSearchControls() {
             if (query) {
                 executeWarehouseSearch();
             } else {
-                fetchLatestItems(Boolean(stockToggle.checked));
+                _currentPage = 1;
+                fetchLatestItems(Boolean(stockToggle.checked), 1);
             }
         });
     }

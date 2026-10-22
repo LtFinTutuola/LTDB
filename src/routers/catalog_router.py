@@ -46,15 +46,17 @@ router = APIRouter(prefix="/api/v1/catalog", tags=["Catalog"])
 def list_items(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    in_stock_only: bool = Query(False),
     db: Session = Depends(get_db)
 ):
     """
     Return the latest items in the catalog.
     """
     logger.log_execution("catalog_router", "request_received", "ok",
-                         path="/api/v1/catalog/items", method="GET")
+                         path="/api/v1/catalog/items", method="GET",
+                         limit=limit, offset=offset, in_stock_only=in_stock_only)
     try:
-        return catalog_service.list_latest_items(db, limit, offset)
+        return catalog_service.list_latest_items(db, limit, offset, in_stock_only=in_stock_only)
     except Exception as exc:
         logger.log_execution("catalog_router", "exception_caught", "err", exc=exc)
         raise HTTPException(

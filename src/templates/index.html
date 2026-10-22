@@ -7,10 +7,12 @@
   .magazzino-container {
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    height: 100%;
+    max-height: 100%;
     padding: var(--space-md);
     background: var(--bg-app);
     box-sizing: border-box;
+    overflow: hidden;
   }
   .magazzino-header {
     display: flex;
@@ -443,8 +445,124 @@
     flex-shrink: 0;
   }
 
+  /* ---- Warehouse Table Scrollbar (Desktop Only) ---- */
+  @media (min-width: 1025px) {
+    #catalog-results.warehouse-table-wrapper,
+    .warehouse-table-wrapper {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-color) transparent;
+    }
+    #catalog-results.warehouse-table-wrapper::-webkit-scrollbar,
+    .warehouse-table-wrapper::-webkit-scrollbar {
+      width: 7px;
+      height: 7px;
+      display: block;
+      background: transparent;
+    }
+    #catalog-results.warehouse-table-wrapper::-webkit-scrollbar-track,
+    .warehouse-table-wrapper::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    #catalog-results.warehouse-table-wrapper::-webkit-scrollbar-thumb,
+    .warehouse-table-wrapper::-webkit-scrollbar-thumb {
+      background-color: var(--border-color);
+      border-radius: 4px;
+      transition: background-color var(--transition-fast);
+    }
+    #catalog-results.warehouse-table-wrapper::-webkit-scrollbar-thumb:hover,
+    .warehouse-table-wrapper::-webkit-scrollbar-thumb:hover {
+      background-color: var(--text-muted);
+    }
+  }
+
+  /* ---- Warehouse Pagination ---- */
+  .warehouse-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 18px;
+    margin-top: 18px;
+    margin-bottom: 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    gap: 12px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .warehouse-pagination__info {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .warehouse-pagination__info strong {
+    color: var(--text-primary);
+  }
+  .warehouse-pagination__controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .warehouse-pagination__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 10px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--bg-app);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    user-select: none;
+  }
+  .warehouse-pagination__btn * {
+    pointer-events: none;
+  }
+  .warehouse-pagination__btn:hover:not(:disabled) {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border-color: var(--accent);
+  }
+  .warehouse-pagination__btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    border-color: var(--border-color);
+  }
+  .warehouse-pagination__btn--active {
+    background: var(--accent);
+    color: #121316 !important;
+    border-color: var(--accent);
+    font-weight: 600;
+    cursor: default;
+  }
+  .warehouse-pagination__ellipsis {
+    padding: 0 4px;
+    color: var(--text-muted);
+    font-size: 13px;
+    user-select: none;
+  }
+
   /* ---- Mobile & Tablet Responsive Styles (<= 768px / <= 1024px) ---- */
   @media (max-width: 1024px) {
+    #catalog-results.warehouse-table-wrapper,
+    .warehouse-table-wrapper {
+      scrollbar-width: none !important;
+      -ms-overflow-style: none !important;
+    }
+    #catalog-results.warehouse-table-wrapper::-webkit-scrollbar,
+    .warehouse-table-wrapper::-webkit-scrollbar {
+      width: 0px !important;
+      height: 0px !important;
+      display: none !important;
+      background: transparent !important;
+    }
     .magazzino-container {
       height: 100%;
       padding: var(--space-sm);
@@ -864,12 +982,23 @@
       min-width: 36px;
       min-height: 36px;
     }
+    .warehouse-pagination {
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 12px;
+    }
+    .warehouse-pagination__controls {
+      width: 100%;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
   }
 </style>
 {% endblock %}
 
 {% block content %}
-<section id="chat-panel" class="chat-panel" style="display: block; padding: 0;">
+<section id="chat-panel" class="chat-panel" style="display: flex; flex-direction: column; height: 100%; max-height: 100%; padding: 0; overflow: hidden;">
     <div class="magazzino-container" id="magazzino-container">
         <div class="magazzino-header">
             <div class="tabs" id="magazzino-tabs">
@@ -1146,6 +1275,6 @@
 <script>
     window.__LTDB_BRANDS__ = {{ brands_json | safe }};
 </script>
-<script type="module" src="/static/js/main.js"></script>
+<script type="module" src="/static/js/main.js?v=20261022_4"></script>
 {% endblock %}
 

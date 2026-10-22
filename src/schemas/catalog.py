@@ -107,6 +107,10 @@ class SearchResultItem(BaseModel):
 class CatalogItemsResponse(BaseModel):
     results: List[SearchResultItem]
     total_blueprints: int
+    total_items: Optional[int] = None
+    page: Optional[int] = None
+    limit: Optional[int] = None
+    total_pages: Optional[int] = None
 
 
 class SemanticSearchResponse(BaseModel):
