@@ -70,8 +70,65 @@ export async function retryPhoto(jobId, itemId, userFeedback = null, newUrl = nu
     return _handleResponse(res);
 }
 
+const _photoCacheBusters = {};
+
+export function invalidatePhotoCache(photoId) {
+    if (!photoId) return;
+    let id = photoId;
+    if (typeof id === 'string' && id.includes('/ingestion/photos/')) {
+        const parts = id.split('/ingestion/photos/');
+        id = parts[1].split('?')[0];
+    }
+    _photoCacheBusters[id] = Date.now();
+}
+
 export function getPhotoUrl(photoId) {
-    return `${API_BASE}/ingestion/photos/${encodeURIComponent(photoId)}`;
+    if (!photoId) return '';
+    let id = photoId;
+    if (typeof id === 'string' && id.includes('/ingestion/photos/')) {
+        const parts = id.split('/ingestion/photos/');
+        id = parts[1].split('?')[0];
+    }
+    const base = `${API_BASE}/ingestion/photos/${encodeURIComponent(id)}`;
+    const ts = _photoCacheBusters[id];
+    return ts ? `${base}?t=${ts}` : base;
+}
+
+export async function uploadStagingPhoto(jobId, itemId, fileOrBlob) {
+    const res = await fetch(`${API_BASE}/ingestion/staging/${encodeURIComponent(jobId)}/photo-upload/${encodeURIComponent(itemId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': fileOrBlob.type || 'image/jpeg' },
+        body: fileOrBlob,
+    });
+    return _handleResponse(res);
+}
+
+export async function uploadCatalogPhoto(blueprintId, fileOrBlob, color = '') {
+    const url = `${API_BASE}/catalog/${encodeURIComponent(blueprintId)}/photo/upload${color ? `?color=${encodeURIComponent(color)}` : ''}`;
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': fileOrBlob.type || 'image/jpeg' },
+        body: fileOrBlob,
+    });
+    return _handleResponse(res);
+}
+
+export async function setCatalogPhotoUrl(blueprintId, photoUrl, color = '') {
+    const res = await fetch(`${API_BASE}/catalog/${encodeURIComponent(blueprintId)}/photo/url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ photo_url: photoUrl, color: color || null }),
+    });
+    return _handleResponse(res);
+}
+
+export async function searchCatalogPhoto(blueprintId, color = '', feedback = null) {
+    const res = await fetch(`${API_BASE}/catalog/${encodeURIComponent(blueprintId)}/photo/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ color: color || null, feedback: feedback || null }),
+    });
+    return _handleResponse(res);
 }
 
 // --- Catalog ---

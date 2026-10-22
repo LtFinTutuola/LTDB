@@ -1,10 +1,13 @@
+import base64
+from typing import Optional
 import httpx
 from fastapi import HTTPException, status, Response
 from sqlalchemy.orm import Session
 from src.core.logger import get_logger
 from src.repositories import staging_repo
 from src.repositories.photo_repo import photo_repo
-from src.models.pim import Brand
+from src.models.pim import Brand, ArticleBlueprint, ArticlePhoto
+from src.models.wms import Article
 from src.schemas.data_ingestion import PhotoRetryRequest
 from src.agents.llm_client import LLMClient
 from src.agents.article_blueprints_agent.nodes.color_photo_search_node import (
@@ -139,26 +142,168 @@ def serve_photo(db: Session, photo_id: str) -> Response:
     if not photo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found")
         
-    # Content type should probably be inferred or hardcoded as generic image
-    return Response(content=photo.photo_data, media_type="image/jpeg")
+    return Response(
+        content=photo.photo_data,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )
 
 
-def download_and_save_photo(db: Session, blueprint_id: str, color_name: str, photo_url: str, commit_changes: bool = True):
-    if not photo_url or photo_url.startswith("/api/"):
-        return
-        
-    # Check if duplicate exists before downloading
-    existing = photo_repo.get_photo_by_blueprint_and_color(db, blueprint_id, color_name)
-    if existing:
-        return
-        
+def download_and_save_photo(
+    db: Session,
+    blueprint_id: str,
+    color_name: str,
+    photo_url: str,
+    commit_changes: bool = True,
+    force_update: bool = False,
+) -> Optional[ArticlePhoto]:
+    if not photo_url:
+        return None
+    if photo_url.startswith("/api/"):
+        return None
+
+    if not force_update:
+        existing = photo_repo.get_photo_by_blueprint_and_color(db, blueprint_id, color_name or "")
+        if existing:
+            return existing
+
+    # 1. Handle base64 data URLs
+    if photo_url.startswith("data:"):
+        try:
+            if "," in photo_url:
+                _, encoded = photo_url.split(",", 1)
+            else:
+                encoded = photo_url
+            photo_bytes = base64.b64decode(encoded)
+            return photo_repo.upsert_photo(
+                db, blueprint_id, color_name or "", photo_bytes, commit_changes=commit_changes
+            )
+        except Exception as exc:
+            logger.log_execution("photo_service", "data_url_decode_failed", "warn", exc=str(exc))
+            raise ValueError(f"Failed to decode data URL: {exc}")
+
+    # 2. Remote HTTP/HTTPS URL
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-        with httpx.Client(headers=headers, timeout=5.0, follow_redirects=True) as client:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
+        with httpx.Client(headers=headers, timeout=10.0, follow_redirects=True) as client:
             resp = client.get(photo_url)
             resp.raise_for_status()
-            
-            photo_repo.create_photo(db, blueprint_id, color_name, resp.content, commit_changes=commit_changes)
+
+            return photo_repo.upsert_photo(
+                db, blueprint_id, color_name or "", resp.content, commit_changes=commit_changes
+            )
     except Exception as exc:
         logger.log_execution("photo_service", "download_failed", "warn", url=photo_url, exc=str(exc))
         raise ValueError(f"Failed to download image from {photo_url}: {exc}")
+
+
+def save_photo_bytes(
+    db: Session,
+    blueprint_id: str,
+    color_name: str,
+    photo_bytes: bytes,
+    commit_changes: bool = True,
+) -> ArticlePhoto:
+    """Save or update raw photo bytes for a blueprint and color."""
+    if not photo_bytes:
+        raise ValueError("Photo bytes cannot be empty")
+    return photo_repo.upsert_photo(
+        db, blueprint_id, color_name or "", photo_bytes, commit_changes=commit_changes
+    )
+
+
+def download_and_upsert_photo(
+    db: Session,
+    blueprint_id: str,
+    color_name: str,
+    photo_url: str,
+    commit_changes: bool = True,
+) -> ArticlePhoto:
+    """Download from URL (or decode data URL) and upsert photo into article_photos."""
+    if not photo_url:
+        raise ValueError("Photo URL cannot be empty")
+    res = download_and_save_photo(
+        db, blueprint_id, color_name, photo_url, commit_changes=commit_changes, force_update=True
+    )
+    if not res:
+        raise ValueError(f"Failed to process image from {photo_url}")
+    return res
+
+
+async def search_and_set_catalog_photo(
+    db: Session,
+    blueprint_id: str,
+    color_name: str = "",
+    user_feedback: Optional[str] = None,
+) -> ArticlePhoto:
+    """Use Gemini grounded search to find an image for a catalog blueprint and save it."""
+    bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == blueprint_id).first()
+    if not bp:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Blueprint non trovato")
+
+    brand = db.query(Brand).filter(Brand.id == bp.brand_id).first()
+    brand_name = brand.name if brand else ""
+
+    sample_article = (
+        db.query(Article)
+        .filter(Article.article_blueprint_id == blueprint_id)
+        .first()
+    )
+    vendor_code = sample_article.supplier_code if sample_article else ""
+
+    bp_info = (
+        f"Brand: {brand_name}\n"
+        f"Article Name: {bp.article_name}\n"
+        f"Vendor Code: {vendor_code}\n"
+        f"Color: {color_name}\n"
+        f"Description: {bp.description or ''}"
+    )
+
+    if user_feedback:
+        prompt_content = f"L'utente ha fornito questo feedback:\n'{user_feedback}'\n\nUsa queste informazioni sull'articolo per generare una query di ricerca:\n{bp_info}"
+    else:
+        prompt_content = f"Genera una query di ricerca Google mirata per trovare l'immagine del prodotto:\n{bp_info}"
+
+    client = LLMClient()
+    generated_query = await client.call(
+        model_name="gemini-3.1-flash-lite",
+        system_prompt=_SYSTEM_PROMPT_QUERY_GEN,
+        prompt=prompt_content,
+        pipeline_stage="Catalog Photo Search - Query Gen",
+        temperature=0.3,
+    )
+    generated_query = generated_query.strip()
+
+    search_prompt = f"Esegui una ricerca su internet e trova una foto reale del prodotto usando questa query:\n{generated_query}"
+    raw_res, extracted_urls = await client.call_with_grounding(
+        model_name="gemini-3.1-flash-lite",
+        system_prompt=_SYSTEM_PROMPT_SEARCH,
+        prompt=search_prompt,
+        pipeline_stage="Catalog Photo Search - Grounded",
+        temperature=0.2,
+    )
+
+    raw_res_stripped = raw_res.strip()
+    candidate_url = None if raw_res_stripped.upper() == "NULL" else _extract_best_url(extracted_urls, raw_res_stripped)
+    if candidate_url:
+        is_valid = await _validate_photo_url(candidate_url)
+        if not is_valid:
+            logger.log_execution("photo_service", "catalog_url_guard_rejected", "warn",
+                                  rejected_url=candidate_url, blueprint_id=blueprint_id)
+            candidate_url = None
+
+    if not candidate_url:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nessuna foto valida trovata per questo articolo. Prova a inserire un URL manualmente."
+        )
+
+    return download_and_upsert_photo(db, blueprint_id, color_name, candidate_url, commit_changes=True)

@@ -82,5 +82,50 @@ class ArticlePhotoRepository:
         )
         return photo
 
+    def upsert_photo(
+        self,
+        db: Session,
+        blueprint_id: str,
+        color_name: str,
+        photo_data: bytes,
+        commit_changes: bool = True,
+    ) -> ArticlePhoto:
+        """
+        Create or update an ArticlePhoto record for (blueprint_id, canonical_color_name).
+        If existing, overwrites photo_data and updates the record.
+        If not existing, creates a new ArticlePhoto.
+        """
+        existing = self.get_photo_by_blueprint_and_color(db, blueprint_id, color_name or "")
+        if existing:
+            existing.photo_data = photo_data
+            if commit_changes:
+                db.commit()
+                db.refresh(existing)
+            else:
+                db.flush()
+            logger.log_execution(
+                "photo_repo", "photo_updated", "ok",
+                photo_id=str(existing.id), blueprint_id=blueprint_id, color_name=color_name,
+            )
+            return existing
+
+        photo = ArticlePhoto(
+            article_blueprint_id=blueprint_id,
+            canonical_color_name=(color_name or "").lower(),
+            photo_data=photo_data,
+        )
+        db.add(photo)
+        if commit_changes:
+            db.commit()
+            db.refresh(photo)
+        else:
+            db.flush()
+
+        logger.log_execution(
+            "photo_repo", "photo_created", "ok",
+            photo_id=str(photo.id), blueprint_id=blueprint_id, color_name=color_name,
+        )
+        return photo
+
 
 photo_repo = ArticlePhotoRepository()

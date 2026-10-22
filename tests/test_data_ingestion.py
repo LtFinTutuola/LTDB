@@ -787,3 +787,71 @@ def test_single_item_request_whitespace_stripping():
     assert req.colors == ["rosso", "blu notte"]
 
 
+def test_staging_photo_upload_success(db_session):
+    from fastapi.testclient import TestClient
+    from src.main import app
+    from src.models.staging import StagingArea, JobStatus, JobType
+    from src.core.database import get_db
+
+    app.dependency_overrides[get_db] = lambda: db_session
+    client = TestClient(app)
+
+    job_id = "test-job-upload-photo"
+    job = StagingArea(
+        id=job_id,
+        status=JobStatus.COMPLETED,
+        job_type=JobType.SINGLE_ITEM_IMPORT,
+        data={
+            "brand_id": "b-1",
+            "items": [{"item_id": "item-1", "article_blueprint_id": "bp-1", "colors": ["nero"]}],
+            "blueprints": [{"id": "bp-1", "article_name": "Bag"}],
+            "photo_proposals": [{"item_id": "item-1", "photo_url": "old_url", "photo_source": "auto"}]
+        }
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    raw_bytes = b"my_manual_photo_bytes_999"
+    res = client.post(
+        f"/api/v1/ingestion/staging/{job_id}/photo-upload/item-1",
+        content=raw_bytes,
+        headers={"Content-Type": "image/jpeg"}
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "success"
+    assert data["data"]["item_id"] == "item-1"
+    assert data["data"]["photo_source"] == "manual_upload"
+    assert data["data"]["photo_url"].startswith("data:image/jpeg;base64,")
+
+    app.dependency_overrides.clear()
+
+
+def test_staging_photo_upload_empty_content_fails(db_session):
+    from fastapi.testclient import TestClient
+    from src.main import app
+    from src.models.staging import StagingArea, JobStatus, JobType
+    from src.core.database import get_db
+
+    app.dependency_overrides[get_db] = lambda: db_session
+    client = TestClient(app)
+
+    job_id = "test-job-upload-empty"
+    job = StagingArea(
+        id=job_id,
+        status=JobStatus.COMPLETED,
+        job_type=JobType.SINGLE_ITEM_IMPORT,
+        data={"items": [{"item_id": "item-1"}]}
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    res = client.post(
+        f"/api/v1/ingestion/staging/{job_id}/photo-upload/item-1",
+        content=b"",
+        headers={"Content-Type": "image/jpeg"}
+    )
+    assert res.status_code == 400
+    app.dependency_overrides.clear()
+
+

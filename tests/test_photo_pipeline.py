@@ -350,3 +350,50 @@ async def test_search_photo_for_item_includes_search_query():
     assert res["photo_url"] == "https://example.com/photo.jpg"
 
 
+def test_upsert_article_photo(db_session):
+    """Verify upsert_photo creates new and updates existing photo without integrity errors."""
+    brand = Brand(name="Upsert Brand")
+    db_session.add(brand)
+    db_session.commit()
+    bp = ArticleBlueprint(brand_id=brand.id, article_name="Jacket", description="", extended_description="", tags=[])
+    db_session.add(bp)
+    db_session.commit()
+
+    # 1. Create initial
+    photo1 = photo_repo.upsert_photo(db_session, bp.id, "Nero", b"original_data")
+    assert photo1.photo_data == b"original_data"
+    assert photo1.canonical_color_name == "nero"
+
+    # 2. Update existing
+    photo2 = photo_repo.upsert_photo(db_session, bp.id, "nero", b"updated_data")
+    assert photo2.id == photo1.id
+    assert photo2.photo_data == b"updated_data"
+
+    # 3. Verify exactly one row in DB
+    all_photos = photo_repo.get_all_photos_by_blueprint(db_session, bp.id)
+    assert len(all_photos) == 1
+    assert all_photos[0].photo_data == b"updated_data"
+
+
+def test_download_and_save_photo_data_url(db_session):
+    """Verify download_and_save_photo handles base64 data URLs properly."""
+    import base64
+    from src.services.photo_service import download_and_save_photo
+
+    brand = Brand(name="DataURL Brand")
+    db_session.add(brand)
+    db_session.commit()
+    bp = ArticleBlueprint(brand_id=brand.id, article_name="Shoes", description="", extended_description="", tags=[])
+    db_session.add(bp)
+    db_session.commit()
+
+    raw_bytes = b"\x89PNG\r\n\x1a\nfakeimagebytes"
+    b64_str = base64.b64encode(raw_bytes).decode("ascii")
+    data_url = f"data:image/png;base64,{b64_str}"
+
+    photo = download_and_save_photo(db_session, bp.id, "rosso", data_url, commit_changes=True)
+    assert photo is not None
+    assert photo.photo_data == raw_bytes
+    assert photo.canonical_color_name == "rosso"
+
+

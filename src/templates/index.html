@@ -445,6 +445,30 @@
     flex-shrink: 0;
   }
 
+  .btn-photo-action {
+    background: var(--bg-surface);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-secondary);
+    padding: 6px 4px;
+    border-radius: var(--radius-xs);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    white-space: nowrap;
+    text-align: center;
+    width: 100%;
+  }
+  .btn-photo-action:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--bg-elevated);
+  }
+
   /* ---- Warehouse Table Scrollbar (Desktop Only) ---- */
   @media (min-width: 1025px) {
     #catalog-results.warehouse-table-wrapper,
@@ -1084,7 +1108,7 @@
             <div class="article-mobile-panel__body">
                 <form id="form-article-mobile" class="mobile-panel-form">
                     <!-- Photo and Meta Preview Card -->
-                    <div class="mobile-art-preview" style="display: flex; gap: 14px; align-items: center; background: var(--bg-app); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-bottom: 14px;">
+                    <div class="mobile-art-preview" style="display: flex; gap: 14px; align-items: center; background: var(--bg-app); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-bottom: 10px;">
                         <div id="mob-art-photo-wrap" style="width: 64px; height: 64px; border-radius: var(--radius-xs); overflow: hidden; background: var(--bg-elevated); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: zoom-in;">
                             <img id="mob-art-photo" src="" alt="" style="width: 100%; height: 100%; object-fit: cover;">
                             <span id="mob-art-photo-placeholder" style="font-size: 28px; display: none;">🖼</span>
@@ -1096,6 +1120,22 @@
                                 <span id="mob-art-stock" class="stock-badge"></span>
                             </div>
                         </div>
+                    </div>
+
+                    <!-- Photo Action Bar -->
+                    <div class="mobile-art-photo-actions" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 14px;">
+                        <button type="button" id="btn-mob-art-search-google" class="btn-photo-action" title="Cerca su Google Immagini">
+                            🔍 Cerca
+                        </button>
+                        <button type="button" id="btn-mob-art-upload-photo" class="btn-photo-action" title="Carica foto (fotocamera o galleria)">
+                            📁 Carica
+                        </button>
+                        <button type="button" id="btn-mob-art-manual-url" class="btn-photo-action" title="Inserisci URL immagine">
+                            🔗 URL
+                        </button>
+                        <button type="button" id="btn-mob-art-ai-search" class="btn-photo-action" title="Riprova ricerca con l'AI">
+                            🔄 Riprova
+                        </button>
                     </div>
 
                     <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
@@ -1182,6 +1222,31 @@
         </div>
         <form id="form-edit-article">
             <div class="modal-body">
+                <!-- Photo Section -->
+                <div class="edit-article-photo-card" style="display: flex; gap: 14px; align-items: center; background: var(--bg-app); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-bottom: 14px;">
+                    <div id="edit-art-photo-wrap" style="width: 72px; height: 72px; border-radius: var(--radius-xs); overflow: hidden; background: var(--bg-elevated); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: zoom-in; border: 1px solid var(--border-color);">
+                        <img id="edit-art-photo" src="" alt="" style="width: 100%; height: 100%; object-fit: cover; display: none;">
+                        <span id="edit-art-photo-placeholder" style="font-size: 32px; color: var(--text-muted);">🖼</span>
+                    </div>
+                    <div style="flex: 1; display: flex; flex-direction: column; gap: 6px;">
+                        <span style="font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase;">Foto Articolo</span>
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;">
+                            <button type="button" id="btn-edit-art-search-google" class="btn-photo-action" title="Cerca immagini su Google in nuova scheda">
+                                🔍 Cerca
+                            </button>
+                            <button type="button" id="btn-edit-art-upload-photo" class="btn-photo-action" title="Carica foto dal computer o dispositivo">
+                                📁 Carica Foto
+                            </button>
+                            <button type="button" id="btn-edit-art-manual-url" class="btn-photo-action" title="Inserisci URL immagine da web">
+                                🔗 Inserisci URL
+                            </button>
+                            <button type="button" id="btn-edit-art-ai-search" class="btn-photo-action" title="Riprova ricerca con l'AI">
+                                🔄 Riprova
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
                     <label for="edit-article-name" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Nome Articolo *</label>
                     <input type="text" id="edit-article-name" class="form-control" required>
@@ -1275,6 +1340,6 @@
 <script>
     window.__LTDB_BRANDS__ = {{ brands_json | safe }};
 </script>
-<script type="module" src="/static/js/main.js?v=20261022_4"></script>
+<script type="module" src="/static/js/main.js?v=20261022_6"></script>
 {% endblock %}
 

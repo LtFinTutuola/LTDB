@@ -1,5 +1,6 @@
-import * as api from './api.js?v=20261022_4';
-import { setupBarcodeScanner } from './barcode_scanner.js?v=20261022_4';
+import * as api from './api.js?v=20261022_6';
+import { setupBarcodeScanner } from './barcode_scanner.js?v=20261022_6';
+import { requestPhotoUpload } from './photo_upload_helper.js?v=20261022_6';
 
 let _controlsBound = false;
 let _editingItem = null;
@@ -626,6 +627,249 @@ function _bindArticleModals() {
             }
         });
     }
+
+    // Desktop photo buttons
+    const btnUploadDesktop = document.getElementById('btn-edit-art-upload-photo');
+    if (btnUploadDesktop) {
+        btnUploadDesktop.addEventListener('click', () => {
+            if (!_editingItem) return;
+            const color = _editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '';
+            requestPhotoUpload({
+                onSuccess: async (compressedBlob) => {
+                    // Instant local preview
+                    const blobUrl = URL.createObjectURL(compressedBlob);
+                    const img = document.getElementById('edit-art-photo');
+                    const placeholder = document.getElementById('edit-art-photo-placeholder');
+                    if (img && placeholder) {
+                        img.src = blobUrl;
+                        img.style.display = 'block';
+                        placeholder.style.display = 'none';
+                    }
+                    _showToast('Caricamento foto in corso...', 'info');
+                    try {
+                        const res = await api.uploadCatalogPhoto(_editingItem.blueprint_id, compressedBlob, color);
+                        if (res && res.photo_id) {
+                            api.invalidatePhotoCache(res.photo_id);
+                            _editingItem.photo_id = res.photo_id;
+                            _updateArticlePhotoPreview('desktop', res.photo_id, true);
+                            _showToast('Foto aggiornata con successo!');
+                            await _refreshWarehouseView();
+                        }
+                    } catch (err) {
+                        _showToast(err.message || 'Errore durante il caricamento della foto.', 'error');
+                        _updateArticlePhotoPreview('desktop', _editingItem.photo_id, false);
+                    }
+                },
+                onError: (err) => {
+                    _showToast('Errore durante la selezione della foto: ' + (err.message || err), 'error');
+                }
+            });
+        });
+    }
+
+    const btnGoogleDesktop = document.getElementById('btn-edit-art-search-google');
+    if (btnGoogleDesktop) {
+        btnGoogleDesktop.addEventListener('click', () => {
+            if (!_editingItem) return;
+            const color = _editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '';
+            const q = `${_editingItem.brand_name || ''} ${_extractBaseArticleName(_editingItem)} ${color}`.trim();
+            const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`;
+            window.open(searchUrl, '_blank', 'noopener,noreferrer');
+        });
+    }
+
+    const btnUrlDesktop = document.getElementById('btn-edit-art-manual-url');
+    if (btnUrlDesktop) {
+        btnUrlDesktop.addEventListener('click', async () => {
+            if (!_editingItem) return;
+            const url = prompt('Inserisci l\'URL dell\'immagine da impostare:');
+            if (!url || !url.trim()) return;
+            const color = _editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '';
+            _showToast('Download foto in corso...', 'info');
+            try {
+                const res = await api.setCatalogPhotoUrl(_editingItem.blueprint_id, url.trim(), color);
+                if (res && res.photo_id) {
+                    api.invalidatePhotoCache(res.photo_id);
+                    _editingItem.photo_id = res.photo_id;
+                    _updateArticlePhotoPreview('desktop', res.photo_id, true);
+                    _showToast('Foto impostata con successo!');
+                    await _refreshWarehouseView();
+                }
+            } catch (err) {
+                _showToast(err.message || 'Impossibile scaricare la foto dall\'URL.', 'error');
+            }
+        });
+    }
+
+    const btnAiDesktop = document.getElementById('btn-edit-art-ai-search');
+    if (btnAiDesktop) {
+        btnAiDesktop.addEventListener('click', async () => {
+            if (!_editingItem) return;
+            const feedback = prompt('Descrivi la foto da cercare su Internet con l\'AI (opzionale):');
+            const color = _editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '';
+            _showToast('Ricerca AI su Internet in corso...', 'info');
+            btnAiDesktop.disabled = true;
+            try {
+                const res = await api.searchCatalogPhoto(_editingItem.blueprint_id, color, feedback || null);
+                if (res && res.photo_id) {
+                    api.invalidatePhotoCache(res.photo_id);
+                    _editingItem.photo_id = res.photo_id;
+                    _updateArticlePhotoPreview('desktop', res.photo_id, true);
+                    _showToast('Foto trovata e impostata con successo!');
+                    await _refreshWarehouseView();
+                }
+            } catch (err) {
+                _showToast(err.message || 'Nessuna foto trovata con l\'AI.', 'error');
+            } finally {
+                btnAiDesktop.disabled = false;
+            }
+        });
+    }
+
+    // Mobile panel photo buttons
+    const btnUploadMobile = document.getElementById('btn-mob-art-upload-photo');
+    if (btnUploadMobile) {
+        btnUploadMobile.addEventListener('click', () => {
+            if (!_currentMobileArticle) return;
+            const color = _currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '';
+            requestPhotoUpload({
+                onSuccess: async (compressedBlob) => {
+                    // Instant local preview
+                    const blobUrl = URL.createObjectURL(compressedBlob);
+                    const img = document.getElementById('mob-art-photo');
+                    const placeholder = document.getElementById('mob-art-photo-placeholder');
+                    if (img && placeholder) {
+                        img.src = blobUrl;
+                        img.style.display = 'block';
+                        placeholder.style.display = 'none';
+                    }
+                    _showToast('Caricamento foto in corso...', 'info');
+                    try {
+                        const res = await api.uploadCatalogPhoto(_currentMobileArticle.blueprint_id, compressedBlob, color);
+                        if (res && res.photo_id) {
+                            api.invalidatePhotoCache(res.photo_id);
+                            _currentMobileArticle.photo_id = res.photo_id;
+                            _updateArticlePhotoPreview('mobile', res.photo_id, true);
+                            _showToast('Foto aggiornata con successo!');
+                            await _refreshWarehouseView();
+                        }
+                    } catch (err) {
+                        _showToast(err.message || 'Errore durante il caricamento della foto.', 'error');
+                        _updateArticlePhotoPreview('mobile', _currentMobileArticle.photo_id, false);
+                    }
+                },
+                onError: (err) => {
+                    _showToast('Errore durante la selezione della foto: ' + (err.message || err), 'error');
+                }
+            });
+        });
+    }
+
+    const btnGoogleMobile = document.getElementById('btn-mob-art-search-google');
+    if (btnGoogleMobile) {
+        btnGoogleMobile.addEventListener('click', () => {
+            if (!_currentMobileArticle) return;
+            const color = _currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '';
+            const q = `${_currentMobileArticle.brand_name || ''} ${_extractBaseArticleName(_currentMobileArticle)} ${color}`.trim();
+            const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`;
+            window.open(searchUrl, '_blank', 'noopener,noreferrer');
+        });
+    }
+
+    const btnUrlMobile = document.getElementById('btn-mob-art-manual-url');
+    if (btnUrlMobile) {
+        btnUrlMobile.addEventListener('click', async () => {
+            if (!_currentMobileArticle) return;
+            const url = prompt('Inserisci l\'URL dell\'immagine da impostare:');
+            if (!url || !url.trim()) return;
+            const color = _currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '';
+            _showToast('Download foto in corso...', 'info');
+            try {
+                const res = await api.setCatalogPhotoUrl(_currentMobileArticle.blueprint_id, url.trim(), color);
+                if (res && res.photo_id) {
+                    api.invalidatePhotoCache(res.photo_id);
+                    _currentMobileArticle.photo_id = res.photo_id;
+                    _updateArticlePhotoPreview('mobile', res.photo_id, true);
+                    _showToast('Foto impostata con successo!');
+                    await _refreshWarehouseView();
+                }
+            } catch (err) {
+                _showToast(err.message || 'Impossibile scaricare la foto dall\'URL.', 'error');
+            }
+        });
+    }
+
+    const btnAiMobile = document.getElementById('btn-mob-art-ai-search');
+    if (btnAiMobile) {
+        btnAiMobile.addEventListener('click', async () => {
+            if (!_currentMobileArticle) return;
+            const feedback = prompt('Descrivi la foto da cercare su Internet con l\'AI (opzionale):');
+            const color = _currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '';
+            _showToast('Ricerca AI su Internet in corso...', 'info');
+            btnAiMobile.disabled = true;
+            try {
+                const res = await api.searchCatalogPhoto(_currentMobileArticle.blueprint_id, color, feedback || null);
+                if (res && res.photo_id) {
+                    api.invalidatePhotoCache(res.photo_id);
+                    _currentMobileArticle.photo_id = res.photo_id;
+                    _updateArticlePhotoPreview('mobile', res.photo_id, true);
+                    _showToast('Foto trovata e impostata con successo!');
+                    await _refreshWarehouseView();
+                }
+            } catch (err) {
+                _showToast(err.message || 'Nessuna foto trovata con l\'AI.', 'error');
+            } finally {
+                btnAiMobile.disabled = false;
+            }
+        });
+    }
+}
+
+function _updateArticlePhotoPreview(target, photoId, forceBust = false) {
+    if (!photoId) {
+        if (target === 'desktop' || target === 'both') {
+            const img = document.getElementById('edit-art-photo');
+            const placeholder = document.getElementById('edit-art-photo-placeholder');
+            if (img && placeholder) {
+                img.src = '';
+                img.style.display = 'none';
+                placeholder.style.display = 'block';
+            }
+        }
+        if (target === 'mobile' || target === 'both') {
+            const img = document.getElementById('mob-art-photo');
+            const placeholder = document.getElementById('mob-art-photo-placeholder');
+            if (img && placeholder) {
+                img.src = '';
+                img.style.display = 'none';
+                placeholder.style.display = 'block';
+            }
+        }
+        return;
+    }
+
+    if (forceBust) {
+        api.invalidatePhotoCache(photoId);
+    }
+    const photoUrl = api.getPhotoUrl(photoId);
+    if (target === 'desktop' || target === 'both') {
+        const img = document.getElementById('edit-art-photo');
+        const placeholder = document.getElementById('edit-art-photo-placeholder');
+        if (img && placeholder) {
+            img.src = photoUrl;
+            img.style.display = 'block';
+            placeholder.style.display = 'none';
+        }
+    }
+    if (target === 'mobile' || target === 'both') {
+        const img = document.getElementById('mob-art-photo');
+        const placeholder = document.getElementById('mob-art-photo-placeholder');
+        if (img && placeholder) {
+            img.src = photoUrl;
+            img.style.display = 'block';
+            placeholder.style.display = 'none';
+        }
+    }
 }
 
 let _brandCategoriesCache = {};
@@ -716,6 +960,33 @@ function openEditArticleModal(item) {
                 _populateCategoryDropdowns(macroSelect, subSelect, hierarchy, item.category_name, item.sub_category_name);
             });
         }
+    }
+
+    // Photo preview setup
+    const photoImg = document.getElementById('edit-art-photo');
+    const photoPlaceholder = document.getElementById('edit-art-photo-placeholder');
+    const photoWrap = document.getElementById('edit-art-photo-wrap');
+
+    const hasPhoto = Boolean(item.photo_id);
+    const photoUrl = hasPhoto ? api.getPhotoUrl(item.photo_id) : '';
+
+    if (photoImg && photoPlaceholder) {
+        if (hasPhoto) {
+            photoImg.src = photoUrl;
+            photoImg.style.display = 'block';
+            photoPlaceholder.style.display = 'none';
+        } else {
+            photoImg.src = '';
+            photoImg.style.display = 'none';
+            photoPlaceholder.style.display = 'block';
+        }
+    }
+    if (photoWrap) {
+        photoWrap.onclick = () => {
+            if (_editingItem && _editingItem.photo_id) {
+                showImageFullscreen(api.getPhotoUrl(_editingItem.photo_id), _editingItem.article_name);
+            }
+        };
     }
 
     modalEdit.classList.add('active');

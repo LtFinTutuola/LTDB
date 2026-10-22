@@ -322,8 +322,9 @@
 
 .btn-retry-photo,
 .btn-search-photo,
+.btn-upload-photo,
 .btn-manual-photo {
-    background: none;
+    background: var(--bg-surface);
     border: 1px solid rgba(255, 255, 255, 0.12);
     color: var(--text-secondary);
     padding: var(--space-xs) var(--space-sm);
@@ -333,13 +334,44 @@
     transition: all var(--transition-fast);
     white-space: nowrap;
     width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
 }
 
 .btn-retry-photo:hover,
 .btn-search-photo:hover,
+.btn-upload-photo:hover,
 .btn-manual-photo:hover {
     border-color: var(--accent);
     color: var(--accent);
+    background: var(--bg-elevated);
+}
+
+.btn-photo-action {
+    background: var(--bg-surface);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-secondary);
+    padding: 6px 4px;
+    border-radius: var(--radius-xs);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    white-space: nowrap;
+    text-align: center;
+    width: 100%;
+}
+
+.btn-photo-action:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--bg-elevated);
 }
 
 /* ============================================================

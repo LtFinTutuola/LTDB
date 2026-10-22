@@ -854,4 +854,100 @@ class TestUpdateBlueprintQuantityAndCategory:
         assert "mob-art-qty" in res.text
         assert "mob-art-macro-cat" in res.text
         assert "mob-art-sub-cat" in res.text
+        # Photo elements in Desktop edit modal
+        assert "edit-art-photo-wrap" in res.text
+        assert "btn-edit-art-upload-photo" in res.text
+        assert "btn-edit-art-search-google" in res.text
+        assert "btn-edit-art-manual-url" in res.text
+        assert "btn-edit-art-ai-search" in res.text
+        # Photo elements in Mobile edit panel
+        assert "mob-art-photo-wrap" in res.text
+        assert "btn-mob-art-upload-photo" in res.text
+        assert "btn-mob-art-search-google" in res.text
+        assert "btn-mob-art-manual-url" in res.text
+        assert "btn-mob-art-ai-search" in res.text
+
+
+class TestCatalogPhotoEndpoints:
+    def test_upload_catalog_photo_success(self, db_session):
+        client = TestClient(app)
+        brand = _make_brand(db_session, "Photo Brand")
+        bp = _make_blueprint(db_session, brand.id, article_name="Photo Bag")
+
+        raw_bytes = b"fake_jpeg_image_bytes_12345"
+        res = client.post(
+            f"/api/v1/catalog/{bp.id}/photo/upload?color=Nero",
+            content=raw_bytes,
+            headers={"Content-Type": "image/jpeg"},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        photo_id = data["photo_id"]
+        assert photo_id
+
+        # Verify photo can be served and cache-control headers are present
+        serve_res = client.get(f"/api/v1/ingestion/photos/{photo_id}")
+        assert serve_res.status_code == 200
+        assert serve_res.content == raw_bytes
+        assert "no-cache" in serve_res.headers.get("cache-control", "")
+        assert serve_res.headers.get("pragma") == "no-cache"
+
+        # Update photo with new bytes (upsert)
+        updated_bytes = b"updated_jpeg_image_bytes_67890"
+        res_update = client.post(
+            f"/api/v1/catalog/{bp.id}/photo/upload?color=nero",
+            content=updated_bytes,
+            headers={"Content-Type": "image/jpeg"},
+        )
+        assert res_update.status_code == 200
+        serve_res2 = client.get(f"/api/v1/ingestion/photos/{photo_id}")
+        assert serve_res2.status_code == 200
+        assert serve_res2.content == updated_bytes
+        assert "no-cache" in serve_res2.headers.get("cache-control", "")
+        assert serve_res2.headers.get("pragma") == "no-cache"
+
+    def test_upload_catalog_photo_empty_body_fails(self, db_session):
+        client = TestClient(app)
+        brand = _make_brand(db_session, "Photo Brand 2")
+        bp = _make_blueprint(db_session, brand.id, article_name="Photo Bag 2")
+
+        res = client.post(
+            f"/api/v1/catalog/{bp.id}/photo/upload",
+            content=b"",
+            headers={"Content-Type": "image/jpeg"},
+        )
+        assert res.status_code == 400
+
+    def test_upload_catalog_photo_nonexistent_blueprint(self, db_session):
+        client = TestClient(app)
+        res = client.post(
+            "/api/v1/catalog/00000000-0000-0000-0000-000000000000/photo/upload",
+            content=b"bytes",
+            headers={"Content-Type": "image/jpeg"},
+        )
+        assert res.status_code == 404
+
+    def test_set_catalog_photo_url_data_url(self, db_session):
+        import base64
+        client = TestClient(app)
+        brand = _make_brand(db_session, "Photo Brand 3")
+        bp = _make_blueprint(db_session, brand.id, article_name="Photo Bag 3")
+
+        raw_bytes = b"data_url_decoded_bytes_abc"
+        b64 = base64.b64encode(raw_bytes).decode("ascii")
+        data_url = f"data:image/jpeg;base64,{b64}"
+
+        res = client.post(
+            f"/api/v1/catalog/{bp.id}/photo/url",
+            json={"photo_url": data_url, "color": "Blu"},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        photo_id = data["photo_id"]
+
+        serve_res = client.get(f"/api/v1/ingestion/photos/{photo_id}")
+        assert serve_res.status_code == 200
+        assert serve_res.content == raw_bytes
 

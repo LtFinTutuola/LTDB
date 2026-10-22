@@ -1,11 +1,13 @@
+import base64
+import time
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Body, Response
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Body, Response, Request
 from sqlalchemy.orm import Session
 from src.core.database import get_db
 from src.schemas.data_ingestion import ExtractionRequest, JobStatusResponse, SingleItemIngestionRequest, StagingRevisionRequest, StagingRevisionResponse, PhotoRetryRequest
 from src.services import data_ingestion_service, staging_revision_service, photo_service
+from src.repositories import staging_repo
 from src.core.logger import get_logger
-import time
 
 logger = get_logger()
 
@@ -210,6 +212,64 @@ async def retry_photo(job_id: str, request: PhotoRetryRequest, db: Session = Dep
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e) if str(e).strip() else "unknown server error"
+        )
+
+
+@router.post("/staging/{job_id}/photo-upload/{item_id}", status_code=status.HTTP_200_OK)
+async def upload_staging_photo(
+    job_id: str,
+    item_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Upload an image for a specific item in the staging area.
+    Converts image to data URL and updates photo_proposals in staging job data.
+    """
+    try:
+        job = staging_repo.get_job(db, job_id)
+        if not job or not job.data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job non trovato")
+
+        content = await request.body()
+        content_type = "image/jpeg"
+        header_ct = request.headers.get("content-type")
+        if header_ct and header_ct.startswith("image/"):
+            content_type = header_ct
+
+        if not content:
+            raise HTTPException(status_code=400, detail="Nessun file o contenuto immagine inviato")
+
+        b64 = base64.b64encode(content).decode("ascii")
+        data_url = f"data:{content_type};base64,{b64}"
+
+        proposals = job.data.get("photo_proposals", [])
+        proposal_idx = next((i for i, p in enumerate(proposals) if p.get("item_id") == item_id), None)
+
+        if proposal_idx is not None:
+            proposals[proposal_idx]["photo_url"] = data_url
+            proposals[proposal_idx]["photo_source"] = "manual_upload"
+            target_proposal = proposals[proposal_idx]
+        else:
+            target_proposal = {
+                "item_id": item_id,
+                "photo_url": data_url,
+                "photo_source": "manual_upload",
+            }
+            proposals.append(target_proposal)
+
+        job.data["photo_proposals"] = proposals
+        staging_repo.update_job_data(db, job_id, job.data)
+
+        return {"status": "success", "data": target_proposal}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.log_execution("data_ingestion_router", "staging_photo_upload_err", "err", exc=exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc) if str(exc).strip() else "unknown server error",
         )
 
 

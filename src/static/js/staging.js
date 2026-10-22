@@ -6,12 +6,13 @@
  *  - Submits revision batches to PUT /ingestion/staging/{job_id}
  *  - Handles photo proposal display and retry
  */
-import * as api from './api.js';
+import * as api from './api.js?v=20261022_6';
 import {
     appState, Mode, setMode,
     addMessage, getDetailPanel, exitSplitScreen, _esc,
-} from './main.js';
-import { setupBarcodeScanner } from './barcode_scanner.js';
+} from './main.js?v=20261022_6';
+import { setupBarcodeScanner } from './barcode_scanner.js?v=20261022_6';
+import { requestPhotoUpload } from './photo_upload_helper.js?v=20261022_6';
 
 // ---- Module state ----
 let _activePhotoIndices = {};
@@ -265,9 +266,10 @@ function _buildMobileStagingPanel() {
                             <span id="mob-staging-brand" style="color: var(--accent); font-weight: 600; font-size: 13px; text-transform: uppercase;"></span>
                             <span id="mob-staging-item-meta" style="color: var(--text-secondary); font-size: 12px;"></span>
                             <div style="display: flex; gap: 6px; margin-top: 4px;">
-                                <button type="button" id="mob-staging-btn-search" class="action-btn" title="Cerca su Google" style="padding: 2px 8px; font-size: 11px; height: 26px; border-radius: var(--radius-xs); background: var(--bg-surface); border: 1px solid var(--border-color); color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">🔍 Cerca</button>
-                                <button type="button" id="mob-staging-btn-manual" class="action-btn" title="Inserisci URL" style="padding: 2px 8px; font-size: 11px; height: 26px; border-radius: var(--radius-xs); background: var(--bg-surface); border: 1px solid var(--border-color); color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">🔗 URL</button>
-                                <button type="button" id="mob-staging-btn-retry" class="action-btn" title="Riprova con AI" style="padding: 2px 8px; font-size: 11px; height: 26px; border-radius: var(--radius-xs); background: var(--bg-surface); border: 1px solid var(--border-color); color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">🔄 Riprova</button>
+                                <button type="button" id="mob-staging-btn-search" class="btn-photo-action" title="Cerca su Google">🔍 Cerca</button>
+                                <button type="button" id="mob-staging-btn-upload" class="btn-photo-action" title="Carica Foto">📁 Carica</button>
+                                <button type="button" id="mob-staging-btn-manual" class="btn-photo-action" title="Inserisci URL">🔗 URL</button>
+                                <button type="button" id="mob-staging-btn-retry" class="btn-photo-action" title="Riprova con AI">🔄 Riprova</button>
                             </div>
                         </div>
                     </div>
@@ -522,6 +524,7 @@ function _buildPhotoCarousel(bpId, items, photoProposals) {
         ${imgHtml}
         ${navHtml}
         <button class="btn-search-photo" data-item-id="${_esc(currentItem.item_id)}" data-search-query="${_esc(searchQuery)}" style="margin-top:auto;" title="Cerca su Google">🔍 Cerca</button>
+        <button class="btn-upload-photo" data-item-id="${_esc(currentItem.item_id)}" data-job-id="${_esc(_jobId)}" style="margin-top:4px;" title="Carica foto dal dispositivo">📁 Carica Foto</button>
         <button class="btn-manual-photo" data-item-id="${_esc(currentItem.item_id)}" data-job-id="${_esc(_jobId)}" style="margin-top:4px;">🔗 Inserisci URL</button>
         <button class="btn-retry-photo" data-item-id="${_esc(currentItem.item_id)}" data-job-id="${_esc(_jobId)}" style="margin-top:4px;">🔄 Riprova</button>
     </div>`;
@@ -591,7 +594,10 @@ function _attachListeners() {
         sel.addEventListener('change', _handleSubCatChange);
     });
 
-    // Photo retry, search and manual url
+    // Photo retry, search, manual url, and upload
+    content.querySelectorAll('.btn-upload-photo').forEach(btn => {
+        btn.addEventListener('click', _handleUploadPhoto);
+    });
     content.querySelectorAll('.btn-retry-photo').forEach(btn => {
         btn.addEventListener('click', _handleRetryPhoto);
     });
@@ -658,6 +664,9 @@ function _attachMobileListeners(panel) {
     if (form) form.addEventListener('submit', _handleMobileSave);
 
     // Mobile panel photo actions
+    const btnUpload = panel.querySelector('#mob-staging-btn-upload');
+    if (btnUpload) btnUpload.addEventListener('click', _handleUploadPhoto);
+
     const btnSearch = panel.querySelector('#mob-staging-btn-search');
     if (btnSearch) btnSearch.addEventListener('click', _handleSearchPhoto);
 
@@ -733,6 +742,11 @@ export function openStagingMobilePanel(bp, item) {
         itemMetaEl.textContent = parts.join(' • ');
     }
 
+    const btnUpload = document.getElementById('mob-staging-btn-upload');
+    if (btnUpload) {
+        btnUpload.dataset.itemId = item.item_id;
+        btnUpload.dataset.jobId = _jobId;
+    }
     const btnSearch = document.getElementById('mob-staging-btn-search');
     if (btnSearch) {
         btnSearch.dataset.searchQuery = searchQuery;
@@ -1114,6 +1128,47 @@ function _updatePhotoProposal(itemId, newProposal) {
     }
 }
 
+async function _handleUploadPhoto(e) {
+    const btn = e.currentTarget;
+    const itemId = btn.dataset.itemId;
+    const jobId = btn.dataset.jobId || _jobId;
+    if (!itemId || !jobId) return;
+
+    requestPhotoUpload({
+        onSuccess: async (compressedBlob) => {
+            addMessage('Caricamento foto in corso...', 'info');
+            btn.disabled = true;
+            try {
+                const result = await api.uploadStagingPhoto(jobId, itemId, compressedBlob);
+                if (result?.data) {
+                    if (result.data.photo_id) {
+                        api.invalidatePhotoCache(result.data.photo_id);
+                    } else if (result.data.photo_url) {
+                        api.invalidatePhotoCache(result.data.photo_url);
+                    }
+                    _updatePhotoProposal(itemId, result.data);
+                    _render();
+                    addMessage('✅ Foto caricata con successo!', 'success');
+                    const photoImg = document.getElementById('mob-staging-photo');
+                    const photoPlaceholder = document.getElementById('mob-staging-photo-placeholder');
+                    if (photoImg && photoPlaceholder && result.data.photo_url) {
+                        photoImg.src = result.data.photo_url;
+                        photoImg.style.display = 'block';
+                        photoPlaceholder.style.display = 'none';
+                    }
+                }
+            } catch (err) {
+                addMessage(`❌ Upload foto fallito: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        },
+        onError: (err) => {
+            addMessage(`❌ Errore selezione foto: ${err.message || err}`, 'error');
+        }
+    });
+}
+
 async function _handleRetryPhoto(e) {
     const btn = e.currentTarget;
     const itemId = btn.dataset.itemId;
@@ -1124,6 +1179,11 @@ async function _handleRetryPhoto(e) {
     try {
         const result = await api.retryPhoto(jobId, itemId, feedback || null);
         if (result?.data) {
+            if (result.data.photo_id) {
+                api.invalidatePhotoCache(result.data.photo_id);
+            } else if (result.data.photo_url) {
+                api.invalidatePhotoCache(result.data.photo_url);
+            }
             _updatePhotoProposal(itemId, result.data);
             _render();
         }
@@ -1146,6 +1206,11 @@ async function _handleManualPhoto(e) {
     try {
         const result = await api.retryPhoto(jobId, itemId, null, url);
         if (result?.data) {
+            if (result.data.photo_id) {
+                api.invalidatePhotoCache(result.data.photo_id);
+            } else if (result.data.photo_url) {
+                api.invalidatePhotoCache(result.data.photo_url);
+            }
             _updatePhotoProposal(itemId, result.data);
             _render();
         }

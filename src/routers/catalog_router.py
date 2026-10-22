@@ -13,6 +13,7 @@ import time
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -35,11 +36,21 @@ from src.schemas.catalog import (
     SemanticSearchResponse,
     CatalogItemsResponse,
 )
-from src.services import catalog_service, search_service, barcode_service
+from src.services import catalog_service, search_service, barcode_service, photo_service
 
 logger = get_logger()
 
 router = APIRouter(prefix="/api/v1/catalog", tags=["Catalog"])
+
+
+class CatalogPhotoUrlRequest(BaseModel):
+    photo_url: str
+    color: Optional[str] = None
+
+
+class CatalogPhotoSearchRequest(BaseModel):
+    feedback: Optional[str] = None
+    color: Optional[str] = None
 
 
 @router.get("/items", response_model=CatalogItemsResponse)
@@ -534,5 +545,101 @@ async def scan_barcode_from_photo(
     except Exception as exc:
         logger.log_execution("catalog_router", "scan_barcode_err", "err", exc=exc)
         raise HTTPException(status_code=500, detail="Errore durante l'elaborazione dell'immagine")
+
+
+@router.post("/{blueprint_id}/photo/upload", status_code=status.HTTP_200_OK)
+async def upload_catalog_photo(
+    blueprint_id: str,
+    request: Request,
+    color: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Upload a photo directly for a catalog blueprint.
+    Accepts raw binary image data (e.g. image/jpeg, image/png) in request body.
+    """
+    try:
+        content = await request.body()
+
+        if not content:
+            raise HTTPException(status_code=400, detail="Nessun file o contenuto immagine inviato")
+
+        # Verify blueprint exists
+        bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == blueprint_id).first()
+        if not bp:
+            raise HTTPException(status_code=404, detail="Blueprint non trovato")
+
+        color_name = (color or "").strip()
+        photo = photo_service.save_photo_bytes(db, blueprint_id, color_name, content, commit_changes=True)
+        return {
+            "status": "success",
+            "photo_id": str(photo.id),
+            "photo_url": f"/api/v1/ingestion/photos/{photo.id}",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.log_execution("catalog_router", "photo_upload_err", "err", exc=exc)
+        raise HTTPException(status_code=500, detail=str(exc) or "Errore durante l'upload della foto")
+
+
+@router.post("/{blueprint_id}/photo/url", status_code=status.HTTP_200_OK)
+async def set_catalog_photo_url(
+    blueprint_id: str,
+    payload: CatalogPhotoUrlRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Download a photo from an external URL and set it for the catalog blueprint.
+    """
+    try:
+        bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == blueprint_id).first()
+        if not bp:
+            raise HTTPException(status_code=404, detail="Blueprint non trovato")
+
+        color_name = (payload.color or "").strip()
+        photo = photo_service.download_and_upsert_photo(
+            db, blueprint_id, color_name, payload.photo_url, commit_changes=True
+        )
+        return {
+            "status": "success",
+            "photo_id": str(photo.id),
+            "photo_url": f"/api/v1/ingestion/photos/{photo.id}",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.log_execution("catalog_router", "photo_url_err", "err", exc=exc)
+        raise HTTPException(status_code=500, detail=str(exc) or "Errore durante il download della foto da URL")
+
+
+@router.post("/{blueprint_id}/photo/search", status_code=status.HTTP_200_OK)
+async def search_catalog_photo(
+    blueprint_id: str,
+    payload: Optional[CatalogPhotoSearchRequest] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Search for a photo on the web using Gemini AI for a catalog blueprint.
+    """
+    try:
+        feedback = payload.feedback if payload else None
+        color = payload.color if payload else ""
+        photo = await photo_service.search_and_set_catalog_photo(
+            db, blueprint_id, color_name=color or "", user_feedback=feedback
+        )
+        return {
+            "status": "success",
+            "photo_id": str(photo.id),
+            "photo_url": f"/api/v1/ingestion/photos/{photo.id}",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.log_execution("catalog_router", "photo_search_err", "err", exc=exc)
+        raise HTTPException(status_code=500, detail=str(exc) or "Errore durante la ricerca foto")
 
 
