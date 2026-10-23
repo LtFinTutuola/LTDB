@@ -27,7 +27,22 @@
     height: 100%;
 }
 
-/* Tabs */
+/* Tabs & Dual-layout Table Switching */
+.sales-desktop-tabs {
+    display: flex;
+}
+
+.sales-mobile-title {
+    display: none;
+}
+
+.sales-table--desktop {
+    display: table;
+}
+
+.sales-table--mobile {
+    display: none;
+}
 
 
 .sales-page__header {
@@ -1361,16 +1376,39 @@
    RESPONSIVE STYLES FOR VENDITE (Mobile & Tablet <= 1024px)
    ============================================================ */
 
-/* Desktop only: hide mobile controls */
+/* Desktop only: hide mobile controls & show desktop elements */
 @media (min-width: 1025px) {
     .btn-mobile-gemini-trigger,
-    .mobile-panel-topbar {
+    .mobile-panel-topbar,
+    .sales-mobile-title,
+    .sales-table--mobile {
         display: none !important;
+    }
+
+    .sales-desktop-tabs {
+        display: flex !important;
+    }
+
+    .sales-table--desktop {
+        display: table;
     }
 }
 
 /* Mobile & Tablet */
 @media (max-width: 1024px) {
+    .sales-desktop-tabs,
+    .sales-table--desktop {
+        display: none !important;
+    }
+
+    .sales-mobile-title {
+        display: block !important;
+    }
+
+    .sales-table--mobile {
+        display: table;
+    }
+
     .sales-page {
         display: flex;
         flex-direction: column;

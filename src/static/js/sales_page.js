@@ -32,6 +32,8 @@ const state = {
 const dom = {
     table: document.getElementById('sales-table'),
     tbody: document.getElementById('sales-tbody'),
+    tableMobile: document.getElementById('sales-table-mobile'),
+    tbodyMobile: document.getElementById('sales-tbody-mobile'),
     datePicker: document.getElementById('date-picker'),
     salesView: document.getElementById('sales-view'),
     statsView: document.getElementById('stats-view'),
@@ -247,7 +249,8 @@ async function fetchDailySales(dateStr, silent = false) {
 
     if (!silent) {
         dom.loading.style.display = 'block';
-        dom.table.style.display = 'none';
+        if (dom.table) dom.table.style.display = 'none';
+        if (dom.tableMobile) dom.tableMobile.style.display = 'none';
         dom.empty.style.display = 'none';
         closeContextTab();
     }
@@ -288,7 +291,7 @@ function renderTable() {
         activeEl.tagName === 'INPUT' ||
         activeEl.tagName === 'TEXTAREA' ||
         activeEl.tagName === 'SELECT'
-    ) && !dom.tbody.contains(activeEl);
+    ) && (!dom.tbody || !dom.tbody.contains(activeEl)) && (!dom.tbodyMobile || !dom.tbodyMobile.contains(activeEl));
     let selectionStart = null;
     let selectionEnd = null;
     if (isExternalInputFocused && 'selectionStart' in activeEl) {
@@ -297,79 +300,140 @@ function renderTable() {
     }
 
     let prevActiveId = null;
-    if (state.activeCell && state.sales.length > 0 && dom.tbody.children[state.activeCell.row]) {
-        prevActiveId = dom.tbody.children[state.activeCell.row].dataset.saleId;
+    if (state.activeCell && state.sales.length > 0) {
+        if (dom.tbody && dom.tbody.children[state.activeCell.row]) {
+            prevActiveId = dom.tbody.children[state.activeCell.row].dataset.saleId;
+        } else if (dom.tbodyMobile && dom.tbodyMobile.children[state.activeCell.row]) {
+            prevActiveId = dom.tbodyMobile.children[state.activeCell.row].dataset.saleId;
+        }
     }
 
-    dom.tbody.innerHTML = '';
-
-    dom.table.style.display = 'table';
+    if (dom.tbody) dom.tbody.innerHTML = '';
+    if (dom.tbodyMobile) dom.tbodyMobile.innerHTML = '';
 
     if (state.sales.length === 0) {
+        if (dom.table) dom.table.style.display = 'none';
+        if (dom.tableMobile) dom.tableMobile.style.display = 'none';
         dom.empty.style.display = 'block';
         return;
     }
 
     dom.empty.style.display = 'none';
+    if (dom.table) dom.table.style.display = '';
+    if (dom.tableMobile) dom.tableMobile.style.display = '';
 
     state.sales.forEach((sale, idx) => {
-        const tr = document.createElement('tr');
-        tr.dataset.saleId = sale.id;
-        tr.dataset.rowIndex = idx; // DOM row index
-        if (sale.status === 'ORPHAN') tr.classList.add('status-row--orphan');
-        else if (sale.status === 'UNPROCESSABLE') tr.classList.add('status-row--unprocessable');
-        else if (sale.status === 'RECONCILED') tr.classList.add('status-row--reconciled');
+        // --- 1. Desktop Row (11 columns) ---
+        if (dom.tbody) {
+            const tr = document.createElement('tr');
+            tr.dataset.saleId = sale.id;
+            tr.dataset.rowIndex = idx; // DOM row index
 
-        // Col 0: Prezzo di listino
-        const tdPriceList = document.createElement('td');
-        tdPriceList.className = 'col-price-list';
-        tdPriceList.textContent = sale.starting_price !== null && sale.starting_price !== undefined
-            ? `€ ${Number(sale.starting_price).toFixed(2).replace(/\.00$/, '')}`
-            : '-';
-        tr.appendChild(tdPriceList);
+            // Col 0: Status indicator
+            const tdStatus = document.createElement('td');
+            tdStatus.className = 'col-status';
+            if (sale.status === 'ORPHAN') tdStatus.classList.add('status-cell--orphan');
+            else if (sale.status === 'UNPROCESSABLE') tdStatus.classList.add('status-cell--unprocessable');
+            else if (sale.status === 'RECONCILED') tdStatus.classList.add('status-cell--reconciled');
+            tdStatus.textContent = sale.excel_row_index !== null && sale.excel_row_index !== undefined ? sale.excel_row_index : (idx + 1);
+            tr.appendChild(tdStatus);
 
-        // Col 1: Prezzo finale
-        const tdPriceFinal = document.createElement('td');
-        tdPriceFinal.className = 'col-price-final';
-        if (sale.selling_price !== null && sale.selling_price !== undefined) {
-            const formatted = `€ ${Number(sale.selling_price).toFixed(2).replace(/\.00$/, '')}`;
-            if (sale.is_exchange) {
-                tdPriceFinal.innerHTML = `${formatted} <span class="chip chip--small chip--exchange" title="Reso">Reso</span>`;
-            } else {
-                tdPriceFinal.textContent = formatted;
-            }
-        } else {
-            tdPriceFinal.textContent = '-';
-        }
-        tr.appendChild(tdPriceFinal);
+            // Col 1: PL (starting price)
+            const tdPL = document.createElement('td');
+            tdPL.className = 'col-price';
+            tdPL.textContent = sale.starting_price !== null && sale.starting_price !== undefined ? sale.starting_price : '';
+            tr.appendChild(tdPL);
 
-        // Col 2: Colonna excel
-        const tdExcelCol = document.createElement('td');
-        tdExcelCol.className = 'col-excel-col';
-        const colDef = CATEGORY_COLUMNS.find(c => c.index === sale.excel_file_column);
-        const colLabel = colDef ? colDef.header : (sale.excel_file_column !== null && sale.excel_file_column !== undefined ? `Col ${sale.excel_file_column}` : '-');
-        tdExcelCol.innerHTML = `<span class="chip chip--small" style="font-weight: 600;">${_esc(colLabel)}</span>`;
-        tr.appendChild(tdExcelCol);
-
-        // Col 3: Articolo
-        const tdArticle = document.createElement('td');
-        tdArticle.className = 'col-article';
-        renderReconCell(tdArticle, sale);
-        tr.appendChild(tdArticle);
-
-        // Cell click handling for active state
-        Array.from(tr.children).forEach((td, colIdx) => {
-            td.addEventListener('click', (e) => {
-                // Select cell only if not clicking on inputs/buttons
-                if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
-                    // Open detail context if reconciled
-                    const shouldTriggerContext = sale.status === 'RECONCILED';
-                    setActiveCell(idx, colIdx, shouldTriggerContext, true);
+            // Col 2-9: Categories
+            CATEGORY_COLUMNS.forEach(cat => {
+                const tdCat = document.createElement('td');
+                tdCat.className = 'col-cat';
+                if (sale.excel_file_column === cat.index && sale.selling_price !== null && sale.selling_price !== undefined) {
+                    tdCat.textContent = sale.selling_price;
+                    tdCat.style.fontWeight = 'bold';
+                } else {
+                    tdCat.textContent = '';
                 }
+                tr.appendChild(tdCat);
             });
-        });
 
-        dom.tbody.appendChild(tr);
+            // Col 10: Reconciliation
+            const tdRecon = document.createElement('td');
+            tdRecon.className = 'col-recon';
+            renderDesktopReconCell(tdRecon, sale);
+            tr.appendChild(tdRecon);
+
+            // Cell click handling for active state
+            Array.from(tr.children).forEach((td, colIdx) => {
+                td.addEventListener('click', (e) => {
+                    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
+                        const shouldTriggerContext = sale.status === 'RECONCILED';
+                        setActiveCell(idx, colIdx, shouldTriggerContext, true);
+                    }
+                });
+            });
+
+            dom.tbody.appendChild(tr);
+        }
+
+        // --- 2. Mobile Row (4 columns) ---
+        if (dom.tbodyMobile) {
+            const trMobile = document.createElement('tr');
+            trMobile.dataset.saleId = sale.id;
+            trMobile.dataset.rowIndex = idx; // DOM row index
+            if (sale.status === 'ORPHAN') trMobile.classList.add('status-row--orphan');
+            else if (sale.status === 'UNPROCESSABLE') trMobile.classList.add('status-row--unprocessable');
+            else if (sale.status === 'RECONCILED') trMobile.classList.add('status-row--reconciled');
+
+            // Col 0: Prezzo di listino
+            const tdPriceList = document.createElement('td');
+            tdPriceList.className = 'col-price-list';
+            tdPriceList.textContent = sale.starting_price !== null && sale.starting_price !== undefined
+                ? `€ ${Number(sale.starting_price).toFixed(2).replace(/\.00$/, '')}`
+                : '-';
+            trMobile.appendChild(tdPriceList);
+
+            // Col 1: Prezzo finale
+            const tdPriceFinal = document.createElement('td');
+            tdPriceFinal.className = 'col-price-final';
+            if (sale.selling_price !== null && sale.selling_price !== undefined) {
+                const formatted = `€ ${Number(sale.selling_price).toFixed(2).replace(/\.00$/, '')}`;
+                if (sale.is_exchange) {
+                    tdPriceFinal.innerHTML = `${formatted} <span class="chip chip--small chip--exchange" title="Reso">Reso</span>`;
+                } else {
+                    tdPriceFinal.textContent = formatted;
+                }
+            } else {
+                tdPriceFinal.textContent = '-';
+            }
+            trMobile.appendChild(tdPriceFinal);
+
+            // Col 2: Colonna excel
+            const tdExcelCol = document.createElement('td');
+            tdExcelCol.className = 'col-excel-col';
+            const colDef = CATEGORY_COLUMNS.find(c => c.index === sale.excel_file_column);
+            const colLabel = colDef ? colDef.header : (sale.excel_file_column !== null && sale.excel_file_column !== undefined ? `Col ${sale.excel_file_column}` : '-');
+            tdExcelCol.innerHTML = `<span class="chip chip--small" style="font-weight: 600;">${_esc(colLabel)}</span>`;
+            trMobile.appendChild(tdExcelCol);
+
+            // Col 3: Articolo
+            const tdArticle = document.createElement('td');
+            tdArticle.className = 'col-article';
+            renderMobileReconCard(tdArticle, sale);
+            trMobile.appendChild(tdArticle);
+
+            // Cell click handling for active state
+            Array.from(trMobile.children).forEach((td, colIdx) => {
+                td.addEventListener('click', (e) => {
+                    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
+                        const shouldTriggerContext = sale.status === 'RECONCILED';
+                        setActiveCell(idx, colIdx, shouldTriggerContext, true);
+                    }
+                });
+            });
+
+            dom.tbodyMobile.appendChild(trMobile);
+        }
     });
 
     // Restore or set initial active cell without stealing focus
@@ -395,7 +459,53 @@ function renderTable() {
     }
 }
 
-function renderReconCell(td, sale) {
+function renderDesktopReconCell(td, sale) {
+    td.innerHTML = '';
+    const container = document.createElement('div');
+    container.className = 'recon-cell';
+
+    if (sale.status === 'RECONCILED') {
+        const photoHtml = sale.photo_url
+            ? `<img data-src="${sale.photo_url}" class="recon-photo" alt="Foto">`
+            : ``;
+
+        container.innerHTML = photoHtml;
+        
+        container.onclick = (e) => {
+            if (sale.photo_url) {
+                openImageModal(sale.photo_url);
+            }
+        };
+
+        const img = container.querySelector('img');
+        if (img) lazyLoadObserver.observe(img);
+
+    } else if (sale.status === 'UNPROCESSABLE') {
+        container.innerHTML = `<span style="color: var(--error)">Errore dati origine</span>`;
+    } else {
+        // ORPHAN
+        const defaultVal = sale.raw_article_code || '';
+
+        const btn = document.createElement('button');
+        btn.className = 'btn-add-recon';
+        if (defaultVal) btn.classList.add('has-badge');
+        btn.innerHTML = '+';
+
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            const tr = dom.tbody ? dom.tbody.querySelector(`tr[data-sale-id="${sale.id}"]`) : null;
+            if (tr) {
+                const idx = parseInt(tr.dataset.rowIndex, 10);
+                if (!isNaN(idx)) setActiveCell(idx, 10, true, true);
+            }
+        };
+        
+        container.appendChild(btn);
+    }
+    td.appendChild(container);
+}
+
+function renderMobileReconCard(td, sale) {
     td.innerHTML = '';
     const container = document.createElement('div');
     container.className = 'recon-cell';
@@ -453,10 +563,10 @@ function renderReconCell(td, sale) {
         `;
 
         btn.onclick = (e) => {
-            e.stopPropagation(); // Prevent td click from double firing if any
-            const tr = dom.tbody.querySelector(`tr[data-sale-id="${sale.id}"]`);
-            if (tr) {
-                const idx = parseInt(tr.dataset.rowIndex, 10);
+            e.stopPropagation();
+            const trMobile = dom.tbodyMobile ? dom.tbodyMobile.querySelector(`tr[data-sale-id="${sale.id}"]`) : null;
+            if (trMobile) {
+                const idx = parseInt(trMobile.dataset.rowIndex, 10);
                 if (!isNaN(idx)) setActiveCell(idx, 3, true, true);
             }
         };
@@ -464,6 +574,10 @@ function renderReconCell(td, sale) {
         container.appendChild(btn);
     }
     td.appendChild(container);
+}
+
+function renderReconCell(td, sale) {
+    renderMobileReconCard(td, sale);
 }
 
 async function performReconSearch() {
@@ -550,23 +664,40 @@ function handleCandidateConfirm(sale, cand) {
     sale.category_name = cand.category_name || sale.category_name;
     sale.photo_url = cand.photo_serving_endpoint_url;
 
-    // 2. Update DOM row in place
-    const tr = dom.tbody.querySelector(`tr[data-sale-id="${sale.id}"]`);
-    if (tr) {
-        tr.className = 'status-row--reconciled';
-        const tdRecon = tr.querySelector('.col-article') || tr.querySelector('td:last-child');
-        if (tdRecon) renderReconCell(tdRecon, sale);
+    // 2. Update Desktop DOM row in place
+    if (dom.tbody) {
+        const tr = dom.tbody.querySelector(`tr[data-sale-id="${sale.id}"]`);
+        if (tr) {
+            const tdStatus = tr.querySelector('.col-status');
+            if (tdStatus) {
+                tdStatus.className = 'col-status status-cell--reconciled';
+            }
+            const tdRecon = tr.querySelector('.col-recon') || tr.querySelector('td:last-child');
+            if (tdRecon) renderDesktopReconCell(tdRecon, sale);
+        }
+    }
+
+    // 3. Update Mobile DOM row in place
+    if (dom.tbodyMobile) {
+        const trMobile = dom.tbodyMobile.querySelector(`tr[data-sale-id="${sale.id}"]`);
+        if (trMobile) {
+            trMobile.className = 'status-row--reconciled';
+            const tdArticle = trMobile.querySelector('.col-article') || trMobile.querySelector('td:last-child');
+            if (tdArticle) renderMobileReconCard(tdArticle, sale);
+        }
     }
 
     closeContextTab();
 
-    // 3. Auto-scroll to next orphan
+    // 4. Auto-scroll to next orphan
     const nextOrphanIdx = state.sales.findIndex(s => s.status === 'ORPHAN');
     if (nextOrphanIdx !== -1) {
-        const nextTr = dom.tbody.children[nextOrphanIdx];
-        if (nextTr) {
-            nextTr.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            setActiveCell(nextOrphanIdx, 3, true, true); // focus the recon cell (col 3)
+        const isMobile = window.innerWidth <= 1024;
+        const targetTbody = isMobile ? dom.tbodyMobile : dom.tbody;
+        const targetCol = isMobile ? 3 : 10;
+        if (targetTbody && targetTbody.children[nextOrphanIdx]) {
+            targetTbody.children[nextOrphanIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setActiveCell(nextOrphanIdx, targetCol, true, true);
         }
     }
 }
@@ -702,25 +833,26 @@ async function fetchSubstitutes(blueprintId) {
 }
 
 function setActiveCell(rowIndex, colIndex, triggerContext = false, shouldFocus = false) {
-    // Clear old active
+    // Clear old active on desktop and mobile
     if (state.activeCell) {
-        const oldTr = dom.tbody.children[state.activeCell.row];
-        if (oldTr) {
-            const oldTd = oldTr.children[state.activeCell.col];
+        if (dom.tbody && dom.tbody.children[state.activeCell.row]) {
+            const oldTd = dom.tbody.children[state.activeCell.row].children[state.activeCell.col];
             if (oldTd) oldTd.classList.remove('cell--active');
+        }
+        if (dom.tbodyMobile && dom.tbodyMobile.children[state.activeCell.row]) {
+            const oldTdMobile = dom.tbodyMobile.children[state.activeCell.row].children[state.activeCell.col];
+            if (oldTdMobile) oldTdMobile.classList.remove('cell--active');
         }
     }
 
     state.activeCell = { row: rowIndex, col: colIndex };
 
-    // Set new active
-    const newTr = dom.tbody.children[rowIndex];
+    // Set new active on desktop
+    const newTr = dom.tbody ? dom.tbody.children[rowIndex] : null;
     if (newTr) {
         const newTd = newTr.children[colIndex];
         if (newTd) {
             newTd.classList.add('cell--active');
-            
-            // Trigger context open
             if (triggerContext) {
                 const saleId = newTr.dataset.saleId;
                 const sale = state.sales.find(s => s.id === saleId);
@@ -728,18 +860,38 @@ function setActiveCell(rowIndex, colIndex, triggerContext = false, shouldFocus =
                     openContextTab(sale);
                 }
             }
+        }
+    }
 
-            // Only manage focus if explicitly requested (e.g. user clicked on cell or explicit navigation)
-            if (shouldFocus) {
-                if (colIndex === 3) {
-                    const input = newTd.querySelector('input');
-                    if (input) input.focus();
-                } else {
-                    // Only blur if activeElement is an input inside the table body itself; never blur external textboxes (e.g. chat-input)
-                    if (document.activeElement && dom.tbody.contains(document.activeElement)) {
-                        document.activeElement.blur();
-                    }
+    // Set new active on mobile
+    const newTrMobile = dom.tbodyMobile ? dom.tbodyMobile.children[rowIndex] : null;
+    if (newTrMobile) {
+        const newTdMobile = newTrMobile.children[colIndex];
+        if (newTdMobile) {
+            newTdMobile.classList.add('cell--active');
+            if (triggerContext && !newTr) {
+                const saleId = newTrMobile.dataset.saleId;
+                const sale = state.sales.find(s => s.id === saleId);
+                if (sale) {
+                    openContextTab(sale);
                 }
+            }
+        }
+    }
+
+    // Only manage focus if explicitly requested (e.g. user clicked on cell or explicit navigation)
+    if (shouldFocus) {
+        const isMobile = window.innerWidth <= 1024;
+        const targetCol = isMobile ? 3 : 10;
+        const targetTr = isMobile ? newTrMobile : newTr;
+        if (colIndex === targetCol && targetTr) {
+            const targetTd = targetTr.children[colIndex];
+            const input = targetTd ? targetTd.querySelector('input') : null;
+            if (input) input.focus();
+        } else {
+            // Only blur if activeElement is an input inside the table body itself; never blur external textboxes (e.g. chat-input)
+            if (document.activeElement && ((dom.tbody && dom.tbody.contains(document.activeElement)) || (dom.tbodyMobile && dom.tbodyMobile.contains(document.activeElement)))) {
+                document.activeElement.blur();
             }
         }
     }
@@ -760,7 +912,8 @@ function handleKeyNav(e) {
 
     let { row, col } = state.activeCell;
     const maxRow = state.sales.length - 1;
-    const maxCol = 3;
+    const isMobile = window.innerWidth <= 1024;
+    const maxCol = isMobile ? 3 : 10;
 
     let changed = false;
 
@@ -784,7 +937,8 @@ function handleKeyNav(e) {
         setActiveCell(row, col, false, true);
 
         // Scroll into view if needed
-        const tr = dom.tbody.children[row];
+        const targetTbody = isMobile ? dom.tbodyMobile : dom.tbody;
+        const tr = targetTbody ? targetTbody.children[row] : null;
         if (tr) {
             tr.scrollIntoView({ behavior: 'auto', block: 'nearest' });
         }

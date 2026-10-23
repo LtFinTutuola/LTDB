@@ -424,12 +424,11 @@ def test_staging_mobile_elements_and_css(db_session):
 
 def test_vendite_four_columns_and_gemini_article_card(db_session):
     """
-    Verify the simplified 4-column sales table and the Gemini preview card visualization for articles:
-    1. Vendite template renders exactly 4 columns: Prezzo di listino, Prezzo finale, Colonna excel, Articolo.
-    2. Old 11-column headers are removed from sales table.
-    3. Tabs 'Giornata' and 'Storico' are removed, keeping only 'Vendite di giornata' title.
-    4. CSS defines 4 column layout classes and .search-preview-card--sale styling.
-    5. JS constructs .search-preview-card.search-preview-card--sale with photo, info, name, brand, cat, chevron.
+    Verify the dual layout for Vendite:
+    1. Desktop: full 11-column table (#sales-table) and tabs (Vendite, Giornata, Storico) under .sales-desktop-tabs.
+    2. Mobile: simplified 4-column table (#sales-table-mobile) and mobile title under .sales-mobile-title.
+    3. CSS defines media queries toggling desktop vs mobile tables and controls.
+    4. JS supports both desktop 11 columns and mobile 4 columns with Gemini preview card visualization.
     """
     client = TestClient(app)
 
@@ -438,27 +437,44 @@ def test_vendite_four_columns_and_gemini_article_card(db_session):
     assert res.status_code == 200
     html = res.text
 
+    # Desktop table
     assert 'id="sales-table"' in html
-    sales_table_html = html.split('id="sales-table"')[1].split('</table>')[0]
-    assert '<th class="col-price-list">Prezzo di listino</th>' in sales_table_html
-    assert '<th class="col-price-final">Prezzo finale</th>' in sales_table_html
-    assert '<th class="col-excel-col">Colonna excel</th>' in sales_table_html
-    assert '<th class="col-article">Articolo</th>' in sales_table_html
+    desktop_table_html = html.split('id="sales-table"')[1].split('</table>')[0]
+    assert '<th class="col-status">#</th>' in desktop_table_html
+    assert '<th class="col-price">PL</th>' in desktop_table_html
+    assert '<th class="col-cat">B</th>' in desktop_table_html
+    assert '<th class="col-cat">Sam/AT</th>' in desktop_table_html
+    assert '<th class="col-cat">V</th>' in desktop_table_html
+    assert '<th class="col-cat">PP</th>' in desktop_table_html
+    assert '<th class="col-cat">C</th>' in desktop_table_html
+    assert '<th class="col-cat">CAR</th>' in desktop_table_html
+    assert '<th class="col-cat">BORSELLI</th>' in desktop_table_html
+    assert '<th class="col-cat">O+A</th>' in desktop_table_html
+    assert '<th class="col-recon">Articolo</th>' in desktop_table_html
 
-    # Confirm old 11-column th are removed from sales-table
-    assert '<th class="col-status">#</th>' not in sales_table_html
-    assert '<th class="col-price">PL</th>' not in sales_table_html
-    assert '<th class="col-recon">Articolo</th>' not in sales_table_html
+    # Mobile table
+    assert 'id="sales-table-mobile"' in html
+    mobile_table_html = html.split('id="sales-table-mobile"')[1].split('</table>')[0]
+    assert '<th class="col-price-list">Prezzo di listino</th>' in mobile_table_html
+    assert '<th class="col-price-final">Prezzo finale</th>' in mobile_table_html
+    assert '<th class="col-excel-col">Colonna excel</th>' in mobile_table_html
+    assert '<th class="col-article">Articolo</th>' in mobile_table_html
 
-    # Confirm tabs Giornata and Storico are removed
-    assert '<button class="tab" data-tab="stats">Giornata</button>' not in html
-    assert '<button class="tab" data-tab="history">Storico</button>' not in html
+    # Tabs and titles
+    assert 'sales-desktop-tabs' in html
+    assert '<button class="tab" data-tab="stats">Giornata</button>' in html
+    assert '<button class="tab" data-tab="history">Storico</button>' in html
+    assert 'sales-mobile-title' in html
     assert 'Vendite di giornata' in html
 
     # 2. CSS check
     res_css = client.get("/static/css/sales_table.css")
     assert res_css.status_code == 200
     css = res_css.text
+    assert ".sales-desktop-tabs" in css
+    assert ".sales-mobile-title" in css
+    assert ".sales-table--desktop" in css
+    assert ".sales-table--mobile" in css
     assert ".col-price-list" in css
     assert ".col-price-final" in css
     assert ".col-excel-col" in css
@@ -481,6 +497,10 @@ def test_vendite_four_columns_and_gemini_article_card(db_session):
     assert "col-price-final" in js
     assert "col-excel-col" in js
     assert "col-article" in js
+    assert "sales-table-mobile" in js
+    assert "sales-tbody-mobile" in js
+    assert "renderDesktopReconCell" in js
+    assert "renderMobileReconCard" in js
 
 
 def test_magazzino_camera_barcode_elements(db_session):

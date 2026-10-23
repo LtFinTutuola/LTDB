@@ -621,11 +621,13 @@ def test_history_endpoint_and_vendite_storico_tab(db_session):
     assert len(payload["data"]["last_7_days"]) == 7
     assert len(payload["data"]["last_30_days"]) == 30
 
-    # Check /vendite template has active daily sales view, and no Storico or Giornata tab buttons
+    # Check /vendite template has active daily sales view, desktop tabs (Vendite, Giornata, Storico), and mobile title
     res_page = client.get("/vendite")
     assert res_page.status_code == 200
-    assert '<button class="tab" data-tab="history">Storico</button>' not in res_page.text
-    assert '<button class="tab" data-tab="stats">Giornata</button>' not in res_page.text
+    assert '<button class="tab" data-tab="history">Storico</button>' in res_page.text
+    assert '<button class="tab" data-tab="stats">Giornata</button>' in res_page.text
+    assert 'sales-desktop-tabs' in res_page.text
+    assert 'sales-mobile-title' in res_page.text
     assert 'Vendite di giornata' in res_page.text
     assert 'id="history-view"' in res_page.text
     assert 'id="history-7days-grid"' in res_page.text

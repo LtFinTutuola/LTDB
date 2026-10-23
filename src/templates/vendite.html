@@ -13,7 +13,12 @@
         <div class="sales-page__wrapper">
             <div class="sales-page__header">
                 <div class="sales-page__header-left">
-                    <h2 class="sales-page__title" style="margin: 0; font-size: 1.15rem; font-weight: 600; color: var(--text-primary);">Vendite di giornata</h2>
+                    <div class="tabs sales-desktop-tabs">
+                        <button class="tab active" data-tab="sales">Vendite</button>
+                        <button class="tab" data-tab="stats">Giornata</button>
+                        <button class="tab" data-tab="history">Storico</button>
+                    </div>
+                    <h2 class="sales-page__title sales-mobile-title" style="margin: 0; font-size: 1.15rem; font-weight: 600; color: var(--text-primary);">Vendite di giornata</h2>
                 </div>
                 <div class="sales-page__header-right" style="display: flex; gap: 12px; align-items: center;">
                     <div class="sync-indicator" id="syncIndicator" title="Ultima sincronizzazione: in attesa..."
@@ -31,7 +36,30 @@
             </div>
 
             <div class="sales-page__table-container" id="sales-view">
-                <table class="sales-table" id="sales-table">
+                <!-- Desktop 11-column table -->
+                <table class="sales-table sales-table--desktop" id="sales-table">
+                    <thead>
+                        <tr>
+                            <th class="col-status">#</th>
+                            <th class="col-price">PL</th>
+                            <th class="col-cat">B</th>
+                            <th class="col-cat">Sam/AT</th>
+                            <th class="col-cat">V</th>
+                            <th class="col-cat">PP</th>
+                            <th class="col-cat">C</th>
+                            <th class="col-cat">CAR</th>
+                            <th class="col-cat">BORSELLI</th>
+                            <th class="col-cat">O+A</th>
+                            <th class="col-recon">Articolo</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sales-tbody">
+                        <!-- JS populate desktop -->
+                    </tbody>
+                </table>
+
+                <!-- Mobile 4-column table -->
+                <table class="sales-table sales-table--mobile" id="sales-table-mobile">
                     <thead>
                         <tr>
                             <th class="col-price-list">Prezzo di listino</th>
@@ -40,8 +68,8 @@
                             <th class="col-article">Articolo</th>
                         </tr>
                     </thead>
-                    <tbody id="sales-tbody">
-                        <!-- JS populate -->
+                    <tbody id="sales-tbody-mobile">
+                        <!-- JS populate mobile -->
                     </tbody>
                 </table>
                 <div id="loading-indicator" class="loading-state">
