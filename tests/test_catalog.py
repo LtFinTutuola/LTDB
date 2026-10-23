@@ -177,16 +177,17 @@ class TestUpdateBlueprint:
             )
         assert exc_info.value.status_code == 400
 
-    def test_update_empty_materials_raises_400(self, db_session):
-        from fastapi import HTTPException
+    def test_update_empty_materials_allowed(self, db_session):
         brand = _make_brand(db_session)
-        bp = _make_blueprint(db_session, brand.id)
+        bp = _make_blueprint(db_session, brand.id, materials=["pelle"])
         from src.services import catalog_service
-        with pytest.raises(HTTPException) as exc_info:
-            catalog_service.update_blueprint(
-                db_session, bp.id, CatalogUpdateRequest(materials=[])
-            )
-        assert exc_info.value.status_code == 400
+        result = catalog_service.update_blueprint(
+            db_session, bp.id, CatalogUpdateRequest(materials=[])
+        )
+        assert result.status == "success"
+        assert "materials" in result.updated_fields
+        db_session.refresh(bp)
+        assert bp.materials == []
 
     def test_update_description_empty_raises_400(self, db_session):
         from fastapi import HTTPException

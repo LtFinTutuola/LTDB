@@ -1050,10 +1050,6 @@ async function _handleSaveEditArticle(e) {
         _showToast('Inserisci almeno un tag.', 'error');
         return;
     }
-    if (materials.length === 0) {
-        _showToast('Inserisci almeno un materiale.', 'error');
-        return;
-    }
 
     const color = _editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : null;
     const payload = {
@@ -1273,10 +1269,6 @@ async function _handleSaveArticleMobile(e) {
     }
     if (tags.length === 0) {
         _showToast('Inserisci almeno un tag.', 'error');
-        return;
-    }
-    if (materials.length === 0) {
-        _showToast('Inserisci almeno un materiale.', 'error');
         return;
     }
 

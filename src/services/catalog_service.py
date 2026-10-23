@@ -35,7 +35,8 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
     Apply a partial update to a confirmed ArticleBlueprint (and optionally its Article codes).
 
     - Only fields explicitly set in the request are modified.
-    - tags and materials, if provided, must be non-empty lists.
+    - tags, if provided, must be a non-empty list.
+    - materials can be an empty list or populated list, aligned with staging.
     - If any descriptive field changes, the embedding is regenerated synchronously.
       Embedding failure is non-blocking (logged but does not abort the update).
     """
@@ -100,11 +101,6 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="'tags' must be a non-empty list."
-        )
-    if "materials" in update_data and not update_data["materials"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="'materials' must be a non-empty list."
         )
 
     # --- Apply blueprint fields ---

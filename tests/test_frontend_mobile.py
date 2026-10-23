@@ -581,6 +581,60 @@ def test_single_article_import_camera_barcode_scanner(db_session):
     assert 'setupBarcodeScanner' in staging_js
 
 
+def test_materials_optional_in_warehouse_forms_and_api(db_session):
+    """
+    Verify that materials are optional both in the warehouse edit forms (desktop and mobile)
+    and in the catalog patch API, aligned with staging.
+    """
+    client = TestClient(app)
+
+    # 1. Template check: no required attribute and no asterisk on materials fields
+    res = client.get("/magazzino")
+    assert res.status_code == 200
+    html = res.text
+
+    assert '<label for="edit-article-materials" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Materiali (separati da virgola)</label>' in html
+    assert '<input type="text" id="edit-article-materials" class="form-control" placeholder="Es. ecopelle, metallo">' in html
+    assert '<input type="text" id="edit-article-materials" class="form-control" placeholder="Es. ecopelle, metallo" required>' not in html
+
+    assert '<label for="mob-art-materials" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Materiali (separati da virgola)</label>' in html
+    assert '<input type="text" id="mob-art-materials" class="form-control" placeholder="Es. ecopelle, metallo">' in html
+    assert '<input type="text" id="mob-art-materials" class="form-control" placeholder="Es. ecopelle, metallo" required>' not in html
+
+    # 2. JS check: warehouse.js does not block submission when materials is empty
+    res_js = client.get("/static/js/warehouse.js")
+    assert res_js.status_code == 200
+    js = res_js.text
+    assert "Inserisci almeno un materiale." not in js
+
+    # 3. API check: patch blueprint with empty materials list succeeds
+    from src.models.pim import Brand, ArticleBlueprint
+    brand = Brand(name="TestBrandMaterials")
+    db_session.add(brand)
+    db_session.commit()
+
+    bp = ArticleBlueprint(
+        brand_id=brand.id,
+        article_name="Test Blueprint",
+        description="Short desc",
+        extended_description="Ext desc",
+        tags=["tag1"],
+        materials=["pelle"]
+    )
+    db_session.add(bp)
+    db_session.commit()
+
+    res_patch = client.patch(
+        f"/api/v1/catalog/{bp.id}",
+        json={"materials": []}
+    )
+    assert res_patch.status_code == 200
+    assert res_patch.json()["status"] == "success"
+    db_session.refresh(bp)
+    assert bp.materials == []
+
+
+
 
 
 

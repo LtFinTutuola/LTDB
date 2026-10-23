@@ -855,3 +855,174 @@ def test_staging_photo_upload_empty_content_fails(db_session):
     app.dependency_overrides.clear()
 
 
+def test_resolve_items_with_photos_existing_blueprint_category_and_subcategory(db_session):
+    from src.models.pim import Brand, Category, BrandHeuristic, ArticleBlueprint
+    from src.services.data_ingestion_service import _resolve_items_with_photos
+
+    brand = Brand(name="Test Brand Categories")
+    db_session.add(brand)
+    db_session.commit()
+
+    macro_cat = Category(name="Borse", description="Macro categoria borse", parent_id=None)
+    db_session.add(macro_cat)
+    db_session.commit()
+
+    sub_cat = Category(name="Bauletto", description="Sotto categoria bauletto", parent_id=macro_cat.id)
+    db_session.add(sub_cat)
+    db_session.commit()
+
+    heuristic = BrandHeuristic(
+        brand_id=brand.id,
+        pattern=r"^(?P<model_code>[A-Z0-9]+)#(?P<color_code>[A-Z0-9]+)$",
+        explanation="Test pattern"
+    )
+    db_session.add(heuristic)
+    db_session.commit()
+
+    bp = ArticleBlueprint(
+        brand_id=brand.id,
+        normalized_vendor_code="ART123##",
+        article_name="Bauletto Monogram",
+        description="Borsa a bauletto",
+        extended_description="Descrizione estesa",
+        tags=["borsa", "bauletto"],
+        materials=["pelle"],
+        category_id=sub_cat.id
+    )
+    db_session.add(bp)
+    db_session.commit()
+
+    extracted_items = [
+        {
+            "item_id": "test-item-cat-1",
+            "vendor_code": "ART123#NERO",
+            "quantity": 2,
+            "colors": ["nero"]
+        }
+    ]
+
+    resolved_items, unresolved_items, resolved_blueprints, heuristic_warnings, photo_only_items = _resolve_items_with_photos(
+        db_session, brand.id, extracted_items, [heuristic]
+    )
+
+    assert len(resolved_items) == 1
+    assert str(bp.id) in resolved_blueprints
+    bp_data = resolved_blueprints[str(bp.id)]
+    assert bp_data["category"] == {"id": str(macro_cat.id), "description": "Borse"}
+    assert bp_data["sub_category"] == {"id": str(sub_cat.id), "description": "Bauletto"}
+
+
+def test_resolve_items_with_photos_existing_blueprint_macro_only_category(db_session):
+    from src.models.pim import Brand, Category, BrandHeuristic, ArticleBlueprint
+    from src.services.data_ingestion_service import _resolve_items_with_photos
+
+    brand = Brand(name="Test Brand Macro Only")
+    db_session.add(brand)
+    db_session.commit()
+
+    macro_cat = Category(name="Accessori", description="Macro categoria accessori", parent_id=None)
+    db_session.add(macro_cat)
+    db_session.commit()
+
+    heuristic = BrandHeuristic(
+        brand_id=brand.id,
+        pattern=r"^(?P<model_code>[A-Z0-9]+)$",
+        explanation="Test pattern"
+    )
+    db_session.add(heuristic)
+    db_session.commit()
+
+    bp = ArticleBlueprint(
+        brand_id=brand.id,
+        normalized_vendor_code="ACC001",
+        article_name="Portachiavi",
+        description="Portachiavi in metallo",
+        extended_description="Descrizione estesa portachiavi",
+        tags=["portachiavi"],
+        materials=["metallo"],
+        category_id=macro_cat.id
+    )
+    db_session.add(bp)
+    db_session.commit()
+
+    extracted_items = [
+        {
+            "item_id": "test-item-macro-1",
+            "vendor_code": "ACC001",
+            "quantity": 5,
+            "colors": []
+        }
+    ]
+
+    resolved_items, unresolved_items, resolved_blueprints, heuristic_warnings, photo_only_items = _resolve_items_with_photos(
+        db_session, brand.id, extracted_items, [heuristic]
+    )
+
+    assert len(resolved_items) == 1
+    assert str(bp.id) in resolved_blueprints
+    bp_data = resolved_blueprints[str(bp.id)]
+    assert bp_data["category"] == {"id": str(macro_cat.id), "description": "Accessori"}
+    assert bp_data["sub_category"] is None
+
+
+def test_get_job_enriches_existing_blueprint_categories(db_session):
+    from src.models.pim import Brand, Category, ArticleBlueprint
+    from src.models.staging import StagingArea, JobStatus, JobType
+    from src.services.data_ingestion_service import get_job
+
+    brand = Brand(name="Test Brand Job Enrich")
+    db_session.add(brand)
+    db_session.commit()
+
+    macro_cat = Category(name="Zaini", description="Macro categoria zaini", parent_id=None)
+    db_session.add(macro_cat)
+    db_session.commit()
+
+    sub_cat = Category(name="Zaino Tecnico", description="Sotto categoria zaino", parent_id=macro_cat.id)
+    db_session.add(sub_cat)
+    db_session.commit()
+
+    bp = ArticleBlueprint(
+        brand_id=brand.id,
+        normalized_vendor_code="ZAINO123#",
+        article_name="Zaino Outdoor",
+        description="Zaino per trekking",
+        extended_description="Descrizione estesa zaino",
+        tags=["zaino"],
+        materials=["nylon"],
+        category_id=sub_cat.id
+    )
+    db_session.add(bp)
+    db_session.commit()
+
+    job_id = "test-job-enrich-cats"
+    staged_data = {
+        "items": [{"item_id": "it-1", "article_blueprint_id": str(bp.id)}],
+        "blueprints": [
+            {
+                "id": str(bp.id),
+                "is_new": False,
+                "category": None,
+                "sub_category": None
+            }
+        ]
+    }
+    job = StagingArea(
+        id=job_id,
+        status=JobStatus.COMPLETED,
+        job_type=JobType.DDT_IMPORT,
+        data=staged_data
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    result = get_job(db_session, job_id)
+    assert result["status"] == "COMPLETED"
+    bp_res = result["data"]["blueprints"][0]
+    assert bp_res["category"] == {"id": str(macro_cat.id), "description": "Zaini"}
+    assert bp_res["sub_category"] == {"id": str(sub_cat.id), "description": "Zaino Tecnico"}
+    assert bp_res["article_name"] == "Zaino Outdoor"
+    assert bp_res["description"] == "Zaino per trekking"
+
+
+

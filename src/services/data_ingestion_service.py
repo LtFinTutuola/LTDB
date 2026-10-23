@@ -87,16 +87,30 @@ def _resolve_items_with_photos(db: Session, brand_id: str, extracted_items: list
 
             if str(bp.id) not in resolved_blueprints:
                 cat_dict = None
+                sub_cat_dict = None
                 if bp.category:
-                    cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
-                    
+                    if bp.category.parent_id:
+                        parent_cat = bp.category.parent
+                        if not parent_cat:
+                            from src.models.pim import Category
+                            parent_cat = db.query(Category).filter_by(id=bp.category.parent_id).first()
+                        if parent_cat:
+                            cat_dict = {"id": str(parent_cat.id), "description": parent_cat.name}
+                            sub_cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
+                        else:
+                            cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
+                            sub_cat_dict = None
+                    else:
+                        cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
+                        sub_cat_dict = None
+
                 resolved_blueprints[str(bp.id)] = {
                     "id": str(bp.id),
                     "is_new": False,
                     "article_name": bp.article_name,
                     "description": bp.description,
                     "category": cat_dict,
-                    "sub_category": None,
+                    "sub_category": sub_cat_dict,
                     "extended_description": bp.extended_description,
                     "tags": bp.tags,
                     "materials": bp.materials,
@@ -332,10 +346,15 @@ def get_job(db: Session, job_id: str) -> Dict[str, Any]:
         
     data = copy.deepcopy(job.data) if job.data else None
     if data and "blueprints" in data and isinstance(data["blueprints"], list):
-        from src.models.pim import ArticleBlueprint
+        from src.models.pim import ArticleBlueprint, Category
         missing_bp_ids = [
             bp["id"] for bp in data["blueprints"]
-            if isinstance(bp, dict) and not bp.get("is_new", True) and (bp.get("article_name") is None or bp.get("description") is None) and bp.get("id")
+            if isinstance(bp, dict) and not bp.get("is_new", True) and (
+                bp.get("article_name") is None 
+                or bp.get("description") is None
+                or bp.get("category") is None
+                or bp.get("sub_category") is None
+            ) and bp.get("id")
         ]
         if missing_bp_ids:
             db_bps = db.query(ArticleBlueprint).filter(ArticleBlueprint.id.in_(missing_bp_ids)).all()
@@ -347,6 +366,16 @@ def get_job(db: Session, job_id: str) -> Dict[str, Any]:
                         bp["article_name"] = db_bp.article_name
                     if bp.get("description") is None:
                         bp["description"] = db_bp.description
+                    if (bp.get("category") is None or bp.get("sub_category") is None) and db_bp.category:
+                        if db_bp.category.parent_id:
+                            parent_cat = db_bp.category.parent or db.query(Category).filter_by(id=db_bp.category.parent_id).first()
+                            if parent_cat:
+                                bp["category"] = {"id": str(parent_cat.id), "description": parent_cat.name}
+                                bp["sub_category"] = {"id": str(db_bp.category.id), "description": db_bp.category.name}
+                            elif bp.get("category") is None:
+                                bp["category"] = {"id": str(db_bp.category.id), "description": db_bp.category.name}
+                        elif bp.get("category") is None:
+                            bp["category"] = {"id": str(db_bp.category.id), "description": db_bp.category.name}
 
     return {
         "status": JobStatus(job.status).name,
