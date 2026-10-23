@@ -64,28 +64,80 @@
   }
   .search-toolbar {
     display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+  .search-toolbar-main {
+    display: flex;
     align-items: center;
     gap: 12px;
-    flex-wrap: wrap;
+    width: 100%;
+  }
+  .search-toolbar-sub {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding-left: 4px;
+    box-sizing: border-box;
   }
 
-  /* Modern Pill Switch Control (Left) */
+  /* De-emphasized Sort Dropdown (Desktop / Tablet) */
+  .warehouse-sort-wrapper {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent !important;
+    border: none !important;
+    padding: 0;
+    cursor: pointer;
+    user-select: none;
+    box-shadow: none !important;
+  }
+  .warehouse-sort-icon {
+    font-size: 16px;
+    color: var(--text-muted);
+    transition: color var(--transition-fast);
+  }
+  .warehouse-sort-select {
+    background: transparent !important;
+    border: none !important;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    outline: none;
+    padding: 2px 0;
+    box-shadow: none !important;
+    transition: color var(--transition-fast);
+  }
+  .warehouse-sort-select option {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+  }
+  .warehouse-sort-wrapper:hover .warehouse-sort-icon,
+  .warehouse-sort-wrapper:hover .warehouse-sort-select,
+  .warehouse-sort-select:focus {
+    color: var(--text-secondary);
+  }
+
+  /* De-emphasized Pill Switch Control (Desktop / Tablet) */
   .warehouse-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
-    padding: 9px 16px;
+    gap: 8px;
+    padding: 0;
     border-radius: var(--radius-pill);
-    background: var(--bg-app);
-    border: 1px solid var(--border-color);
+    background: transparent !important;
+    border: none !important;
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
-    transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+    box-shadow: none !important;
+    transition: color var(--transition-fast);
   }
-  .warehouse-toggle:hover {
-    border-color: rgba(168, 199, 250, 0.45);
-    background: var(--bg-elevated);
+  .warehouse-toggle:hover .warehouse-toggle__label {
+    color: var(--text-secondary);
   }
   .warehouse-toggle__input {
     position: absolute;
@@ -96,8 +148,8 @@
   }
   .warehouse-toggle__slider {
     position: relative;
-    width: 36px;
-    height: 20px;
+    width: 28px;
+    height: 16px;
     background: var(--bg-elevated);
     border: 1px solid var(--border-color);
     border-radius: 999px;
@@ -109,8 +161,8 @@
     position: absolute;
     top: 2px;
     left: 2px;
-    width: 14px;
-    height: 14px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     background: var(--text-muted);
     transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), background 0.22s ease;
@@ -120,17 +172,17 @@
     border-color: var(--accent);
   }
   .warehouse-toggle__input:checked + .warehouse-toggle__slider::after {
-    transform: translateX(16px);
+    transform: translateX(12px);
     background: var(--accent);
   }
   .warehouse-toggle__label {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 500;
-    color: var(--text-secondary);
+    color: var(--text-muted);
     transition: color var(--transition-fast);
   }
   .warehouse-toggle__input:checked ~ .warehouse-toggle__label {
-    color: var(--text-primary);
+    color: var(--text-secondary);
   }
   .warehouse-toggle__icon {
     display: none;
@@ -229,29 +281,9 @@
     box-shadow: none;
   }
 
-  /* Barcode Scanner Button (Camera) */
+  /* Barcode Scanner Button (Desktop/Tablet hidden, Mobile visible on left) */
   .search-scan-btn {
-    padding: 10px 18px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border-radius: var(--radius-pill);
-    background: var(--bg-app);
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
-    font-weight: 500;
-    cursor: pointer;
-    font-size: 14px;
-    white-space: nowrap;
-    transition: background var(--transition-fast), border-color var(--transition-fast), transform 0.1s ease;
-  }
-  .search-scan-btn:hover {
-    background: var(--bg-elevated);
-    border-color: rgba(168, 199, 250, 0.45);
-    color: var(--accent);
-  }
-  .search-scan-btn:active {
-    transform: scale(0.98);
+    display: none !important;
   }
   .search-scan-icon-btn {
     display: none;
@@ -625,53 +657,85 @@
       box-sizing: border-box !important;
     }
     .search-toolbar {
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+    }
+    .search-toolbar-main {
+      display: flex;
       flex-direction: row;
       flex-wrap: nowrap;
       align-items: center;
       gap: 8px;
       width: 100%;
     }
+    .search-toolbar-sub {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      padding: 0 4px;
+      box-sizing: border-box;
+    }
+    .warehouse-sort-wrapper {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: transparent !important;
+      border: none !important;
+      padding: 0;
+      box-shadow: none !important;
+    }
+    .warehouse-sort-icon {
+      font-size: 15px;
+      color: var(--text-muted);
+    }
+    .warehouse-sort-select {
+      font-size: 11px;
+      color: var(--text-muted);
+      border: none !important;
+      background: transparent !important;
+      padding: 2px 0;
+      box-shadow: none !important;
+    }
     .warehouse-toggle {
       width: auto;
       min-width: 0;
-      height: 38px;
-      padding: 0 10px;
+      height: auto;
+      padding: 0;
       gap: 6px;
       flex-shrink: 0;
-      justify-content: center;
-      border-radius: var(--radius-pill);
-      box-sizing: border-box;
+      border: none !important;
+      background: transparent !important;
+      box-shadow: none !important;
     }
     .warehouse-toggle__label {
       display: none;
     }
     .warehouse-toggle__icon {
       display: inline-flex;
-      font-size: 18px;
+      font-size: 16px;
       color: var(--text-muted);
       transition: color var(--transition-fast);
       order: 1;
     }
     .warehouse-toggle__slider {
-      width: 26px;
-      height: 15px;
+      width: 24px;
+      height: 14px;
       order: 2;
     }
     .warehouse-toggle__slider::after {
-      width: 11px;
-      height: 11px;
-      top: 1px;
-      left: 1px;
+      width: 8px;
+      height: 8px;
+      top: 2px;
+      left: 2px;
     }
     .warehouse-toggle__input:checked + .warehouse-toggle__slider::after {
-      transform: translateX(11px);
+      transform: translateX(10px);
     }
     .warehouse-toggle__input:checked ~ .warehouse-toggle__icon {
       color: var(--accent);
-    }
-    .warehouse-toggle:has(.warehouse-toggle__input:checked) {
-      border-color: rgba(168, 199, 250, 0.45);
-      background: rgba(168, 199, 250, 0.12);
     }
     .search-input-wrapper {
       flex: 1;
@@ -679,7 +743,7 @@
       width: auto;
     }
     .search-input {
-      font-size: 15px;
+      font-size: 14px;
       height: 38px;
       padding: 8px 30px 8px 34px;
       box-sizing: border-box;
@@ -693,8 +757,26 @@
       width: 22px;
       height: 22px;
     }
-    .search-btn,
     .search-scan-btn {
+      width: 38px;
+      height: 38px;
+      min-width: 38px;
+      padding: 0;
+      border-radius: var(--radius-pill);
+      display: inline-flex !important;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      background: var(--bg-app);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: background var(--transition-fast), border-color var(--transition-fast), transform 0.1s ease;
+    }
+    .search-scan-btn:active {
+      transform: scale(0.96);
+    }
+    .search-btn {
       width: 38px;
       height: 38px;
       min-width: 38px;
@@ -1037,54 +1119,59 @@
             <div id="tab-catalog" class="tab-pane active">
                 <div class="search-bar-container">
                     <div class="search-toolbar">
-                        <!-- Rounded search bar on the left -->
-                        <div class="search-input-wrapper">
-                            <span class="material-symbols-rounded search-input-icon">search</span>
-                            <input type="text" id="warehouse-search-input" class="search-input" placeholder="Cerca articoli per nome, brand, categoria, codice o descrizione (es. borsa di Guess con tracolla)...">
-                            <button type="button" id="warehouse-search-scan-btn" class="search-scan-icon-btn" title="Scansiona codice a barre con la fotocamera">
-                                <span class="material-symbols-rounded" style="font-size: 19px;">barcode_scanner</span>
+                        <div class="search-toolbar-main">
+                            <!-- Barcode Scanner Button (Mobile only, left of search bar) -->
+                            <button type="button" id="warehouse-barcode-scan-btn" class="search-scan-btn" title="Scansiona codice a barre con la fotocamera">
+                                <span class="material-symbols-rounded" style="font-size: 20px;">photo_camera</span>
+                                <span>Scansiona Barcode</span>
                             </button>
-                            <button type="button" id="warehouse-search-clear" class="search-clear-btn" title="Cancella ricerca">
-                                <span class="material-symbols-rounded" style="font-size: 18px;">close</span>
+
+                            <!-- Rounded search bar -->
+                            <div class="search-input-wrapper">
+                                <span class="material-symbols-rounded search-input-icon">search</span>
+                                <input type="text" id="warehouse-search-input" class="search-input" placeholder="Cerca articoli per nome, brand, categoria, codice o descrizione (es. borsa di Guess con tracolla)...">
+                                <button type="button" id="warehouse-search-scan-btn" class="search-scan-icon-btn" title="Scansiona codice a barre con la fotocamera">
+                                    <span class="material-symbols-rounded" style="font-size: 19px;">barcode_scanner</span>
+                                </button>
+                                <button type="button" id="warehouse-search-clear" class="search-clear-btn" title="Cancella ricerca">
+                                    <span class="material-symbols-rounded" style="font-size: 18px;">close</span>
+                                </button>
+                            </div>
+
+                            <!-- Rounded search button on the right -->
+                            <button type="button" id="warehouse-search-btn" class="search-btn" title="Cerca articoli">
+                                <span class="material-symbols-rounded" style="font-size: 18px;">search</span>
+                                <span>Cerca</span>
                             </button>
+
+                            <!-- Hidden camera capture input for non-SSL mobile devices -->
+                            <input type="file" id="warehouse-barcode-camera-input" accept="image/*" capture="environment" style="display: none;">
                         </div>
 
-                        <!-- Toggle in the center -->
-                        <label class="warehouse-toggle" for="warehouse-stock-toggle" title="Mostra solo articoli disponibili">
-                            <input type="checkbox" id="warehouse-stock-toggle" class="warehouse-toggle__input">
-                            <span class="warehouse-toggle__slider"></span>
-                            <span class="material-symbols-rounded warehouse-toggle__icon">inventory_2</span>
-                            <span class="warehouse-toggle__label">Mostra solo articoli disponibili</span>
-                        </label>
+                        <!-- Secondary row below search bar: sort dropdown on left, stock toggle -->
+                        <div class="search-toolbar-sub">
+                            <!-- Sort selector -->
+                            <div class="warehouse-sort-wrapper" title="Ordinamento articoli">
+                                <span class="material-symbols-rounded warehouse-sort-icon">sort</span>
+                                <select id="warehouse-sort-select" class="warehouse-sort-select">
+                                    <option value="date:desc">Data: più recenti</option>
+                                    <option value="date:asc">Data: meno recenti</option>
+                                    <option value="relevance:desc" id="warehouse-sort-opt-relevance" style="display: none;">Rilevanza</option>
+                                    <option value="category:asc">Categoria: A-Z</option>
+                                    <option value="category:desc">Categoria: Z-A</option>
+                                    <option value="brand:asc">Brand: A-Z</option>
+                                    <option value="brand:desc">Brand: Z-A</option>
+                                </select>
+                            </div>
 
-                        <!-- Sort selector -->
-                        <div class="warehouse-sort-wrapper" style="display: inline-flex; align-items: center; gap: 8px; background: var(--bg-app); border: 1px solid var(--border-color); border-radius: var(--radius-pill); padding: 5px 12px;">
-                            <span class="material-symbols-rounded" style="font-size: 18px; color: var(--text-secondary);">sort</span>
-                            <select id="warehouse-sort-select" style="background: transparent; border: none; font-size: 13px; color: var(--text-primary); cursor: pointer; outline: none;">
-                                <option value="date:desc">Data: più recenti</option>
-                                <option value="date:asc">Data: meno recenti</option>
-                                <option value="relevance:desc" id="warehouse-sort-opt-relevance" style="display: none;">Rilevanza</option>
-                                <option value="category:asc">Categoria: A-Z</option>
-                                <option value="category:desc">Categoria: Z-A</option>
-                                <option value="brand:asc">Brand: A-Z</option>
-                                <option value="brand:desc">Brand: Z-A</option>
-                            </select>
+                            <!-- Toggle stock available -->
+                            <label class="warehouse-toggle" for="warehouse-stock-toggle" title="Mostra solo articoli disponibili">
+                                <input type="checkbox" id="warehouse-stock-toggle" class="warehouse-toggle__input">
+                                <span class="warehouse-toggle__slider"></span>
+                                <span class="material-symbols-rounded warehouse-toggle__icon">inventory_2</span>
+                                <span class="warehouse-toggle__label">Mostra solo articoli disponibili</span>
+                            </label>
                         </div>
-
-                        <!-- Barcode Scanner Button (Camera) -->
-                        <button type="button" id="warehouse-barcode-scan-btn" class="search-scan-btn" title="Scansiona codice a barre con la fotocamera">
-                            <span class="material-symbols-rounded" style="font-size: 20px;">photo_camera</span>
-                            <span>Scansiona Barcode</span>
-                        </button>
-
-                        <!-- Rounded search button on the right -->
-                        <button type="button" id="warehouse-search-btn" class="search-btn" title="Cerca articoli">
-                            <span class="material-symbols-rounded" style="font-size: 18px;">search</span>
-                            <span>Cerca</span>
-                        </button>
-
-                        <!-- Hidden camera capture input for non-SSL mobile devices -->
-                        <input type="file" id="warehouse-barcode-camera-input" accept="image/*" capture="environment" style="display: none;">
                     </div>
                     <div id="warehouse-search-feedback" style="margin-top: 8px; font-size: 13px; color: var(--text-secondary); display: none;"></div>
                 </div>

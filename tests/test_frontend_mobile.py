@@ -663,6 +663,50 @@ def test_article_color_editing_in_warehouse_forms_and_api(db_session):
     assert 'new_color:' in js
 
 
+def test_warehouse_search_toolbar_ui_layout_and_responsive_styles(db_session):
+    """
+    Verify the cleaned-up warehouse toolbar layout and styling for desktop/tablet and mobile:
+    1. DOM Structure: .search-toolbar contains .search-toolbar-main and .search-toolbar-sub.
+    2. Desktop/Tablet header cleanup: barcode button is hidden via CSS, stock toggle and sort
+       dropdown are moved under the search bar into .search-toolbar-sub.
+    3. Mobile layout: barcode button is placed to the left of the search bar, sort dropdown
+       is placed under the search bar on the left.
+    4. De-emphasized styles: sort dropdown and stock toggle have border: none, background: transparent,
+       font-size 12px or 11px, and darker/muted text color (--text-muted).
+    """
+    client = TestClient(app)
+    res = client.get("/magazzino")
+    assert res.status_code == 200
+    html = res.text
+
+    # 1. Structure: main toolbar and sub-bar
+    assert 'search-toolbar-main' in html
+    assert 'search-toolbar-sub' in html
+
+    # 2. Barcode scan button positioned before search input wrapper
+    idx_scan_btn = html.find('id="warehouse-barcode-scan-btn"')
+    idx_search_input = html.find('id="warehouse-search-input"')
+    assert idx_scan_btn != -1 and idx_search_input != -1
+    assert idx_scan_btn < idx_search_input, "Barcode scan button must be to the left of the search input"
+
+    # 3. Sort dropdown and stock toggle placed inside .search-toolbar-sub
+    idx_sub = html.find('class="search-toolbar-sub"')
+    idx_sort = html.find('id="warehouse-sort-select"')
+    idx_toggle = html.find('id="warehouse-stock-toggle"')
+    assert idx_sub != -1 and idx_sort != -1 and idx_toggle != -1
+    assert idx_sub < idx_sort < idx_toggle, "Sort dropdown should be in sub-toolbar on the left, followed by stock toggle"
+
+    # 4. CSS: Desktop hides scan button, mobile displays it on left
+    assert ".search-scan-btn {\n    display: none !important;\n  }" in html
+    assert "display: inline-flex !important;" in html
+
+    # 5. CSS: De-emphasized borderless styling with --text-muted
+    assert ".warehouse-sort-wrapper" in html
+    assert "background: transparent !important;" in html
+    assert "color: var(--text-muted);" in html
+
+
+
 
 
 
