@@ -61,6 +61,11 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
     has_barcode = "barcode" in update_data
     new_barcode = update_data.pop("barcode", None)
 
+    has_new_color = "new_color" in update_data
+    new_color = update_data.pop("new_color", None)
+    has_colors = "colors" in update_data
+    new_colors_list = update_data.pop("colors", None)
+
     has_category = "category_name" in update_data
     has_sub_category = "sub_category_name" in update_data
     category_name = update_data.pop("category_name", None)
@@ -69,8 +74,24 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
     has_quantity = "quantity" in update_data
     new_quantity = update_data.pop("quantity", None)
 
+    wants_color_update = False
+    cleaned_new_colors: list[str] = []
+    if has_colors and isinstance(new_colors_list, list):
+        cleaned_new_colors = [str(c).strip().lower() for c in new_colors_list if str(c).strip()]
+        wants_color_update = True
+    elif has_new_color:
+        if new_color is not None and str(new_color).strip():
+            cleaned_new_colors = [s.strip().lower() for s in str(new_color).split(',') if s.strip()]
+        else:
+            cleaned_new_colors = []
+        wants_color_update = True
+    elif target_color is not None and not has_quantity and not has_vendor_code and not has_barcode and not has_category and not has_sub_category and not update_data:
+        cleaned_new_colors = [s.strip().lower() for s in str(target_color).split(',') if s.strip()]
+        wants_color_update = True
+
     if (not update_data and not has_vendor_code and not has_barcode 
-            and not has_category and not has_sub_category and not has_quantity):
+            and not has_category and not has_sub_category and not has_quantity
+            and not wants_color_update):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No fields provided for update."
@@ -87,6 +108,10 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
             suffix = f" - {str(target_color).strip()}"
             if clean_name.lower().endswith(suffix.lower()):
                 clean_name = clean_name[:-len(suffix)].strip()
+        if wants_color_update and cleaned_new_colors:
+            suffix_new = f" - {cleaned_new_colors[0]}"
+            if clean_name.lower().endswith(suffix_new.lower()):
+                clean_name = clean_name[:-len(suffix_new)].strip()
         update_data["article_name"] = clean_name
 
     # --- Prevent description loss ---
@@ -169,7 +194,13 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
             from src.services.wms_service import register_inbound_movement
             sup_code = next((a.supplier_code for a in target_articles if a.supplier_code), None)
             ean_code = next((a.ean for a in target_articles if a.ean), None)
-            color_list = [norm_color] if norm_color else (target_articles[0].colors if target_articles and target_articles[0].colors else None)
+            if wants_color_update:
+                color_list = cleaned_new_colors if cleaned_new_colors else None
+            elif norm_color:
+                color_list = [norm_color]
+            else:
+                color_list = target_articles[0].colors if target_articles and target_articles[0].colors else None
+
             register_inbound_movement(
                 db=db,
                 job_id=f"manual-{str(bp.id)[:8]}",
@@ -193,8 +224,8 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
 
         updated_fields_list.append("quantity")
 
-    # --- Apply article variant fields (vendor_code / barcode) ---
-    if has_vendor_code or has_barcode:
+    # --- Apply article variant fields (color / vendor_code / barcode) ---
+    if wants_color_update or has_vendor_code or has_barcode:
         articles = db.query(Article).filter(Article.article_blueprint_id == bp.id).all()
         if target_color and str(target_color).strip().lower() != "unknown":
             norm_color = str(target_color).strip().lower()
@@ -204,12 +235,48 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
             ]
         else:
             target_articles = articles
+            norm_color = None
+
+        if not target_articles and articles:
+            target_articles = articles
 
         for art in target_articles:
+            if wants_color_update:
+                art.colors = cleaned_new_colors
             if has_vendor_code:
                 art.supplier_code = new_vendor_code.strip() if new_vendor_code and new_vendor_code.strip() else None
             if has_barcode:
                 art.ean = new_barcode.strip() if new_barcode and new_barcode.strip() else None
+
+        if wants_color_update:
+            updated_fields_list.append("color")
+            # Update photo canonical_color_name if matching old target_color
+            old_norm_col = norm_color
+            new_canonical = cleaned_new_colors[0] if cleaned_new_colors else None
+            if old_norm_col and new_canonical and old_norm_col != new_canonical:
+                old_photo = db.query(ArticlePhoto).filter(
+                    ArticlePhoto.article_blueprint_id == bp.id,
+                    func.lower(ArticlePhoto.canonical_color_name) == old_norm_col,
+                ).first()
+                if old_photo:
+                    conflict = db.query(ArticlePhoto).filter(
+                        ArticlePhoto.article_blueprint_id == bp.id,
+                        func.lower(ArticlePhoto.canonical_color_name) == new_canonical,
+                    ).first()
+                    if not conflict:
+                        old_photo.canonical_color_name = new_canonical
+            elif not old_norm_col and new_canonical:
+                unknown_photo = db.query(ArticlePhoto).filter(
+                    ArticlePhoto.article_blueprint_id == bp.id,
+                    func.lower(ArticlePhoto.canonical_color_name) == "unknown",
+                ).first()
+                if unknown_photo:
+                    conflict = db.query(ArticlePhoto).filter(
+                        ArticlePhoto.article_blueprint_id == bp.id,
+                        func.lower(ArticlePhoto.canonical_color_name) == new_canonical,
+                    ).first()
+                    if not conflict:
+                        unknown_photo.canonical_color_name = new_canonical
 
         if has_vendor_code:
             updated_fields_list.append("vendor_code")

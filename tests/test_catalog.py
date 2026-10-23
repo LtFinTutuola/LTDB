@@ -579,6 +579,108 @@ class TestWarehouseEditAndDelete:
         assert art_white.supplier_code == "OLD-WHT"
         assert art_white.ean == "8000000000022"
 
+    def test_update_blueprint_change_color_variant_and_photo(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article
+        from src.models.pim import ArticlePhoto
+        from src.services import catalog_service
+
+        brand = _make_brand(db_session)
+        bp = _make_blueprint(db_session, brand.id, article_name="Borsa Roma")
+        sup = Supplier(company_name="SupColor")
+        db_session.add(sup)
+        db_session.commit()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-COLOR", document_date=date(2026, 2, 1))
+        db_session.add(batch)
+        db_session.commit()
+
+        art_black = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="BLK-001",
+            ean="8000000000001",
+            colors=["black"],
+        )
+        art_white = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="WHT-001",
+            ean="8000000000002",
+            colors=["white"],
+        )
+        photo_black = ArticlePhoto(
+            article_blueprint_id=bp.id,
+            canonical_color_name="black",
+            photo_data=b"blackphoto"
+        )
+        db_session.add_all([art_black, art_white, photo_black])
+        db_session.commit()
+
+        # Change black variant to red
+        result = catalog_service.update_blueprint(
+            db_session,
+            bp.id,
+            CatalogUpdateRequest(
+                color="black",
+                new_color="red",
+            ),
+        )
+
+        assert result.status == "success"
+        assert "color" in result.updated_fields
+        db_session.refresh(art_black)
+        db_session.refresh(art_white)
+        db_session.refresh(photo_black)
+
+        assert art_black.colors == ["red"]
+        assert art_white.colors == ["white"]
+        assert photo_black.canonical_color_name == "red"
+
+    def test_update_blueprint_assign_color_to_colorless_article(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article
+        from src.models.pim import ArticlePhoto
+        from src.services import catalog_service
+
+        brand = _make_brand(db_session)
+        bp = _make_blueprint(db_session, brand.id, article_name="Cintura Classica")
+        sup = Supplier(company_name="SupBelt")
+        db_session.add(sup)
+        db_session.commit()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-BELT", document_date=date(2026, 2, 1))
+        db_session.add(batch)
+        db_session.commit()
+
+        art_colorless = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="CIN-001",
+            colors=[],
+        )
+        photo_unknown = ArticlePhoto(
+            article_blueprint_id=bp.id,
+            canonical_color_name="unknown",
+            photo_data=b"unknownphoto"
+        )
+        db_session.add_all([art_colorless, photo_unknown])
+        db_session.commit()
+
+        result = catalog_service.update_blueprint(
+            db_session,
+            bp.id,
+            CatalogUpdateRequest(
+                new_color="marrone",
+            ),
+        )
+
+        assert result.status == "success"
+        assert "color" in result.updated_fields
+        db_session.refresh(art_colorless)
+        db_session.refresh(photo_unknown)
+
+        assert art_colorless.colors == ["marrone"]
+        assert photo_unknown.canonical_color_name == "marrone"
+
     def test_delete_catalog_item_specific_color_variant_preserves_other_variants(self, db_session):
         from datetime import date
         from src.models.wms import Supplier, Batch, Article

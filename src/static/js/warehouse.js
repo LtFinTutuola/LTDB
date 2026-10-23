@@ -633,7 +633,7 @@ function _bindArticleModals() {
     if (btnUploadDesktop) {
         btnUploadDesktop.addEventListener('click', () => {
             if (!_editingItem) return;
-            const color = _editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '';
+            const color = document.getElementById('edit-article-color')?.value.trim() || (_editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '');
             requestPhotoUpload({
                 onSuccess: async (compressedBlob) => {
                     // Instant local preview
@@ -671,7 +671,7 @@ function _bindArticleModals() {
     if (btnGoogleDesktop) {
         btnGoogleDesktop.addEventListener('click', () => {
             if (!_editingItem) return;
-            const color = _editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '';
+            const color = document.getElementById('edit-article-color')?.value.trim() || (_editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '');
             const q = `${_editingItem.brand_name || ''} ${_extractBaseArticleName(_editingItem)} ${color}`.trim();
             const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`;
             window.open(searchUrl, '_blank', 'noopener,noreferrer');
@@ -684,7 +684,7 @@ function _bindArticleModals() {
             if (!_editingItem) return;
             const url = prompt('Inserisci l\'URL dell\'immagine da impostare:');
             if (!url || !url.trim()) return;
-            const color = _editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '';
+            const color = document.getElementById('edit-article-color')?.value.trim() || (_editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '');
             _showToast('Download foto in corso...', 'info');
             try {
                 const res = await api.setCatalogPhotoUrl(_editingItem.blueprint_id, url.trim(), color);
@@ -706,7 +706,7 @@ function _bindArticleModals() {
         btnAiDesktop.addEventListener('click', async () => {
             if (!_editingItem) return;
             const feedback = prompt('Descrivi la foto da cercare su Internet con l\'AI (opzionale):');
-            const color = _editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '';
+            const color = document.getElementById('edit-article-color')?.value.trim() || (_editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '');
             _showToast('Ricerca AI su Internet in corso...', 'info');
             btnAiDesktop.disabled = true;
             try {
@@ -731,7 +731,7 @@ function _bindArticleModals() {
     if (btnUploadMobile) {
         btnUploadMobile.addEventListener('click', () => {
             if (!_currentMobileArticle) return;
-            const color = _currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '';
+            const color = document.getElementById('mob-art-color')?.value.trim() || (_currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '');
             requestPhotoUpload({
                 onSuccess: async (compressedBlob) => {
                     // Instant local preview
@@ -769,7 +769,7 @@ function _bindArticleModals() {
     if (btnGoogleMobile) {
         btnGoogleMobile.addEventListener('click', () => {
             if (!_currentMobileArticle) return;
-            const color = _currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '';
+            const color = document.getElementById('mob-art-color')?.value.trim() || (_currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '');
             const q = `${_currentMobileArticle.brand_name || ''} ${_extractBaseArticleName(_currentMobileArticle)} ${color}`.trim();
             const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`;
             window.open(searchUrl, '_blank', 'noopener,noreferrer');
@@ -782,7 +782,7 @@ function _bindArticleModals() {
             if (!_currentMobileArticle) return;
             const url = prompt('Inserisci l\'URL dell\'immagine da impostare:');
             if (!url || !url.trim()) return;
-            const color = _currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '';
+            const color = document.getElementById('mob-art-color')?.value.trim() || (_currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '');
             _showToast('Download foto in corso...', 'info');
             try {
                 const res = await api.setCatalogPhotoUrl(_currentMobileArticle.blueprint_id, url.trim(), color);
@@ -804,7 +804,7 @@ function _bindArticleModals() {
         btnAiMobile.addEventListener('click', async () => {
             if (!_currentMobileArticle) return;
             const feedback = prompt('Descrivi la foto da cercare su Internet con l\'AI (opzionale):');
-            const color = _currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '';
+            const color = document.getElementById('mob-art-color')?.value.trim() || (_currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '');
             _showToast('Ricerca AI su Internet in corso...', 'info');
             btnAiMobile.disabled = true;
             try {
@@ -931,6 +931,7 @@ function openEditArticleModal(item) {
     _editingItem = item;
     const modalEdit = document.getElementById('modal-edit-article');
     const inputName = document.getElementById('edit-article-name');
+    const inputColor = document.getElementById('edit-article-color');
     const inputVendorCode = document.getElementById('edit-article-vendor-code');
     const inputBarcode = document.getElementById('edit-article-barcode');
     const inputDesc = document.getElementById('edit-article-description');
@@ -944,6 +945,7 @@ function openEditArticleModal(item) {
     if (!modalEdit) return;
 
     if (inputName) inputName.value = _extractBaseArticleName(item);
+    if (inputColor) inputColor.value = (item.colors && item.colors.length > 0) ? item.colors.join(', ') : '';
     if (inputVendorCode) inputVendorCode.value = item.vendor_code || '';
     if (inputBarcode) inputBarcode.value = item.barcode || '';
     if (inputDesc) inputDesc.value = item.description || '';
@@ -1008,6 +1010,7 @@ async function _handleSaveEditArticle(e) {
     if (!_editingItem) return;
 
     const inputName = document.getElementById('edit-article-name');
+    const inputColor = document.getElementById('edit-article-color');
     const inputVendorCode = document.getElementById('edit-article-vendor-code');
     const inputBarcode = document.getElementById('edit-article-barcode');
     const inputDesc = document.getElementById('edit-article-description');
@@ -1020,6 +1023,7 @@ async function _handleSaveEditArticle(e) {
     const btnSave = document.getElementById('btn-save-edit-article');
 
     const articleName = inputName ? inputName.value.trim() : '';
+    const newColor = inputColor ? inputColor.value.trim() : '';
     const vendorCode = inputVendorCode ? inputVendorCode.value.trim() : '';
     const barcode = inputBarcode ? inputBarcode.value.trim() : '';
     const description = inputDesc ? inputDesc.value.trim() : '';
@@ -1061,6 +1065,7 @@ async function _handleSaveEditArticle(e) {
         vendor_code: vendorCode,
         barcode: barcode,
         color: color,
+        new_color: newColor,
         quantity: newQty,
         category_name: newMacroCat,
         sub_category_name: newSubCat
@@ -1155,6 +1160,7 @@ export function openArticleMobilePanel(item) {
     const stockEl = document.getElementById('mob-art-stock');
 
     const nameInput = document.getElementById('mob-art-name');
+    const colorInput = document.getElementById('mob-art-color');
     const vendorInput = document.getElementById('mob-art-vendor-code');
     const barcodeInput = document.getElementById('mob-art-barcode');
     const descInput = document.getElementById('mob-art-description');
@@ -1193,6 +1199,7 @@ export function openArticleMobilePanel(item) {
     }
 
     if (nameInput) nameInput.value = _extractBaseArticleName(item);
+    if (colorInput) colorInput.value = (item.colors && item.colors.length > 0) ? item.colors.join(', ') : '';
     if (vendorInput) vendorInput.value = item.vendor_code || '';
     if (barcodeInput) barcodeInput.value = item.barcode || '';
     if (descInput) descInput.value = item.description || '';
@@ -1229,6 +1236,7 @@ async function _handleSaveArticleMobile(e) {
     if (!_currentMobileArticle) return;
 
     const nameInput = document.getElementById('mob-art-name');
+    const colorInput = document.getElementById('mob-art-color');
     const vendorInput = document.getElementById('mob-art-vendor-code');
     const barcodeInput = document.getElementById('mob-art-barcode');
     const descInput = document.getElementById('mob-art-description');
@@ -1241,6 +1249,7 @@ async function _handleSaveArticleMobile(e) {
     const btnSave = document.getElementById('btn-save-article-mobile');
 
     const articleName = nameInput ? nameInput.value.trim() : '';
+    const newColor = colorInput ? colorInput.value.trim() : '';
     const vendorCode = vendorInput ? vendorInput.value.trim() : '';
     const barcode = barcodeInput ? barcodeInput.value.trim() : '';
     const description = descInput ? descInput.value.trim() : '';
@@ -1282,6 +1291,7 @@ async function _handleSaveArticleMobile(e) {
         vendor_code: vendorCode,
         barcode: barcode,
         color: color,
+        new_color: newColor,
         quantity: newQty,
         category_name: newMacroCat,
         sub_category_name: newSubCat

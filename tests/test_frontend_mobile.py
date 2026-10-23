@@ -634,6 +634,36 @@ def test_materials_optional_in_warehouse_forms_and_api(db_session):
     assert bp.materials == []
 
 
+def test_article_color_editing_in_warehouse_forms_and_api(db_session):
+    """
+    Verify that article color can be edited in both desktop modal and mobile panel:
+    1. index.html contains #edit-article-color in desktop modal.
+    2. index.html contains #mob-art-color in mobile panel.
+    3. warehouse.js populates and reads color fields, sending new_color in patchCatalogItem payload.
+    """
+    client = TestClient(app)
+
+    # 1 & 2: Template checks
+    res = client.get("/magazzino")
+    assert res.status_code == 200
+    html = res.text
+
+    assert 'id="edit-article-color"' in html
+    assert 'for="edit-article-color"' in html
+    assert 'id="mob-art-color"' in html
+    assert 'for="mob-art-color"' in html
+
+    # 3: JS checks
+    res_js = client.get("/static/js/warehouse.js")
+    assert res_js.status_code == 200
+    js = res_js.text
+
+    assert 'edit-article-color' in js
+    assert 'mob-art-color' in js
+    assert 'new_color:' in js
+
+
+
 
 
 

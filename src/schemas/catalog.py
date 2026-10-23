@@ -143,6 +143,8 @@ class CatalogUpdateRequest(BaseModel):
     vendor_code: Optional[str] = None
     barcode: Optional[str] = None
     color: Optional[str] = None
+    new_color: Optional[str] = None
+    colors: Optional[List[str]] = None
     quantity: Optional[int] = None
     category_name: Optional[str] = None
     sub_category_name: Optional[str] = None
