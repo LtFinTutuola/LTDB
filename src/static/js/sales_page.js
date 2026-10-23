@@ -10,6 +10,10 @@ function _esc(str) {
         .replace(/'/g, '&#39;');
 }
 
+// Mobile layout applies to phones only (<= 768px); tablet uses the desktop layout.
+const MOBILE_MAX_WIDTH = 768;
+const isMobileLayout = () => window.innerWidth <= MOBILE_MAX_WIDTH;
+
 const CATEGORY_COLUMNS = [
     { index: 0, header: 'B' },
     { index: 1, header: 'Sam/AT' },
@@ -192,6 +196,13 @@ function init() {
 
     if (dom.btnMobileBackToTable) {
         dom.btnMobileBackToTable.addEventListener('click', () => {
+            if (dom.page) dom.page.classList.remove('mobile-panel-open');
+        });
+    }
+
+    const mobileBackdrop = document.getElementById('mobile-panel-backdrop');
+    if (mobileBackdrop) {
+        mobileBackdrop.addEventListener('click', () => {
             if (dom.page) dom.page.classList.remove('mobile-panel-open');
         });
     }
@@ -481,7 +492,13 @@ function renderDesktopReconCell(td, sale) {
         if (img) lazyLoadObserver.observe(img);
 
     } else if (sale.status === 'UNPROCESSABLE') {
-        container.innerHTML = `<span style="color: var(--error)">Errore dati origine</span>`;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn-add-recon btn-add-recon--disabled';
+        btn.disabled = true;
+        btn.innerHTML = '+';
+        btn.title = 'Non associabile (dati non validi)';
+        container.appendChild(btn);
     } else {
         // ORPHAN
         const defaultVal = sale.raw_article_code || '';
@@ -548,7 +565,16 @@ function renderMobileReconCard(td, sale) {
 
         container.appendChild(card);
     } else if (sale.status === 'UNPROCESSABLE') {
-        container.innerHTML = `<span class="stock-badge stock-badge--zero">Dati non validi</span>`;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn-add-recon-card btn-add-recon-card--disabled';
+        btn.disabled = true;
+        btn.innerHTML = `
+            <span class="material-symbols-rounded" style="font-size: 18px;">add</span>
+            <span>Non associabile</span>
+        `;
+        btn.title = 'Non associabile (dati non validi)';
+        container.appendChild(btn);
     } else {
         // ORPHAN
         const defaultVal = sale.raw_article_code || '';
@@ -692,7 +718,7 @@ function handleCandidateConfirm(sale, cand) {
     // 4. Auto-scroll to next orphan
     const nextOrphanIdx = state.sales.findIndex(s => s.status === 'ORPHAN');
     if (nextOrphanIdx !== -1) {
-        const isMobile = window.innerWidth <= 1024;
+        const isMobile = isMobileLayout();
         const targetTbody = isMobile ? dom.tbodyMobile : dom.tbody;
         const targetCol = isMobile ? 3 : 10;
         if (targetTbody && targetTbody.children[nextOrphanIdx]) {
@@ -881,7 +907,7 @@ function setActiveCell(rowIndex, colIndex, triggerContext = false, shouldFocus =
 
     // Only manage focus if explicitly requested (e.g. user clicked on cell or explicit navigation)
     if (shouldFocus) {
-        const isMobile = window.innerWidth <= 1024;
+        const isMobile = isMobileLayout();
         const targetCol = isMobile ? 3 : 10;
         const targetTr = isMobile ? newTrMobile : newTr;
         if (colIndex === targetCol && targetTr) {
@@ -912,7 +938,7 @@ function handleKeyNav(e) {
 
     let { row, col } = state.activeCell;
     const maxRow = state.sales.length - 1;
-    const isMobile = window.innerWidth <= 1024;
+    const isMobile = isMobileLayout();
     const maxCol = isMobile ? 3 : 10;
 
     let changed = false;

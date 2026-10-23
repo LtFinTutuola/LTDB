@@ -72,6 +72,7 @@ def test_vendite_mobile_controls_rendered(db_session):
     assert 'id="btn-mobile-open-gemini"' in html
     assert 'class="btn-mobile-gemini-trigger"' in html
     assert 'id="btn-mobile-back-to-table"' in html
+    assert 'id="mobile-panel-backdrop"' in html
     assert 'class="btn-mobile-back"' in html
 
 
@@ -102,7 +103,7 @@ def test_responsive_css_rules_served():
     assert "mobile-panel-open" in res_sales.text
     assert ".btn-mobile-gemini-trigger" in res_sales.text
     assert ".mobile-panel-topbar" in res_sales.text
-    assert "@media (max-width: 1024px)" in res_sales.text
+    assert "@media (max-width: 768px)" in res_sales.text
 
     # 4. pim_crud.css
     res_pim = client.get("/static/css/pim_crud.css")
@@ -456,7 +457,7 @@ def test_vendite_four_columns_and_gemini_article_card(db_session):
     assert 'id="sales-table-mobile"' in html
     mobile_table_html = html.split('id="sales-table-mobile"')[1].split('</table>')[0]
     assert '<th class="col-price-list">Prezzo di listino</th>' in mobile_table_html
-    assert '<th class="col-price-final">Prezzo finale</th>' in mobile_table_html
+    assert '<th class="col-price-final">Prezzo scontato</th>' in mobile_table_html
     assert '<th class="col-excel-col">Colonna excel</th>' in mobile_table_html
     assert '<th class="col-article">Articolo</th>' in mobile_table_html
 
@@ -480,6 +481,12 @@ def test_vendite_four_columns_and_gemini_article_card(db_session):
     assert ".col-excel-col" in css
     assert ".col-article" in css
     assert ".search-preview-card--sale" in css
+    assert "@media (min-width: 769px)" in css
+    assert ".mobile-panel-backdrop" in css
+    assert ".sales-table tbody tr" in css
+    assert ".sales-table--desktop tbody tr" in css
+    assert ".sales-table--mobile tbody tr" in css
+    assert ".btn-add-recon:disabled" in css
     assert ".search-preview-card--sale .preview-card__photo" in css
     assert ".search-preview-card--sale .preview-card__meta" in css
 
@@ -501,6 +508,8 @@ def test_vendite_four_columns_and_gemini_article_card(db_session):
     assert "sales-tbody-mobile" in js
     assert "renderDesktopReconCell" in js
     assert "renderMobileReconCard" in js
+    assert "btn-add-recon--disabled" in js
+    assert "btn.disabled = true" in js
 
 
 def test_magazzino_camera_barcode_elements(db_session):

@@ -4,7 +4,7 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="/static/css/tabs.css?v=20261019b">
-<link rel="stylesheet" href="/static/css/sales_table.css?v=20261019b">
+<link rel="stylesheet" href="/static/css/sales_table.css?v=20261023b">
 {% endblock %}
 
 {% block content %}
@@ -63,7 +63,7 @@
                     <thead>
                         <tr>
                             <th class="col-price-list">Prezzo di listino</th>
-                            <th class="col-price-final">Prezzo finale</th>
+                            <th class="col-price-final">Prezzo scontato</th>
                             <th class="col-excel-col">Colonna excel</th>
                             <th class="col-article">Articolo</th>
                         </tr>
@@ -149,13 +149,14 @@
         </div>
     </div>
 
+    <div class="mobile-panel-backdrop" id="mobile-panel-backdrop"></div>
     <div class="sales-page__panel" id="work-panel">
         <div class="work-panel__resizer" id="work-panel-resizer"
             title="Trascina il bordo per ridimensionare il pannello"></div>
         <div class="mobile-panel-topbar" id="mobile-panel-topbar">
             <button type="button" id="btn-mobile-back-to-table" class="btn-mobile-back">
                 <span class="material-symbols-rounded">arrow_back</span>
-                <span>Torna alla tabella vendite</span>
+                <span>Chiudi</span>
             </button>
         </div>
         <div class="tabs" id="work-panel-tabs"
@@ -285,5 +286,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script type="module" src="/static/js/sales_page.js?v=20261019d"></script>
+<script type="module" src="/static/js/sales_page.js?v=20261023b"></script>
 {% endblock %}
