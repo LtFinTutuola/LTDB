@@ -123,3 +123,85 @@ async def test_agent_end_to_end(monkeypatch):
     assert res["items"][0]["article_blueprint_id"] == "bp-x"
     assert len(res["blueprints"]) == 1
     assert res["blueprints"][0]["article_name"] == "Synth Name"
+
+@pytest.mark.asyncio
+async def test_synthesize_blueprints_node_uses_article_description(monkeypatch):
+    captured_prompt = {}
+
+    async def mock_call(*args, **kwargs):
+        captured_prompt["prompt"] = kwargs.get("prompt", "")
+        return '{"article_name": "Portafoglio The Bridge", "description": "Portafoglio compatto in pelle", "dimensions": null}'
+
+    monkeypatch.setattr("src.agents.article_blueprints_agent.nodes.synthesize_blueprints_node.LLMClient.call", mock_call)
+
+    state = BlueprintsGraphState(
+        new_blueprints=[
+            {
+                "id": "bp-wallet",
+                "is_new": True,
+                "cluster_items": [
+                    {
+                        "vendor_code": "01423401",
+                        "article_name": "The Bridge Story Donna",
+                        "article_description": "Portafoglio da donna in pelle con patta e scomparti per carte",
+                    }
+                ],
+            }
+        ],
+        categories={},
+        brand_name="The Bridge",
+    )
+
+    res = await synthesize_blueprints_node(state)
+    assert len(res["new_blueprints"]) == 1
+    assert "Portafoglio da donna in pelle con patta e scomparti per carte" in captured_prompt["prompt"]
+    assert res["new_blueprints"][0]["description"] == "Portafoglio compatto in pelle"
+
+@pytest.mark.asyncio
+async def test_web_search_to_synthesize_pipeline_preserves_description(monkeypatch):
+    mock_raw = "<NAME>The Bridge Story Donna</NAME><DESCRIPTION>Portafoglio da donna in cuoio con chiusura a patta.</DESCRIPTION>"
+
+    with patch("src.agents.article_blueprints_agent.nodes.web_search_blueprints_node.LLMClient") as MockClient:
+        mock_inst = MockClient.return_value
+        mock_inst.call_with_grounding = AsyncMock(return_value=(mock_raw, ["http://thebridge.it"]))
+
+        initial_state = BlueprintsGraphState(
+            new_blueprints=[
+                {
+                    "id": "bp-tb-1",
+                    "is_new": True,
+                    "cluster_items": [
+                        {"vendor_code": "01423401", "article_name": "The Bridge 01423401"}
+                    ],
+                }
+            ],
+            categories={},
+            brand_name="The Bridge",
+        )
+
+        search_res = await web_search_blueprints_node(initial_state)
+
+    # Verify both article_description and description are populated on cluster items
+    cluster_items = search_res["new_blueprints"][0]["cluster_items"]
+    assert cluster_items[0]["article_description"] == "Portafoglio da donna in cuoio con chiusura a patta."
+    assert cluster_items[0]["description"] == "Portafoglio da donna in cuoio con chiusura a patta."
+
+    # Now pass output to synthesize_blueprints_node
+    captured_prompt = {}
+
+    async def mock_synth_call(*args, **kwargs):
+        captured_prompt["prompt"] = kwargs.get("prompt", "")
+        return '{"article_name": "The Bridge Story Donna", "description": "Portafoglio in cuoio con patta", "dimensions": null}'
+
+    monkeypatch.setattr("src.agents.article_blueprints_agent.nodes.synthesize_blueprints_node.LLMClient.call", mock_synth_call)
+
+    synth_state = BlueprintsGraphState(
+        new_blueprints=search_res["new_blueprints"],
+        categories={},
+        brand_name="The Bridge",
+    )
+    synth_res = await synthesize_blueprints_node(synth_state)
+    assert len(synth_res["new_blueprints"]) == 1
+    assert "Portafoglio da donna in cuoio con chiusura a patta." in captured_prompt["prompt"]
+    assert synth_res["new_blueprints"][0]["description"] == "Portafoglio in cuoio con patta"
+

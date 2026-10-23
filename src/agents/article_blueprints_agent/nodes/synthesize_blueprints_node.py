@@ -59,8 +59,9 @@ async def _synthesize_single_blueprint(client: LLMClient, bp: dict) -> dict:
 
     variations = []
     for it in items:
+        desc = it.get("article_description") or it.get("description", "")
         variations.append(
-            f"- Codice: {it.get('vendor_code', '')} | Nome: {it.get('article_name', '')} | Desc: {it.get('description', '')}"
+            f"- Codice: {it.get('vendor_code', '')} | Nome: {it.get('article_name', '')} | Desc: {desc}"
         )
     variations_text = "\n".join(variations)
 

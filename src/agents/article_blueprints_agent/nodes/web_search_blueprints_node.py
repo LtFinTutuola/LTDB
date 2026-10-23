@@ -93,6 +93,7 @@ async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> 
     for item in bp_copy.get("cluster_items", []):
         item["article_name"] = name
         item["article_description"] = desc
+        item["description"] = desc
 
     return bp_copy, warning_list
 
