@@ -34,6 +34,8 @@ from src.schemas.catalog import (
     CatalogDeleteResponse,
     SemanticSearchRequest,
     SemanticSearchResponse,
+    CatalogSearchRequest,
+    CatalogSearchResponse,
     CatalogItemsResponse,
 )
 from src.services import catalog_service, search_service, barcode_service, photo_service
@@ -58,6 +60,8 @@ def list_items(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     in_stock_only: bool = Query(False),
+    sort_by: str = Query("date"),
+    sort_dir: str = Query("desc"),
     db: Session = Depends(get_db)
 ):
     """
@@ -65,9 +69,12 @@ def list_items(
     """
     logger.log_execution("catalog_router", "request_received", "ok",
                          path="/api/v1/catalog/items", method="GET",
-                         limit=limit, offset=offset, in_stock_only=in_stock_only)
+                         limit=limit, offset=offset, in_stock_only=in_stock_only,
+                         sort_by=sort_by, sort_dir=sort_dir)
     try:
-        return catalog_service.list_latest_items(db, limit, offset, in_stock_only=in_stock_only)
+        return catalog_service.list_latest_items(
+            db, limit, offset, in_stock_only=in_stock_only, sort_by=sort_by, sort_dir=sort_dir
+        )
     except Exception as exc:
         logger.log_execution("catalog_router", "exception_caught", "err", exc=exc)
         raise HTTPException(
@@ -415,21 +422,68 @@ def get_brand_categories(brand_id: str, db: Session = Depends(get_db)):
 
 
 
+@router.post("/search", response_model=CatalogSearchResponse)
+async def catalog_search(
+    request: CatalogSearchRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Search warehouse catalog with snapshot caching, multi-criteria sorting, and pagination.
+    """
+    logger.log_execution("catalog_router", "request_received", "ok",
+                         path="/api/v1/catalog/search", method="POST",
+                         query=request.query, page=request.page,
+                         sort_by=request.sort_by, sort_dir=request.sort_dir)
+    start = time.time()
+    try:
+        result = await search_service.execute_search(
+            db=db,
+            query=request.query,
+            in_stock_only=request.in_stock_only,
+            page=request.page,
+            page_size=request.page_size,
+            sort_by=request.sort_by,
+            sort_dir=request.sort_dir,
+        )
+        latency_ms = int((time.time() - start) * 1000)
+        logger.log_execution("catalog_router", "response_dispatched", "ok",
+                             path="/api/v1/catalog/search",
+                             results_count=len(result.get("results", [])),
+                             latency_ms=latency_ms)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.log_execution("catalog_router", "exception_caught", "err", exc=exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc) or "unknown server error",
+        )
+
+
 @router.post("/search/semantic", response_model=SemanticSearchResponse)
 async def semantic_search(
     request: SemanticSearchRequest,
     db: Session = Depends(get_db),
 ):
     """
-    Accept a natural language query and return matching catalog items.
-    Internally routes between SQL filter search and embedding similarity search.
+    Backward-compatibility alias for warehouse catalog search.
     """
     logger.log_execution("catalog_router", "request_received", "ok",
                          path="/api/v1/catalog/search/semantic", method="POST",
-                         query=request.query)
+                         query=request.query, page=request.page,
+                         sort_by=request.sort_by, sort_dir=request.sort_dir)
     start = time.time()
     try:
-        result = await search_service.execute_semantic_search(db, request.query, request.in_stock_only)
+        result = await search_service.execute_search(
+            db=db,
+            query=request.query,
+            in_stock_only=request.in_stock_only,
+            page=request.page,
+            page_size=request.page_size,
+            sort_by=request.sort_by,
+            sort_dir=request.sort_dir,
+        )
         latency_ms = int((time.time() - start) * 1000)
         logger.log_execution("catalog_router", "response_dispatched", "ok",
                              path="/api/v1/catalog/search/semantic",

@@ -1057,6 +1057,20 @@
                             <span class="warehouse-toggle__label">Mostra solo articoli disponibili</span>
                         </label>
 
+                        <!-- Sort selector -->
+                        <div class="warehouse-sort-wrapper" style="display: inline-flex; align-items: center; gap: 8px; background: var(--bg-app); border: 1px solid var(--border-color); border-radius: var(--radius-pill); padding: 5px 12px;">
+                            <span class="material-symbols-rounded" style="font-size: 18px; color: var(--text-secondary);">sort</span>
+                            <select id="warehouse-sort-select" style="background: transparent; border: none; font-size: 13px; color: var(--text-primary); cursor: pointer; outline: none;">
+                                <option value="date:desc">Data: più recenti</option>
+                                <option value="date:asc">Data: meno recenti</option>
+                                <option value="relevance:desc" id="warehouse-sort-opt-relevance" style="display: none;">Rilevanza</option>
+                                <option value="category:asc">Categoria: A-Z</option>
+                                <option value="category:desc">Categoria: Z-A</option>
+                                <option value="brand:asc">Brand: A-Z</option>
+                                <option value="brand:desc">Brand: Z-A</option>
+                            </select>
+                        </div>
+
                         <!-- Barcode Scanner Button (Camera) -->
                         <button type="button" id="warehouse-barcode-scan-btn" class="search-scan-btn" title="Scansiona codice a barre con la fotocamera">
                             <span class="material-symbols-rounded" style="font-size: 20px;">photo_camera</span>

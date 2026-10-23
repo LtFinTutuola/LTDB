@@ -132,9 +132,11 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
 
     def search_by_exact_code(self, db: Session, code: str) -> list[dict]:
         """
-        Short-circuit deterministic lookup by exact EAN, supplier_code, or normalized_vendor_code.
+        Deterministic lookup by exact EAN, supplier_code, normalized_vendor_code,
+        or normalized code patterns (e.g. prefix matching, '#' wildcard resolution).
         Returns a list of dicts: [{"blueprint_id": str, "allowed_colors": list[str] | None}].
         """
+        import re
         from sqlalchemy import func, or_
         from src.models.wms import Article
 
@@ -145,7 +147,7 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
         code_lower = clean_code.lower()
         matches_by_bp: dict[str, Optional[set[str]]] = {}
 
-        # 1. Check Article.ean and Article.supplier_code
+        # 1. Primary check: Exact matches on Article.ean or Article.supplier_code
         matched_articles = (
             db.query(Article)
             .filter(
@@ -168,7 +170,7 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
                     else:
                         matches_by_bp[bp_id] = None
 
-        # 2. Check ArticleBlueprint.normalized_vendor_code
+        # 2. Primary check: Exact match on ArticleBlueprint.normalized_vendor_code
         matched_bps = (
             db.query(ArticleBlueprint)
             .filter(func.lower(ArticleBlueprint.normalized_vendor_code) == code_lower)
@@ -176,8 +178,57 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
         )
         for bp in matched_bps:
             bp_id = str(bp.id)
-            # Full blueprint match means all color variants of this blueprint are allowed
             matches_by_bp[bp_id] = None
+
+        # 3. Enhanced check: If no exact matches and query looks like a code pattern
+        # (at least 3 characters, alphanumeric or common code separators)
+        if not matches_by_bp and len(clean_code) >= 3 and not re.search(r"\s{2,}", clean_code):
+            # 3a. Prefix match on Article.supplier_code (e.g. user entered "048519" for "04851901" or "151664" for "151664-1041-1CNU")
+            prefix_articles = (
+                db.query(Article)
+                .filter(Article.supplier_code.ilike(f"{clean_code}%"))
+                .all()
+            )
+            for art in prefix_articles:
+                bp_id = str(art.article_blueprint_id)
+                art_colors = [c.lower() for c in (art.colors or []) if c]
+                if bp_id not in matches_by_bp:
+                    matches_by_bp[bp_id] = set(art_colors) if art_colors else None
+                elif matches_by_bp[bp_id] is not None and art_colors:
+                    matches_by_bp[bp_id].update(art_colors)
+
+            # 3b. Prefix match on ArticleBlueprint.normalized_vendor_code (e.g. "HWVG84" for "HWVG84#")
+            prefix_bps = (
+                db.query(ArticleBlueprint)
+                .filter(ArticleBlueprint.normalized_vendor_code.ilike(f"{clean_code}%"))
+                .all()
+            )
+            for bp in prefix_bps:
+                bp_id = str(bp.id)
+                matches_by_bp[bp_id] = None
+
+            # 3c. Wildcard '#' pattern matching in ArticleBlueprint.normalized_vendor_code
+            # (e.g. bp code "048519#" matches search "048519" or "04851901"; "151664-#-1CNU" matches "151664-1041-1CNU")
+            wildcard_bps = (
+                db.query(ArticleBlueprint)
+                .filter(ArticleBlueprint.normalized_vendor_code.like("%#%"))
+                .all()
+            )
+            clean_alnum = re.sub(r"[^a-zA-Z0-9]", "", clean_code).lower()
+            for bp in wildcard_bps:
+                bp_code = (bp.normalized_vendor_code or "").strip()
+                # Construct regex replacing '#' with wildcard and '*' with literal '*'
+                regex_pattern = "^" + re.escape(bp_code).replace(r"\#", r"[a-zA-Z0-9]*") + "$"
+                bp_base = bp_code.replace("#", "").strip("-* ")
+                bp_base_alnum = re.sub(r"[^a-zA-Z0-9]", "", bp_base).lower()
+
+                if (
+                    re.match(regex_pattern, clean_code, re.IGNORECASE)
+                    or (bp_base and clean_code.lower().startswith(bp_base.lower()))
+                    or (bp_base_alnum and clean_alnum.startswith(bp_base_alnum))
+                ):
+                    bp_id = str(bp.id)
+                    matches_by_bp[bp_id] = None
 
         result = [
             {
@@ -237,24 +288,41 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
         brand_name: Optional[str] = None,
         category_name: Optional[str] = None,
         in_stock_only: bool = False,
+        keywords: Optional[list[str]] = None,
+        raw_query: Optional[str] = None,
     ) -> list[dict]:
         """
-        Execute a deterministic SQLAlchemy filter query based on the structured SearchQueryPlan.
+        Execute a deterministic SQLAlchemy filter query based on the structured SearchQueryPlan
+        with multi-field keyword scoring and batch relationship loading to prevent N+1 queries.
         Automatically expands macro-categories to include all child sub-categories.
         """
-        from sqlalchemy import func
+        import re
+        from collections import defaultdict
+        from sqlalchemy import func, or_
+        from sqlalchemy.orm import joinedload
         from src.models.wms import Article, ArticleStatus
 
-        query = db.query(ArticleBlueprint).join(Brand, ArticleBlueprint.brand_id == Brand.id)
+        query = (
+            db.query(ArticleBlueprint)
+            .options(
+                joinedload(ArticleBlueprint.brand),
+                joinedload(ArticleBlueprint.category),
+            )
+            .join(Brand, ArticleBlueprint.brand_id == Brand.id)
+        )
 
+        has_brand_filter = False
         if brand_name and brand_name.strip():
             clean_brand = brand_name.strip()
             exact_brand = db.query(Brand).filter(func.lower(Brand.name) == clean_brand.lower()).first()
             if exact_brand:
                 query = query.filter(ArticleBlueprint.brand_id == exact_brand.id)
+                has_brand_filter = True
             else:
                 query = query.filter(Brand.name.ilike(f"%{clean_brand}%"))
+                has_brand_filter = True
 
+        has_category_filter = False
         if category_name and category_name.strip():
             clean_cat = category_name.strip()
             matched_cats = (
@@ -290,12 +358,55 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
                         target_cat_ids.add(str(child.id))
 
             query = query.filter(ArticleBlueprint.category_id.in_(list(target_cat_ids)))
+            has_category_filter = True
 
-        blueprints: list[ArticleBlueprint] = query.limit(200).all()
+        # Extract search tokens from keywords or raw_query
+        stopwords = {
+            "di", "con", "il", "la", "i", "gli", "le", "in", "per", "e", "ed", "da", "su",
+            "a", "un", "uno", "una", "del", "della", "delle", "dei", "degli", "dello", "che"
+        }
+        search_tokens: list[str] = []
+        if keywords:
+            search_tokens.extend([k.strip().lower() for k in keywords if k and k.strip().lower() not in stopwords])
+        if raw_query:
+            tokens_from_query = [
+                t.lower() for t in re.findall(r"[a-zA-Z0-9àèéìòùÀÈÉÌÒÙ#*]+", raw_query)
+                if t.lower() not in stopwords and len(t) >= 2
+            ]
+            for t in tokens_from_query:
+                if t not in search_tokens:
+                    search_tokens.append(t)
 
+        # If no brand and no category filter was applied, and search tokens exist, filter by keyword match
+        if not has_brand_filter and not has_category_filter and search_tokens:
+            keyword_clauses = []
+            for tok in search_tokens:
+                keyword_clauses.append(ArticleBlueprint.article_name.ilike(f"%{tok}%"))
+                keyword_clauses.append(ArticleBlueprint.description.ilike(f"%{tok}%"))
+                keyword_clauses.append(ArticleBlueprint.normalized_vendor_code.ilike(f"%{tok}%"))
+            query = query.filter(or_(*keyword_clauses))
+
+        blueprints: list[ArticleBlueprint] = query.all()
+        if not blueprints:
+            return []
+
+        # Batch load all related articles for candidate blueprints (prevents N+1 queries)
+        bp_ids = [bp.id for bp in blueprints]
+        all_articles = db.query(Article).filter(Article.article_blueprint_id.in_(bp_ids)).all()
+        articles_by_bp: dict[str, list[Article]] = defaultdict(list)
+        for a in all_articles:
+            articles_by_bp[str(a.article_blueprint_id)].append(a)
+
+        # Batch load parent categories to avoid lazy-loading parent lookups
+        parent_cat_ids = {bp.category.parent_id for bp in blueprints if bp.category and bp.category.parent_id}
+        parent_cats_map = {
+            str(c.id): c for c in db.query(Category).filter(Category.id.in_(list(parent_cat_ids))).all()
+        } if parent_cat_ids else {}
+
+        raw_query_clean = (raw_query or "").strip().lower()
         results: list[dict] = []
         for bp in blueprints:
-            articles = db.query(Article).filter(Article.article_blueprint_id == bp.id).all()
+            articles = articles_by_bp.get(str(bp.id), [])
             if in_stock_only:
                 eligible_articles = [a for a in articles if a.status == ArticleStatus.AVAILABLE]
                 if not eligible_articles:
@@ -309,17 +420,39 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
                     if c and str(c).strip():
                         available_colors.add(str(c).strip().lower())
 
-            brand_obj = db.query(Brand).filter(Brand.id == bp.brand_id).first()
-            cat_obj = db.query(Category).filter(Category.id == bp.category_id).first() if bp.category_id else None
+            brand_obj = bp.brand
+            cat_obj = bp.category
             main_cat_name: Optional[str] = None
             sub_cat_name: Optional[str] = None
             if cat_obj:
                 if cat_obj.parent_id:
                     sub_cat_name = cat_obj.name
-                    parent_cat = db.query(Category).filter(Category.id == cat_obj.parent_id).first()
+                    parent_cat = parent_cats_map.get(str(cat_obj.parent_id))
                     main_cat_name = parent_cat.name if parent_cat else None
                 else:
                     main_cat_name = cat_obj.name
+
+            # Compute lexical relevance score
+            score = 0.0
+            name_lower = (bp.article_name or "").lower()
+            desc_lower = (bp.description or "").lower()
+            code_lower = (bp.normalized_vendor_code or "").lower()
+            tags_lower = [str(t).lower() for t in (bp.tags or [])]
+            materials_lower = [str(m).lower() for m in (bp.materials or [])]
+
+            if raw_query_clean and raw_query_clean in name_lower:
+                score += 40.0
+            for tok in search_tokens:
+                if tok in name_lower:
+                    score += 20.0
+                if tok in code_lower:
+                    score += 25.0
+                if any(tok in t for t in tags_lower):
+                    score += 10.0
+                if any(tok in m for m in materials_lower):
+                    score += 10.0
+                if tok in desc_lower:
+                    score += 5.0
 
             results.append(
                 {
@@ -334,8 +467,13 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
                     "materials": list(bp.materials or []),
                     "embedding": bp.embedding,
                     "available_colors": sorted(list(available_colors)),
+                    "lexical_score": round(score, 2),
                 }
             )
+
+        # Sort results by lexical score if search tokens were present
+        if search_tokens or raw_query_clean:
+            results.sort(key=lambda item: item.get("lexical_score", 0.0), reverse=True)
 
         logger.log_execution(
             "pim_repo",

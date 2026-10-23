@@ -1,165 +1,177 @@
 """
 src/agents/warehouse_search_agent/nodes/color_filter_node.py
 ------------------------------------------------------------
-Node 4: Evaluates color compatibility via a dedicated LLM call.
-Receives the filtered query text (same text used for embedding) and the available colors
-for each selected ArticleBlueprint (grouped by blueprint), returning the appropriate colors.
+Node 3: Two-phase color filtering with:
+  1. 24-hour decision memo cache for (target_color, candidate_color) pairs.
+  2. Inclusive deterministic color dictionary evaluation.
+  3. Lightweight LLM call on remaining unique colors returning 0-based indices.
+  4. Strict zero-results policy on mismatch / LLM failure (no fallback passthrough).
 """
-import json
-from typing import Dict, List, Any
+from __future__ import annotations
+from typing import Dict, List, Any, Optional
 
 from src.agents.llm_client import LLMClient
 from src.agents.warehouse_search_agent.state import (
     WarehouseSearchGraphState,
-    ColorFilterResponse,
+    ColorIndexResponse,
 )
+from src.core.cache import color_decision_cache
 from src.core.logger import get_logger
+from src.utils.color_matcher import filter_colors_by_text
+from src.utils.text_normalize import fold_text
 
 logger = get_logger()
 
 _MODEL = "gemini-3.1-flash-lite"
 
 _SYSTEM_PROMPT = """Sei un assistente AI specializzato nella selezione delle varianti colore di articoli moda/pelletteria in magazzino.
-Ti vengono forniti:
-1. Il testo della ricerca dell'utente (`filtered_text`).
-2. La lista degli articoli candidati selezionati, ciascuno con il proprio `blueprint_id`, `article_name` e la lista `available_colors` (i nomi dei colori effettivamente salvati nel database per quell'articolo, spesso in inglese o con nomi commerciali come "black", "astral red", "bone town", "dark navy", "harbor blue").
-
-Il tuo compito è restituire un JSON conforme allo schema `ColorFilterResponse`:
-- `has_color_constraint`:
-  - Imposta `true` SE E SOLO SE `filtered_text` contiene un riferimento esplicito o implicito a un colore o tonalità (es. "nera", "rosso", "blu", "chiara", "scura", "beige", "verde", "black").
-  - Imposta `false` se `filtered_text` NON menziona alcun colore (es. "con la tracolla", "sportiva adatta a tutti i giorni", "in pelle").
-- `selections`:
-  - Se `has_color_constraint` è `false`, restituisci per ogni articolo tutti i suoi `available_colors`.
-  - Se `has_color_constraint` è `true`, per ogni articolo seleziona in `selected_colors` SOLO i colori presenti in `available_colors` che sono semanticamente e cromaticamente compatibili con il colore richiesto (es. se il testo chiede "rossa" e `available_colors` contiene `["black", "astral red"]`, restituisci `["astral red"]`; se chiede "blu" e `available_colors` ha `["dark navy", "harbor blue", "black"]`, restituisci `["dark navy", "harbor blue"]`).
-  - Se per un dato articolo nessuno dei suoi `available_colors` è compatibile con il colore richiesto, restituisci `selected_colors: []` per quel `blueprint_id`.
-"""
-
-
-def _passthrough_all_colors(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [
-        {
-            "id": c["id"],
-            "allowed_colors": None,  # None means all color variants of this blueprint are allowed
-            "similarity_score": c.get("similarity_score"),
-        }
-        for c in candidates
-    ]
+Il tuo compito è identificare quali dei colori a catalogo forniti sono associabili alla richiesta cromatica dell'utente.
+Devi adottare una POLICY INCLUSIVA:
+- Includi tonalità chiare o scure (es. per "blu": "dark navy", "harbor blue", "avio", "celeste", "denim").
+- Includi sfumature affini (es. per "marrone": "cuoio", "cognac", "tan", "tabacco", "cioccolato", "dark brown").
+- Includi denominazioni commerciali o in lingua inglese.
+Restituisci unicamente un array di interi contenente gli indici a base 0 dei colori associabili."""
 
 
 async def color_filter_node(state: WarehouseSearchGraphState) -> dict:
     """
-    Call the LLM to filter each candidate blueprint's color variants based on the filtered search text.
+    Filter candidate blueprints by requested color variant.
     """
-    candidates = state.ranked_candidates
+    candidates = state.retrieved_blueprints or state.ranked_candidates or state.sql_candidates
     plan = state.query_plan
-    has_static_filters = bool(plan and (plan.brand_name or plan.category_name))
-    if has_static_filters and not state.fallback_triggered:
-        filtered_text = (plan.semantic_query or "").strip()
-    else:
-        filtered_text = ((plan.semantic_query if plan and plan.semantic_query else state.raw_query) or "").strip()
+    target_color = fold_text(plan.color) if plan and plan.color else None
 
     logger.log_agent(
         "color_filter_node",
         "node_entry",
         "ok",
         candidates_count=len(candidates),
-        filtered_text=filtered_text,
+        target_color=target_color,
     )
 
     if not candidates:
-        result = {"selected_blueprints": []}
-        logger.log_agent("color_filter_node", "node_exit", "ok", output=result)
-        return result
+        return {"selected_blueprints": [], "color_degraded": False}
 
-    # If there is no filtered text or no candidate has any colors stored, keep all variants
-    has_any_colors = any(bool(c.get("available_colors")) for c in candidates)
-    if not filtered_text or not has_any_colors:
-        selected = _passthrough_all_colors(candidates)
-        result = {"selected_blueprints": selected}
-        logger.log_agent(
-            "color_filter_node",
-            "node_exit",
-            "ok",
-            output={"mode": "passthrough_no_color_context", "selected_count": len(selected)},
+    # Case A: No color specified in search plan -> passthrough all blueprints
+    if not target_color:
+        selected = [
+            {
+                "id": c["id"],
+                "allowed_colors": None,  # None means all colors are allowed
+                "relevance_score": c.get("relevance_score", 0.0),
+                "similarity_score": c.get("similarity_score", 0.0),
+                "blueprint": c.get("blueprint"),
+            }
+            for c in candidates
+        ]
+        return {"selected_blueprints": selected, "color_degraded": False}
+
+    # Case B: Specific color requested
+    distinct_colors: List[str] = sorted(
+        list(
+            {
+                str(c).strip().lower()
+                for bp in candidates
+                for c in bp.get("available_colors", [])
+                if c and str(c).strip()
+            }
         )
-        return result
-
-    grouped_payload = [
-        {
-            "blueprint_id": c["id"],
-            "article_name": c.get("article_name", ""),
-            "available_colors": c.get("available_colors", []),
-        }
-        for c in candidates
-    ]
-
-    user_prompt = (
-        f"Testo ricerca filtrato (`filtered_text`): \"{filtered_text}\"\n\n"
-        f"Articoli candidati e colori disponibili a database:\n"
-        f"{json.dumps(grouped_payload, ensure_ascii=False, indent=2)}\n\n"
-        f"Seleziona i colori appropriati per ciascun articolo."
     )
 
-    try:
-        client = LLMClient()
-        raw_json = await client.call(
-            model_name=_MODEL,
-            system_prompt=_SYSTEM_PROMPT,
-            prompt=user_prompt,
-            pipeline_stage="search_color_filter",
-            response_schema=ColorFilterResponse,
-            response_mime_type="application/json",
-            temperature=0.0,
-        )
-        color_res = ColorFilterResponse.model_validate_json(raw_json)
+    if not distinct_colors:
+        logger.log_agent("color_filter_node", "no_colors_available", "ok")
+        return {"selected_blueprints": [], "color_degraded": False}
 
-        if not color_res.has_color_constraint:
-            selected = _passthrough_all_colors(candidates)
-            result = {"selected_blueprints": selected}
-            logger.log_agent(
-                "color_filter_node",
-                "node_exit",
-                "ok",
-                output={"has_color_constraint": False, "selected_count": len(selected)},
-            )
-            return result
+    decision_map: Dict[str, bool] = {}
+    undecided_colors: List[str] = []
 
-        selection_map: Dict[str, List[str]] = {
-            sel.blueprint_id: [c.lower() for c in sel.selected_colors if c]
-            for sel in color_res.selections
-        }
-
-        filtered_blueprints: List[Dict[str, Any]] = []
-        for c in candidates:
-            bp_id = c["id"]
-            chosen_colors = selection_map.get(bp_id, [])
-            if chosen_colors:
-                filtered_blueprints.append(
-                    {
-                        "id": bp_id,
-                        "allowed_colors": chosen_colors,
-                        "similarity_score": c.get("similarity_score"),
-                    }
-                )
-
-        # Anti-empty safety: if color constraint was detected but 0 blueprints matched the color,
-        # keep only blueprints if none matched? No, if none matched the requested color,
-        # fallback to showing all variants of the top ranked candidates so we don't return 0 results unnecessarily,
-        # UNLESS the user explicitly wants only matching colors when at least one matches.
-        if not filtered_blueprints:
-            selected = _passthrough_all_colors(candidates)
+    # 1. Check in-memory 24h cache for each (target_color, candidate_color)
+    for c in distinct_colors:
+        cache_key = f"{target_color}::{c}"
+        cached = color_decision_cache.get(cache_key)
+        if cached is not None:
+            decision_map[c] = bool(cached)
         else:
-            selected = filtered_blueprints
+            undecided_colors.append(c)
 
-    except Exception as exc:
-        logger.log_agent("color_filter_node", "color_llm_error", "err", exc=exc)
-        selected = _passthrough_all_colors(candidates)
+    # 2. Consult deterministic inclusive color dictionary for undecided colors
+    from src.utils.color_matcher import detect_color_intent
 
-    result = {"selected_blueprints": selected}
+    still_undecided: List[str] = []
+    for c in undecided_colors:
+        matched, colors_list = filter_colors_by_text(target_color, [c])
+        if matched and c in colors_list:
+            decision_map[c] = True
+            color_decision_cache.set(f"{target_color}::{c}", True)
+        else:
+            has_cand_intent, _, _ = detect_color_intent(c)
+            if has_cand_intent:
+                # Known distinct color family that does not match target family
+                decision_map[c] = False
+                color_decision_cache.set(f"{target_color}::{c}", False)
+            else:
+                # Unknown commercial shade or unindexed color: defer to LLM
+                still_undecided.append(c)
+
+    # 3. For any remaining unknown colors, call LLM with index-based prompt
+    color_degraded = False
+    if still_undecided:
+        numbered_list = "\n".join([f"[{i}] {c}" for i, c in enumerate(still_undecided)])
+        prompt = (
+            f"Quali di questi colori a catalogo sono associabili al colore «{target_color}»?\n"
+            f"Sii INCLUSIVO (considera tonalità chiare/scure, sfumature affini e denominazioni commerciali/inglesi compatibili).\n\n"
+            f"Colori a catalogo:\n{numbered_list}"
+        )
+
+        try:
+            client = LLMClient()
+            raw_json = await client.call(
+                model_name=_MODEL,
+                system_prompt=_SYSTEM_PROMPT,
+                prompt=prompt,
+                pipeline_stage="search_color_filter",
+                response_schema=ColorIndexResponse,
+                response_mime_type="application/json",
+                temperature=0.0,
+            )
+            index_res = ColorIndexResponse.model_validate_json(raw_json)
+            valid_indices = {idx for idx in index_res.indices if 0 <= idx < len(still_undecided)}
+
+            for i, c in enumerate(still_undecided):
+                is_match = (i in valid_indices)
+                decision_map[c] = is_match
+                color_decision_cache.set(f"{target_color}::{c}", is_match)
+
+        except Exception as exc:
+            logger.log_agent("color_filter_node", "color_llm_error", "err", exc=exc, target_color=target_color)
+            color_degraded = True
+            for c in still_undecided:
+                decision_map[c] = False
+
+    # 4. Filter candidate blueprints to only those with at least one matching color
+    selected_blueprints: List[Dict[str, Any]] = []
+    for bp in candidates:
+        bp_colors = [str(c).strip().lower() for c in bp.get("available_colors", []) if c]
+        matched_colors = [c for c in bp_colors if decision_map.get(c) is True]
+        if matched_colors:
+            selected_blueprints.append(
+                {
+                    "id": bp["id"],
+                    "allowed_colors": matched_colors,
+                    "relevance_score": bp.get("relevance_score", 0.0),
+                    "similarity_score": bp.get("similarity_score", 0.0),
+                    "blueprint": bp.get("blueprint"),
+                }
+            )
+
+    result = {
+        "selected_blueprints": selected_blueprints,
+        "color_degraded": color_degraded,
+    }
     logger.log_agent(
         "color_filter_node",
         "node_exit",
         "ok",
-        output={"selected_count": len(selected), "selected_blueprints": selected},
+        selected_count=len(selected_blueprints),
     )
     return result

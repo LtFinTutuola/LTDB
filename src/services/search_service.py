@@ -1,151 +1,355 @@
 """
 src/services/search_service.py
 -------------------------------
-Hybrid RAG search service for the LTDB warehouse catalog.
+Hybrid warehouse search service for the LTDB catalog.
 
 Execution pipeline:
-  1. Short-circuit lookup on exact EAN, supplier_code, or normalized_vendor_code (zero LLM calls).
-  2. WarehouseSearchAgent execution:
-     - Structured JSON query plan via LLM (brand_name, category_name, requires_semantic_search, semantic_query)
-     - Deterministic SQLAlchemy candidate retrieval with category hierarchy expansion
-     - Dual-regime cosine similarity ranking (0.65 primary / 0.50 zero-results fallback)
-     - Dedicated LLM color variant filtering per candidate blueprint
-  3. Variant card assembly respecting `allowed_colors` and `in_stock_only`.
+  1. Snapshot cache lookup (normalized query + in_stock_only) -> re-sort & paginate without LLM.
+  2. Tier 1 short-circuit lookup on exact EAN, supplier_code, or normalized_vendor_code (zero LLM calls).
+  3. WarehouseSearchAgent execution:
+     - Structured JSON query plan via LLM (brand, category, color, keywords) with 24h plan cache.
+     - Deterministic relational filtering and whole-word keyword AND matching.
+     - Two-phase color filter (memo cache + dictionary + lightweight LLM).
+     - Strict zero-results policy on mismatch (NO FALLBACK relaxation).
+  4. Snapshot persistence, multi-criteria sorting, server-side pagination, and 200-result capping.
 """
 from __future__ import annotations
-from typing import Optional
-
+from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
-from src.models.pim import ArticleBlueprint, Brand, Category, ArticlePhoto
-from src.models.wms import Article, ArticleStatus
+from src.models.pim import ArticleBlueprint
 from src.repositories.pim_repo import pim_repo
 from src.agents.warehouse_search_agent import WarehouseSearchAgent
-from src.agents.warehouse_search_agent.nodes.semantic_rank_node import cosine_similarity as _cosine_similarity
+from src.core.cache import search_snapshot_cache
 from src.core.logger import get_logger
+from src.schemas.catalog import InterpretedPlanSummary
+from src.services.catalog_query_service import (
+    build_variant_rows_for_blueprints,
+    sort_variant_rows,
+    paginate_rows,
+    DEFAULT_PAGE_SIZE,
+    MAX_SEARCH_RESULTS_CAP,
+)
+from src.utils.text_normalize import fold_text
 
 logger = get_logger()
 
-_MAX_RESULTS = 20
+
+def _format_search_message(
+    query: str,
+    count: int,
+    truncated: bool = False,
+    total_blueprints: int = 0,
+) -> str:
+    if count == 0:
+        return f"Nessun articolo trovato per la ricerca «{query}»."
+    trunc_info = f" (mostrati i primi {MAX_SEARCH_RESULTS_CAP} risultati più rilevanti)" if truncated else ""
+    if count == 1:
+        return f"Ho trovato 1 articolo corrispondente alla ricerca «{query}»{trunc_info}."
+    return f"Ho trovato {count} articoli corrispondenti alla ricerca «{query}»{trunc_info}."
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-async def execute_semantic_search(db: Session, query: str, in_stock_only: bool = False) -> dict:
+async def execute_search(
+    db: Session,
+    query: str,
+    in_stock_only: bool = False,
+    page: int = 1,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    sort_by: str = "date",
+    sort_dir: str = "desc",
+) -> dict:
     """
-    Execute the hybrid warehouse search pipeline for a user query.
-
-    Args:
-        db:            SQLAlchemy database session.
-        query:         User search string (code or natural language query).
-        in_stock_only: When True, excludes out-of-stock / sold variants.
-
-    Returns:
-        dict matching SemanticSearchResponse schema: {"message": str, "results": list[dict]}.
+    Execute warehouse catalog search with snapshot caching, multi-criteria sorting,
+    and server-side pagination.
     """
+    clean_query = (query or "").strip()
+    if not clean_query:
+        return {
+            "message": "Query di ricerca vuota.",
+            "results": [],
+            "total_items": 0,
+            "total_blueprints": 0,
+            "page": 1,
+            "limit": page_size,
+            "total_pages": 1,
+            "interpreted_plan": None,
+            "truncated": False,
+        }
+
     logger.log_execution(
         "search_service",
         "search_start",
         "ok",
-        query=query,
+        query=clean_query,
         in_stock_only=in_stock_only,
+        page=page,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
-    # Step 1 — Deterministic short-circuit on EAN / supplier_code / normalized_vendor_code
-    exact_matches = pim_repo.search_by_exact_code(db, query)
-    if exact_matches:
-        results: list[dict] = []
-        for match in exact_matches:
-            bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == match["blueprint_id"]).first()
-            if not bp:
-                continue
-            variant_items = _build_variant_items(
-                db=db,
-                bp=bp,
-                allowed_colors=match.get("allowed_colors"),
-                in_stock_only=in_stock_only,
-            )
-            results.extend(variant_items)
-            if len(results) >= _MAX_RESULTS:
-                results = results[:_MAX_RESULTS]
-                break
+    query_folded = fold_text(clean_query)
+    snapshot_key = f"{query_folded}::{in_stock_only}"
 
-        message = _format_search_message(query, len(results))
+    # ---------------------------------------------------------------------------
+    # Step 1 — Check search snapshot cache
+    # ---------------------------------------------------------------------------
+    cached_snapshot = search_snapshot_cache.get(snapshot_key, touch=True)
+    if cached_snapshot is not None:
+        logger.log_execution("search_service", "snapshot_cache_hit", "ok", query=clean_query)
+        candidate_entries = cached_snapshot.get("candidates", [])
+        interpreted_plan = cached_snapshot.get("interpreted_plan")
+        plan_summary = InterpretedPlanSummary.model_validate(interpreted_plan) if interpreted_plan else None
+        truncated = cached_snapshot.get("truncated", False)
+
+        if not candidate_entries:
+            empty_msg = cached_snapshot.get("message") or f"Nessun articolo trovato per «{clean_query}»."
+            return {
+                "message": empty_msg,
+                "results": [],
+                "total_items": 0,
+                "total_blueprints": 0,
+                "page": 1,
+                "limit": page_size,
+                "total_pages": 1,
+                "interpreted_plan": plan_summary,
+                "truncated": False,
+            }
+
+        rows = build_variant_rows_for_blueprints(db, candidate_entries, in_stock_only=in_stock_only)
+
+        # Decide effective sort
+        has_keywords = bool(plan_summary and plan_summary.keywords)
+        effective_sort_by = sort_by
+        if sort_by == "date" and has_keywords:
+            effective_sort_by = "relevance"
+        elif sort_by == "relevance" and not has_keywords:
+            effective_sort_by = "date"
+
+        sorted_rows = sort_variant_rows(rows, sort_by=effective_sort_by, sort_dir=sort_dir)
+        paginated = paginate_rows(sorted_rows, page=page, page_size=page_size)
+        message = _format_search_message(clean_query, len(rows), truncated=truncated, total_blueprints=paginated["total_blueprints"])
+
+        return {
+            "message": message,
+            "results": paginated["results"],
+            "total_items": len(rows),
+            "total_blueprints": paginated["total_blueprints"],
+            "page": paginated["page"],
+            "limit": paginated["limit"],
+            "total_pages": paginated["total_pages"],
+            "interpreted_plan": plan_summary,
+            "truncated": truncated,
+        }
+
+    # ---------------------------------------------------------------------------
+    # Step 2 — Tier 1 deterministic short-circuit (EAN / codes / wildcard #)
+    # ---------------------------------------------------------------------------
+    exact_matches = pim_repo.search_by_exact_code(db, clean_query)
+    if exact_matches:
+        candidate_entries = [
+            {
+                "id": m["blueprint_id"],
+                "allowed_colors": m.get("allowed_colors"),
+                "relevance_score": 100.0,
+            }
+            for m in exact_matches
+        ]
+        rows = build_variant_rows_for_blueprints(db, candidate_entries, in_stock_only=in_stock_only)
+        truncated = False
+        if len(rows) > MAX_SEARCH_RESULTS_CAP:
+            rows = rows[:MAX_SEARCH_RESULTS_CAP]
+            truncated = True
+
+        search_snapshot_cache.set(
+            snapshot_key,
+            {
+                "candidates": candidate_entries,
+                "interpreted_plan": None,
+                "truncated": truncated,
+            },
+        )
+
+        sorted_rows = sort_variant_rows(rows, sort_by=sort_by, sort_dir=sort_dir)
+        paginated = paginate_rows(sorted_rows, page=page, page_size=page_size)
+        message = _format_search_message(clean_query, len(rows), truncated=truncated, total_blueprints=paginated["total_blueprints"])
+
         logger.log_execution(
             "search_service",
             "search_done",
             "ok",
-            query=query,
-            mode="exact_code_short_circuit",
-            count=len(results),
+            query=clean_query,
+            mode="exact_code_tier1",
+            count=len(rows),
         )
-        return {"message": message, "results": results}
+        return {
+            "message": message,
+            "results": paginated["results"],
+            "total_items": len(rows),
+            "total_blueprints": paginated["total_blueprints"],
+            "page": paginated["page"],
+            "limit": paginated["limit"],
+            "total_pages": paginated["total_pages"],
+            "interpreted_plan": None,
+            "truncated": truncated,
+        }
 
-    # Step 2 — Run WarehouseSearchAgent (Query Plan -> SQL Filter -> Semantic Rank -> Color Filter)
+    # ---------------------------------------------------------------------------
+    # Step 3 — WarehouseSearchAgent (Plan -> Retrieve -> Color Filter)
+    # ---------------------------------------------------------------------------
     taxonomy = pim_repo.get_catalog_taxonomy_for_search(db)
     agent = WarehouseSearchAgent(db=db)
     agent_output = await agent.aexecute(
         {
-            "query": query,
+            "query": clean_query,
             "in_stock_only": in_stock_only,
             "brands_catalog": taxonomy["brands"],
             "categories_catalog": taxonomy["categories"],
         }
     )
 
-    selected_blueprints = agent_output.get("selected_blueprints", [])
-    fallback_triggered = agent_output.get("fallback_triggered", False)
+    selected_blueprints: List[Dict[str, Any]] = agent_output.get("selected_blueprints", [])
+    query_plan_dict = agent_output.get("query_plan") or {}
+    color_degraded = agent_output.get("color_degraded", False)
 
-    # Step 3 — Assemble SearchResultItem cards per blueprint & allowed color variants
-    results = []
-    for bp_entry in selected_blueprints:
-        bp_id = bp_entry.get("id")
-        if not bp_id:
-            continue
-        bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == bp_id).first()
-        if not bp:
-            continue
-        variant_items = _build_variant_items(
-            db=db,
-            bp=bp,
-            allowed_colors=bp_entry.get("allowed_colors"),
-            in_stock_only=in_stock_only,
+    plan_summary = InterpretedPlanSummary(
+        brand=query_plan_dict.get("brand"),
+        category=query_plan_dict.get("category"),
+        color=query_plan_dict.get("color"),
+        keywords=query_plan_dict.get("keywords") or [],
+    )
+
+    # Empty Results: Strict zero-results policy (NO FALLBACK relaxation)
+    if not selected_blueprints:
+        details = []
+        if plan_summary.brand:
+            details.append(f"brand «{plan_summary.brand}»")
+        if plan_summary.category:
+            details.append(f"categoria «{plan_summary.category}»")
+        if plan_summary.color:
+            details.append(f"colore «{plan_summary.color}»")
+        if plan_summary.keywords:
+            details.append(f"termini «{', '.join(plan_summary.keywords)}»")
+
+        interp_str = f" — interpretata come: {', '.join(details)}" if details else ""
+        if color_degraded:
+            message = f"Nessun articolo trovato per «{clean_query}»{interp_str}. (Nota: il filtro colore non ha potuto verificare la corrispondenza)"
+        else:
+            message = f"Nessun articolo trovato per la ricerca «{clean_query}»{interp_str}."
+
+        search_snapshot_cache.set(
+            snapshot_key,
+            {
+                "candidates": [],
+                "interpreted_plan": plan_summary.model_dump(),
+                "truncated": False,
+                "message": message,
+            },
         )
-        results.extend(variant_items)
-        if len(results) >= _MAX_RESULTS:
-            results = results[:_MAX_RESULTS]
-            break
 
-    message = _format_search_message(query, len(results))
+        logger.log_execution(
+            "search_service",
+            "search_done_empty",
+            "ok",
+            query=clean_query,
+            interpreted_plan=plan_summary.model_dump(),
+        )
+        return {
+            "message": message,
+            "results": [],
+            "total_items": 0,
+            "total_blueprints": 0,
+            "page": 1,
+            "limit": page_size,
+            "total_pages": 1,
+            "interpreted_plan": plan_summary,
+            "truncated": False,
+        }
+
+    # Step 4 — Build rows, cap at 200, snapshot, sort & paginate
+    rows = build_variant_rows_for_blueprints(db, selected_blueprints, in_stock_only=in_stock_only)
+    total_matches = len(rows)
+    truncated = False
+
+    if total_matches > MAX_SEARCH_RESULTS_CAP:
+        # Prioritize top relevance items before capping
+        relevance_sorted = sort_variant_rows(rows, sort_by="relevance", sort_dir="desc")
+        rows = relevance_sorted[:MAX_SEARCH_RESULTS_CAP]
+        truncated = True
+
+    search_snapshot_cache.set(
+        snapshot_key,
+        {
+            "candidates": selected_blueprints,
+            "interpreted_plan": plan_summary.model_dump(),
+            "truncated": truncated,
+        },
+    )
+
+    # Effective sort
+    has_keywords = bool(plan_summary.keywords)
+    effective_sort_by = sort_by
+    if sort_by == "date" and has_keywords:
+        effective_sort_by = "relevance"
+    elif sort_by == "relevance" and not has_keywords:
+        effective_sort_by = "date"
+
+    sorted_rows = sort_variant_rows(rows, sort_by=effective_sort_by, sort_dir=sort_dir)
+    paginated = paginate_rows(sorted_rows, page=page, page_size=page_size)
+    message = _format_search_message(clean_query, total_matches, truncated=truncated, total_blueprints=paginated["total_blueprints"])
+
     logger.log_execution(
         "search_service",
         "search_done",
         "ok",
-        query=query,
-        mode="hybrid_fallback" if fallback_triggered else "hybrid_agent",
-        count=len(results),
-        query_plan=agent_output.get("query_plan"),
+        query=clean_query,
+        count=len(rows),
+        total_matches=total_matches,
+        truncated=truncated,
+        interpreted_plan=plan_summary.model_dump(),
     )
-    return {"message": message, "results": results}
+
+    return {
+        "message": message,
+        "results": paginated["results"],
+        "total_items": len(rows),
+        "total_blueprints": paginated["total_blueprints"],
+        "page": paginated["page"],
+        "limit": paginated["limit"],
+        "total_pages": paginated["total_pages"],
+        "interpreted_plan": plan_summary,
+        "truncated": truncated,
+    }
+
+
+async def execute_semantic_search(
+    db: Session,
+    query: str,
+    in_stock_only: bool = False,
+    page: int = 1,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    sort_by: str = "date",
+    sort_dir: str = "desc",
+) -> dict:
+    """Backward compatibility alias for execute_search."""
+    return await execute_search(
+        db=db,
+        query=query,
+        in_stock_only=in_stock_only,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Helper utilities
+# Backward-compatibility aliases
 # ---------------------------------------------------------------------------
-
-def _format_search_message(query: str, count: int) -> str:
-    if count == 0:
-        return f"Nessun articolo trovato per la ricerca \u00ab{query}\u00bb."
-    if count == 1:
-        return f"Ho trovato 1 articolo corrispondente alla ricerca \u00ab{query}\u00bb."
-    return f"Ho trovato {count} articoli corrispondenti alla ricerca \u00ab{query}\u00bb."
-
+from src.utils.vector_math import cosine_similarity as _cosine_similarity
+from src.models.wms import Article, ArticleStatus
+from sqlalchemy import func
 
 def _count_available_stock(db: Session, blueprint_id: str) -> int:
-    """Count Article records with status AVAILABLE for a given blueprint."""
     return (
         db.query(func.count(Article.id))
         .filter(
@@ -156,90 +360,3 @@ def _count_available_stock(db: Session, blueprint_id: str) -> int:
         or 0
     )
 
-
-def _build_variant_items(
-    db: Session,
-    bp: ArticleBlueprint,
-    allowed_colors: Optional[list[str]] = None,
-    in_stock_only: bool = False,
-) -> list[dict]:
-    """
-    Assemble SearchResultItem dicts from an ArticleBlueprint, one per color variant,
-    filtered by `allowed_colors` (if provided) and `in_stock_only`.
-    """
-    all_articles = db.query(Article).filter(Article.article_blueprint_id == bp.id).all()
-
-    colors_dict: dict[str, list[Article]] = {}
-    for a in all_articles:
-        color_keys = [str(c).strip().lower() for c in (a.colors or []) if c and str(c).strip()]
-        if not color_keys:
-            color_keys = ["unknown"]
-        for c in color_keys:
-            if c not in colors_dict:
-                colors_dict[c] = []
-            colors_dict[c].append(a)
-
-    if not colors_dict:
-        colors_dict["unknown"] = []
-
-    allowed_colors_set = (
-        {str(c).strip().lower() for c in allowed_colors if c and str(c).strip()}
-        if allowed_colors is not None
-        else None
-    )
-
-    brand = db.query(Brand).filter(Brand.id == bp.brand_id).first()
-    category = db.query(Category).filter(Category.id == bp.category_id).first() if bp.category_id else None
-    main_category = None
-    sub_category = None
-    if category:
-        if category.parent_id:
-            sub_category = category
-            main_category = db.query(Category).filter(Category.id == category.parent_id).first()
-        else:
-            main_category = category
-
-    results: list[dict] = []
-    for color, articles in colors_dict.items():
-        if allowed_colors_set is not None and color.lower() not in allowed_colors_set:
-            continue
-
-        stock = len([a for a in articles if a.status == ArticleStatus.AVAILABLE])
-        if in_stock_only and stock <= 0:
-            continue
-
-        photo = (
-            db.query(ArticlePhoto)
-            .filter(
-                ArticlePhoto.article_blueprint_id == bp.id,
-                ArticlePhoto.canonical_color_name == color,
-            )
-            .first()
-        )
-        if not photo:
-            photo = db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp.id).first()
-
-        name = f"{bp.article_name} - {color.capitalize()}" if color and color != "unknown" else bp.article_name
-        vendor_code = next((a.supplier_code for a in articles if a.supplier_code), None)
-        barcode = next((a.ean for a in articles if a.ean), None)
-
-        results.append(
-            {
-                "blueprint_id": str(bp.id),
-                "article_name": name,
-                "brand_name": brand.name if brand else "Unknown",
-                "brand_id": str(brand.id) if brand else None,
-                "category_name": main_category.name if main_category else None,
-                "sub_category_name": sub_category.name if sub_category else None,
-                "description": bp.description,
-                "extended_description": bp.extended_description,
-                "vendor_code": vendor_code,
-                "barcode": barcode,
-                "photo_id": str(photo.id) if photo else None,
-                "colors": [color] if color != "unknown" else [],
-                "tags": list(bp.tags or []),
-                "materials": list(bp.materials or []),
-                "stock": stock,
-            }
-        )
-    return results

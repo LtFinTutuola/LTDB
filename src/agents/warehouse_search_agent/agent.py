@@ -3,10 +3,9 @@ src/agents/warehouse_search_agent/agent.py
 ------------------------------------------
 LangGraph state machine for the WarehouseSearchAgent.
 Orchestrates:
-  1. query_plan_node     (LLM structured JSON query plan)
-  2. sql_filter_node     (Deterministic SQLAlchemy candidate retrieval via pim_repo)
-  3. semantic_rank_node  (Dual-regime cosine similarity + zero-results fallback relaxation)
-  4. color_filter_node   (Dedicated LLM color variant selection per blueprint)
+  1. query_plan_node   (LLM structured JSON query plan with cache & deterministic fallback)
+  2. retrieve_node     (Deterministic SQL filters + strict keyword AND matching + relevance scoring)
+  3. color_filter_node (Two-phase color variant selection with cache & index-based LLM)
 """
 from functools import partial
 from sqlalchemy.orm import Session
@@ -15,8 +14,7 @@ from langgraph.graph import StateGraph, START, END
 from src.agents.base import BaseAgent, AgentException
 from src.agents.warehouse_search_agent.state import WarehouseSearchGraphState
 from src.agents.warehouse_search_agent.nodes.query_plan_node import query_plan_node
-from src.agents.warehouse_search_agent.nodes.sql_filter_node import sql_filter_node
-from src.agents.warehouse_search_agent.nodes.semantic_rank_node import semantic_rank_node
+from src.agents.warehouse_search_agent.nodes.retrieve_node import retrieve_node
 from src.agents.warehouse_search_agent.nodes.color_filter_node import color_filter_node
 
 
@@ -25,14 +23,12 @@ def _build_graph(db: Session):
     graph = StateGraph(WarehouseSearchGraphState)
 
     graph.add_node("query_plan_node", query_plan_node)
-    graph.add_node("sql_filter_node", partial(sql_filter_node, db=db))
-    graph.add_node("semantic_rank_node", partial(semantic_rank_node, db=db))
+    graph.add_node("retrieve_node", partial(retrieve_node, db=db))
     graph.add_node("color_filter_node", color_filter_node)
 
     graph.add_edge(START, "query_plan_node")
-    graph.add_edge("query_plan_node", "sql_filter_node")
-    graph.add_edge("sql_filter_node", "semantic_rank_node")
-    graph.add_edge("semantic_rank_node", "color_filter_node")
+    graph.add_edge("query_plan_node", "retrieve_node")
+    graph.add_edge("retrieve_node", "color_filter_node")
     graph.add_edge("color_filter_node", END)
 
     return graph.compile()
@@ -40,10 +36,10 @@ def _build_graph(db: Session):
 
 class WarehouseSearchAgent(BaseAgent):
     """
-    Hybrid RAG search agent for the LTDB warehouse catalog.
-    Converts a natural language query into a structured SQL query plan,
-    applies dual-regime semantic similarity ranking with zero-results relaxation,
-    and filters color variants via a dedicated LLM pass.
+    Search agent for the LTDB warehouse catalog.
+    Converts a natural language query into a structured query plan,
+    retrieves candidate blueprints deterministically using hard filters and keyword AND matching,
+    and resolves color compatibility via a lightweight two-phase color filter.
     """
 
     def __init__(self, db: Session) -> None:
@@ -85,16 +81,17 @@ class WarehouseSearchAgent(BaseAgent):
         if isinstance(final_state, dict):
             selected_blueprints = final_state.get("selected_blueprints", [])
             query_plan = final_state.get("query_plan")
-            fallback_triggered = final_state.get("fallback_triggered", False)
+            color_degraded = final_state.get("color_degraded", False)
         else:
             selected_blueprints = getattr(final_state, "selected_blueprints", [])
             query_plan = getattr(final_state, "query_plan", None)
-            fallback_triggered = getattr(final_state, "fallback_triggered", False)
+            color_degraded = getattr(final_state, "color_degraded", False)
 
         plan_dict = query_plan.model_dump() if hasattr(query_plan, "model_dump") else query_plan
 
         return {
             "selected_blueprints": selected_blueprints,
             "query_plan": plan_dict,
-            "fallback_triggered": fallback_triggered,
+            "color_degraded": color_degraded,
+            "fallback_triggered": False,  # Strict: no fallback!
         }

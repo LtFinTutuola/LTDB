@@ -25,16 +25,7 @@ _LOW_SIMILARITY_THRESHOLD = 0.50
 _MAX_CANDIDATES = 20
 
 
-def cosine_similarity(a: List[float], b: List[float]) -> float:
-    """Compute cosine similarity between two vectors (pure Python)."""
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return dot / (norm_a * norm_b)
+from src.utils.vector_math import cosine_similarity
 
 
 def _score_and_filter(
@@ -128,15 +119,27 @@ async def semantic_rank_node(state: WarehouseSearchGraphState, db: Session) -> d
             )
             return result
 
-    # Case 3: Fallback regime — SQL filters yielded 0 candidates OR 0 passed _HIGH_SIMILARITY_THRESHOLD
-    all_catalog_candidates = pim_repo.get_candidate_blueprints_by_sql_plan(
-        db=db,
-        brand_name=None,
-        category_name=None,
-        in_stock_only=state.in_stock_only,
-    )
+    # Case 3: Fallback regime — SQL filters yielded 0 candidates OR 0 passed _HIGH_SIMILARITY_THRESHOLD.
+    # Preserve brand filter in fallback if user explicitly searched for a brand!
+    brand_fallback = plan.brand_name if plan and plan.brand_name else None
+    fallback_candidates = []
+    if brand_fallback:
+        fallback_candidates = pim_repo.get_candidate_blueprints_by_sql_plan(
+            db=db,
+            brand_name=brand_fallback,
+            category_name=None,
+            in_stock_only=state.in_stock_only,
+        )
 
-    if not all_catalog_candidates:
+    if not fallback_candidates:
+        fallback_candidates = pim_repo.get_candidate_blueprints_by_sql_plan(
+            db=db,
+            brand_name=None,
+            category_name=None,
+            in_stock_only=state.in_stock_only,
+        )
+
+    if not fallback_candidates:
         result = {"ranked_candidates": [], "fallback_triggered": True}
         logger.log_agent(
             "semantic_rank_node",
@@ -149,7 +152,7 @@ async def semantic_rank_node(state: WarehouseSearchGraphState, db: Session) -> d
     try:
         fallback_emb = await client.generate_embedding(state.raw_query)
         ranked_fallback = _score_and_filter(
-            all_catalog_candidates,
+            fallback_candidates,
             fallback_emb,
             _LOW_SIMILARITY_THRESHOLD,
         )

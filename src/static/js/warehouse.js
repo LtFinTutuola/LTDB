@@ -11,6 +11,14 @@ const _pageSize = 50;
 let _totalItems = 0;
 let _totalBlueprints = 0;
 let _totalPages = 1;
+let _activeSearchQuery = '';
+
+function _getCurrentSort() {
+    const sortSelect = document.getElementById('warehouse-sort-select');
+    if (!sortSelect) return { sortBy: 'date', sortDir: 'desc' };
+    const [sortBy, sortDir] = (sortSelect.value || 'date:desc').split(':');
+    return { sortBy: sortBy || 'date', sortDir: sortDir || 'desc' };
+}
 
 export async function initWarehouse() {
     if (!_controlsBound) {
@@ -265,12 +273,18 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
 
 async function fetchLatestItems(inStockOnly = false, page = 1) {
     _currentPage = Math.max(1, page);
+    _activeSearchQuery = '';
     const container = document.getElementById('catalog-results');
     if (!container) return;
 
+    // Hide relevance option when not searching
+    const relOpt = document.getElementById('warehouse-sort-opt-relevance');
+    if (relOpt) relOpt.style.display = 'none';
+
     try {
         const offset = (_currentPage - 1) * _pageSize;
-        const data = await api.getCatalogItems(_pageSize, offset, inStockOnly);
+        const { sortBy, sortDir } = _getCurrentSort();
+        const data = await api.getCatalogItems(_pageSize, offset, inStockOnly, sortBy, sortDir);
 
         let items = data.results || [];
         _totalItems = typeof data.total_items === 'number' ? data.total_items : (typeof data.total_blueprints === 'number' ? data.total_blueprints : items.length);
@@ -395,14 +409,19 @@ function _renderPagination(container, inStockOnly) {
             const currentInStockOnly = stockToggle ? Boolean(stockToggle.checked) : inStockOnly;
 
             container.scrollTop = 0;
-            await fetchLatestItems(currentInStockOnly, targetPage);
+            if (_activeSearchQuery) {
+                await executeWarehouseSearch(targetPage);
+            } else {
+                await fetchLatestItems(currentInStockOnly, targetPage);
+            }
         }
     });
 
     container.appendChild(paginationEl);
 }
 
-async function executeWarehouseSearch() {
+async function executeWarehouseSearch(page = 1) {
+    _currentPage = Math.max(1, page);
     const container = document.getElementById('catalog-results');
     const searchInput = document.getElementById('warehouse-search-input');
     const searchBtn = document.getElementById('warehouse-search-btn');
@@ -412,24 +431,24 @@ async function executeWarehouseSearch() {
 
     if (!container || !searchInput) return;
 
-    // Clean up any pagination elements during search
-    container.querySelectorAll('.warehouse-pagination').forEach(el => el.remove());
-    document.querySelectorAll('.warehouse-pagination').forEach(el => el.remove());
-
     const query = searchInput.value.trim();
     const inStockOnly = stockToggle ? Boolean(stockToggle.checked) : false;
 
     if (!query) {
+        _activeSearchQuery = '';
         if (clearBtn) clearBtn.style.display = 'none';
         if (feedbackEl) {
             feedbackEl.style.display = 'none';
             feedbackEl.textContent = '';
         }
+        const relOpt = document.getElementById('warehouse-sort-opt-relevance');
+        if (relOpt) relOpt.style.display = 'none';
         _currentPage = 1;
         await fetchLatestItems(inStockOnly, 1);
         return;
     }
 
+    _activeSearchQuery = query;
     if (clearBtn) clearBtn.style.display = 'inline-flex';
 
     // Show loading state
@@ -437,7 +456,7 @@ async function executeWarehouseSearch() {
         <div class="pim-loading-state" style="padding: 50px 20px;">
             <div class="pim-loading-spinner"></div>
             <div style="font-size: 15px; color: var(--text-primary); margin-top: 4px;">Ricerca in corso...</div>
-            <div style="font-size: 12px; color: var(--text-muted);">Elaborazione semantica e filtri di magazzino</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Elaborazione filtri e articoli di magazzino</div>
         </div>
     `;
 
@@ -445,20 +464,35 @@ async function executeWarehouseSearch() {
     searchInput.disabled = true;
 
     try {
-        const response = await api.semanticSearch(query, inStockOnly);
+        const { sortBy, sortDir } = _getCurrentSort();
+        const response = await api.catalogSearch(query, inStockOnly, _currentPage, _pageSize, sortBy, sortDir);
         const results = response.results || [];
+
+        _totalItems = typeof response.total_items === 'number' ? response.total_items : results.length;
+        _totalBlueprints = typeof response.total_blueprints === 'number' ? response.total_blueprints : 0;
+        _totalPages = typeof response.total_pages === 'number' ? response.total_pages : Math.max(1, Math.ceil(_totalItems / _pageSize));
+
+        // Manage relevance option visibility
+        const relOpt = document.getElementById('warehouse-sort-opt-relevance');
+        if (relOpt) {
+            const hasKeywords = response.interpreted_plan && response.interpreted_plan.keywords && response.interpreted_plan.keywords.length > 0;
+            relOpt.style.display = hasKeywords ? 'block' : 'none';
+        }
 
         if (feedbackEl) {
             feedbackEl.style.display = 'block';
             feedbackEl.style.color = 'var(--text-secondary)';
-            feedbackEl.textContent = response.message || `Trovati ${results.length} articoli`;
+            feedbackEl.textContent = response.message || `Trovati ${_totalItems} articoli`;
         }
 
         _renderResults(
             results,
             container,
-            `Nessun articolo trovato per la ricerca «${_esc(query)}»${inStockOnly ? ' con giacenza disponibile' : ''}.`
+            response.message || `Nessun articolo trovato per la ricerca «${_esc(query)}»${inStockOnly ? ' con giacenza disponibile' : ''}.`
         );
+
+        _renderPagination(container, inStockOnly);
+
     } catch (err) {
         console.error('Search error:', err);
         container.innerHTML = `<div style="text-align: center; padding: 40px; color: var(--error);">Errore durante la ricerca: ${_esc(err.message || 'Errore del server')}</div>`;
@@ -531,10 +565,25 @@ function _bindSearchControls() {
         stockToggle.addEventListener('change', () => {
             const query = searchInput ? searchInput.value.trim() : '';
             if (query) {
-                executeWarehouseSearch();
+                _currentPage = 1;
+                executeWarehouseSearch(1);
             } else {
                 _currentPage = 1;
                 fetchLatestItems(Boolean(stockToggle.checked), 1);
+            }
+        });
+    }
+
+    const sortSelect = document.getElementById('warehouse-sort-select');
+    if (sortSelect) {
+        sortSelect.addEventListener('change', () => {
+            const query = searchInput ? searchInput.value.trim() : '';
+            _currentPage = 1;
+            if (query) {
+                executeWarehouseSearch(1);
+            } else {
+                const inStockOnly = stockToggle ? Boolean(stockToggle.checked) : false;
+                fetchLatestItems(inStockOnly, 1);
             }
         });
     }

@@ -72,12 +72,25 @@ class CategoryUpdateRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Semantic search
+# Search and catalog listings
 # ---------------------------------------------------------------------------
 
-class SemanticSearchRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=500, description="Natural language search query")
+class CatalogSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500, description="Search query string")
     in_stock_only: bool = False
+    page: int = Field(1, ge=1, description="Page number (1-based)")
+    page_size: int = Field(50, ge=1, le=100, description="Items per page")
+    sort_by: str = Field("date", description="Sort field: 'date', 'category', 'brand', 'relevance'")
+    sort_dir: str = Field("desc", description="Sort direction: 'asc', 'desc'")
+
+
+class SemanticSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500, description="Search query string")
+    in_stock_only: bool = False
+    page: int = Field(1, ge=1, description="Page number (1-based)")
+    page_size: int = Field(50, ge=1, le=100, description="Items per page")
+    sort_by: str = Field("date", description="Sort field: 'date', 'category', 'brand', 'relevance'")
+    sort_dir: str = Field("desc", description="Sort direction: 'asc', 'desc'")
 
 
 from datetime import date
@@ -104,6 +117,9 @@ class SearchResultItem(BaseModel):
     materials: List[str] = Field(default_factory=list)
     stock: int = 0
 
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
 class CatalogItemsResponse(BaseModel):
     results: List[SearchResultItem]
     total_blueprints: int
@@ -113,9 +129,38 @@ class CatalogItemsResponse(BaseModel):
     total_pages: Optional[int] = None
 
 
+class InterpretedPlanSummary(BaseModel):
+    brand: Optional[str] = None
+    category: Optional[str] = None
+    color: Optional[str] = None
+    keywords: List[str] = Field(default_factory=list)
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
+
+class CatalogSearchResponse(BaseModel):
+    message: str
+    results: List[SearchResultItem]
+    total_items: int = 0
+    total_blueprints: int = 0
+    page: int = 1
+    limit: int = 50
+    total_pages: int = 1
+    interpreted_plan: Optional[InterpretedPlanSummary] = None
+    truncated: bool = False
+
+
 class SemanticSearchResponse(BaseModel):
     message: str
     results: List[SearchResultItem]
+    total_items: Optional[int] = None
+    total_blueprints: Optional[int] = None
+    page: Optional[int] = None
+    limit: Optional[int] = None
+    total_pages: Optional[int] = None
+    interpreted_plan: Optional[InterpretedPlanSummary] = None
+    truncated: Optional[bool] = False
 
 
 class SearchInterpretation(BaseModel):

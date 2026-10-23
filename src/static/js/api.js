@@ -133,18 +133,29 @@ export async function searchCatalogPhoto(blueprintId, color = '', feedback = nul
 
 // --- Catalog ---
 
-export async function getCatalogItems(limit = 50, offset = 0, inStockOnly = false) {
-    const res = await fetch(`${API_BASE}/catalog/items?limit=${limit}&offset=${offset}&in_stock_only=${inStockOnly}`);
+export async function getCatalogItems(limit = 50, offset = 0, inStockOnly = false, sortBy = 'date', sortDir = 'desc') {
+    const res = await fetch(`${API_BASE}/catalog/items?limit=${limit}&offset=${offset}&in_stock_only=${inStockOnly}&sort_by=${encodeURIComponent(sortBy)}&sort_dir=${encodeURIComponent(sortDir)}`);
     return _handleResponse(res);
 }
 
-export async function semanticSearch(query, inStockOnly = false) {
-    const res = await fetch(`${API_BASE}/catalog/search/semantic`, {
+export async function catalogSearch(query, inStockOnly = false, page = 1, pageSize = 50, sortBy = 'date', sortDir = 'desc') {
+    const res = await fetch(`${API_BASE}/catalog/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, in_stock_only: inStockOnly }),
+        body: JSON.stringify({
+            query,
+            in_stock_only: inStockOnly,
+            page,
+            page_size: pageSize,
+            sort_by: sortBy,
+            sort_dir: sortDir,
+        }),
     });
     return _handleResponse(res);
+}
+
+export async function semanticSearch(query, inStockOnly = false, page = 1, pageSize = 50, sortBy = 'date', sortDir = 'desc') {
+    return catalogSearch(query, inStockOnly, page, pageSize, sortBy, sortDir);
 }
 
 export async function getBrands() {

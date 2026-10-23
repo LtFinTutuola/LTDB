@@ -10,7 +10,7 @@ from typing import Dict, List, Any
 
 from src.agents.llm_client import LLMClient
 from src.agents.sales_chat_agent.state import SalesChatGraphState
-from src.agents.warehouse_search_agent.nodes.semantic_rank_node import cosine_similarity
+from src.utils.vector_math import cosine_similarity
 from src.core.logger import get_logger
 
 logger = get_logger()

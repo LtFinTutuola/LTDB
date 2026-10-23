@@ -41,6 +41,11 @@ def db_session():
     Base.metadata.create_all(bind=engine)
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = TestSession()
+
+    from src.core.cache import search_snapshot_cache, query_plan_cache, color_decision_cache
+    search_snapshot_cache.clear()
+    query_plan_cache.clear()
+    color_decision_cache.clear()
     
     from src.main import app
     from src.core.database import get_db
