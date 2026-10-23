@@ -487,6 +487,8 @@ def test_vendite_four_columns_and_gemini_article_card(db_session):
     assert ".sales-table--desktop tbody tr" in css
     assert ".sales-table--mobile tbody tr" in css
     assert ".btn-add-recon:disabled" in css
+    assert "text-overflow: ellipsis" in css
+    assert "table-layout: fixed" in css
     assert ".search-preview-card--sale .preview-card__photo" in css
     assert ".search-preview-card--sale .preview-card__meta" in css
 

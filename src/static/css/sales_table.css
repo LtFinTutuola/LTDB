@@ -247,8 +247,10 @@
 }
 
 .col-article {
-    width: auto;
+    width: 220px;
     min-width: 220px;
+    max-width: 220px;
+    box-sizing: border-box;
 }
 
 .chip--exchange {
@@ -1567,24 +1569,83 @@
         font-size: 12px;
     }
 
-    .col-price-list,
-    .col-price-final {
+    .sales-table--mobile {
+        table-layout: fixed;
+    }
+
+    .col-price-list {
         width: 85px;
+        min-width: 85px;
+        max-width: 85px;
+        font-size: 11px;
+    }
+
+    .col-price-final {
+        width: 90px;
+        min-width: 90px;
+        max-width: 90px;
         font-size: 11px;
     }
 
     .col-excel-col {
         width: 75px;
+        min-width: 75px;
+        max-width: 75px;
+    }
+
+    .col-article {
+        width: 200px;
+        min-width: 200px;
+        max-width: 200px;
+        box-sizing: border-box;
+        overflow: hidden;
+    }
+
+    .sales-table--mobile td.col-article {
+        overflow: hidden;
     }
 
     .search-preview-card--sale {
+        width: 100%;
+        max-width: 100%;
         padding: 4px 8px;
         gap: 8px;
+        box-sizing: border-box;
+        overflow: hidden;
     }
 
     .search-preview-card--sale .preview-card__photo {
         width: 36px;
         height: 36px;
+        flex-shrink: 0;
+    }
+
+    .search-preview-card--sale .preview-card__info {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+    }
+
+    .search-preview-card--sale .preview-card__name {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: block;
+        width: 100%;
+    }
+
+    .search-preview-card--sale .preview-card__meta {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .btn-add-recon-card {
+        width: 100%;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     /* Larger touch target for reconciliation button */
@@ -1600,38 +1661,24 @@
         height: 36px;
     }
 
-    /* Work Panel: right-side slide-in drawer */
+    /* Work Panel Slide-Over: Full screen on mobile */
     .mobile-panel-backdrop {
-        display: block;
-        position: absolute;
-        inset: 0;
-        z-index: 59;
-        background: rgba(0, 0, 0, 0.5);
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.25s ease;
-    }
-
-    .sales-page.mobile-panel-open .mobile-panel-backdrop {
-        opacity: 1;
-        pointer-events: auto;
+        display: none !important;
     }
 
     .sales-page__panel {
         position: absolute;
-        top: 0;
-        right: 0;
-        bottom: 0;
+        inset: 0;
         z-index: 60;
         background: var(--bg-surface);
-        border-left: 1px solid var(--border-color);
-        box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
-        transform: translateX(105%);
+        border-left: none;
+        box-shadow: none;
+        transform: translateX(100%);
         transition: transform 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
         display: flex;
         flex-direction: column;
         height: 100%;
-        width: min(88vw, 400px);
+        width: 100%;
         min-height: 0;
     }
 
