@@ -517,6 +517,56 @@ class TestSortingAndPagination:
             assert res_brand_asc["total_items"] == 2
             assert res_brand_asc["total_pages"] == 1
 
+    def test_sort_by_date_uses_physical_article_creation_time(self, db_session):
+        """
+        Verify that date sorting ('Data: più recenti') is driven by the physical article's
+        created_at timestamp, so newly imported physical articles jump to the top even
+        if their associated blueprint was created weeks ago.
+        """
+        from datetime import datetime, timedelta
+        from src.services.catalog_service import list_latest_items
+
+        brand = _make_brand(db_session, "SortBrand")
+        cat = _make_category(db_session, name="Borse")
+        batch = _make_batch(db_session)
+
+        # Older blueprint (created 10 days ago)
+        bp_old = _make_blueprint(db_session, brand.id, article_name="Old Blueprint Bag", category_id=cat.id)
+        bp_old.created_at = datetime.now() - timedelta(days=10)
+        db_session.add(bp_old)
+
+        # Newer blueprint (created 2 days ago)
+        bp_recent = _make_blueprint(db_session, brand.id, article_name="Recent Blueprint Bag", category_id=cat.id)
+        bp_recent.created_at = datetime.now() - timedelta(days=2)
+        db_session.add(bp_recent)
+        db_session.commit()
+
+        # Article on recent blueprint created 2 days ago
+        art_recent = _make_article(db_session, bp_recent.id, batch.id, colors=["rosso"])
+        art_recent.created_at = datetime.now() - timedelta(days=2)
+        db_session.add(art_recent)
+
+        # Article on old blueprint created 5 minutes ago (brand new physical stock on existing blueprint)
+        art_new = _make_article(db_session, bp_old.id, batch.id, colors=["nero"])
+        art_new.created_at = datetime.now() - timedelta(minutes=5)
+        db_session.add(art_new)
+        db_session.commit()
+
+        # Fetch catalog items sorted by date DESC
+        data = list_latest_items(db_session, limit=50, sort_by="date", sort_dir="desc")
+        results = data["results"]
+        assert len(results) >= 2
+
+        # The old blueprint with the newly created physical article MUST be #1
+        assert results[0]["blueprint_id"] == str(bp_old.id)
+        assert results[1]["blueprint_id"] == str(bp_recent.id)
+
+        # In ASC order, the old article should be first and the newly added article last
+        data_asc = list_latest_items(db_session, limit=50, sort_by="date", sort_dir="asc")
+        results_asc = data_asc["results"]
+        assert results_asc[0]["blueprint_id"] == str(bp_recent.id)
+        assert results_asc[1]["blueprint_id"] == str(bp_old.id)
+
 
 # ---------------------------------------------------------------------------
 # Snapshot Caching

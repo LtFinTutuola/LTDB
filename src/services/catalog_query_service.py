@@ -107,13 +107,22 @@ def build_variant_rows_for_blueprints(
 
         articles = articles_by_bp.get(bp_id, [])
 
-        def _get_sort_key(a: Article):
-            batch = batches_map.get(str(a.batch_id)) if a.batch_id else None
-            doc_date = batch.document_date if batch and batch.document_date else date.min
-            created = a.created_at.date() if isinstance(a.created_at, datetime) else (a.created_at or date.min)
-            return (doc_date, created)
+        def _extract_article_timestamp(a: Article) -> datetime:
+            if isinstance(a.created_at, datetime):
+                return a.created_at
+            if isinstance(a.created_at, date):
+                return datetime.combine(a.created_at, datetime.min.time())
+            if batches_map and a.batch_id:
+                b = batches_map.get(str(a.batch_id))
+                if b and b.document_date:
+                    if isinstance(b.document_date, datetime):
+                        return b.document_date
+                    if isinstance(b.document_date, date):
+                        return datetime.combine(b.document_date, datetime.min.time())
+            return datetime.min
 
-        articles.sort(key=_get_sort_key, reverse=True)
+        articles = articles_by_bp.get(bp_id, [])
+        articles.sort(key=_extract_article_timestamp, reverse=True)
 
         # Group articles by color
         colors_dict: Dict[str, List[Article]] = {}
@@ -148,12 +157,15 @@ def build_variant_rows_for_blueprints(
             vendor_code = next((a.supplier_code for a in variant_articles if a.supplier_code), None)
             barcode = next((a.ean for a in variant_articles if a.ean), None)
 
-            # Determine latest article date for date-sorting
-            latest_date = None
+            # Determine latest physical article creation timestamp for date-sorting
+            latest_timestamp: datetime = datetime.min
             if variant_articles:
-                latest_date = max((_get_sort_key(a)[0] for a in variant_articles), default=None)
-            if not latest_date or latest_date == date.min:
-                latest_date = bp.created_at.date() if bp.created_at else date.min
+                latest_timestamp = max((_extract_article_timestamp(a) for a in variant_articles), default=datetime.min)
+            if latest_timestamp == datetime.min and bp.created_at:
+                if isinstance(bp.created_at, datetime):
+                    latest_timestamp = bp.created_at
+                elif isinstance(bp.created_at, date):
+                    latest_timestamp = datetime.combine(bp.created_at, datetime.min.time())
 
             item = SearchResultItem(
                 blueprint_id=str(bp.id),
@@ -174,7 +186,7 @@ def build_variant_rows_for_blueprints(
             )
             # Attach transient metadata for sorting
             item._relevance_score = relevance_by_bp.get(bp_id, 0.0)
-            item._latest_date = latest_date
+            item._latest_date = latest_timestamp
             results.append(item)
 
     return results
@@ -187,7 +199,7 @@ def sort_variant_rows(
 ) -> List[SearchResultItem]:
     """
     Sort SearchResultItem rows deterministically by:
-      - 'date' (latest batch document_date or blueprint creation date)
+      - 'date' (latest physical article creation datetime or blueprint creation datetime)
       - 'category' (main category, sub category)
       - 'brand' (brand name folded)
       - 'relevance' (relevance score)
@@ -202,7 +214,14 @@ def sort_variant_rows(
 
     def _sort_key(item: SearchResultItem):
         # Tie-breakers
-        date_key = getattr(item, "_latest_date", date.min) or date.min
+        raw_date = getattr(item, "_latest_date", datetime.min) or datetime.min
+        if isinstance(raw_date, datetime):
+            date_key = raw_date
+        elif isinstance(raw_date, date):
+            date_key = datetime.combine(raw_date, datetime.min.time())
+        else:
+            date_key = datetime.min
+
         bp_key = item.blueprint_id or ""
         color_key = item.colors[0] if item.colors else ""
 
