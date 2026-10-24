@@ -245,6 +245,7 @@ def delete_brand(brand_id: str, db: Session = Depends(get_db)):
     db.query(BrandHeuristic).filter(BrandHeuristic.brand_id == brand_id).delete()
     db.delete(brand)
     db.commit()
+    search_service.invalidate_search_cache()
     logger.log_execution("catalog_router", "brand_deleted", "ok", brand_id=brand_id)
     return {"status": "deleted", "id": brand_id}
 
@@ -397,6 +398,7 @@ def delete_category(category_id: str, db: Session = Depends(get_db)):
     db.query(BrandCategory).filter(BrandCategory.category_id == category_id).delete()
     db.delete(cat)
     db.commit()
+    search_service.invalidate_search_cache()
     logger.log_execution("catalog_router", "category_deleted", "ok", category_id=category_id)
     return {"status": "deleted", "id": category_id}
 
@@ -713,6 +715,7 @@ async def upload_catalog_photo(
 
         color_name = (color or "").strip()
         photo = photo_service.save_photo_bytes(db, blueprint_id, color_name, content, commit_changes=True)
+        search_service.invalidate_search_cache()
         return {
             "status": "success",
             "photo_id": str(photo.id),
@@ -744,6 +747,7 @@ async def set_catalog_photo_url(
         photo = photo_service.download_and_upsert_photo(
             db, blueprint_id, color_name, payload.photo_url, commit_changes=True
         )
+        search_service.invalidate_search_cache()
         return {
             "status": "success",
             "photo_id": str(photo.id),
@@ -772,6 +776,7 @@ async def search_catalog_photo(
         photo = await photo_service.search_and_set_catalog_photo(
             db, blueprint_id, color_name=color or "", user_feedback=feedback
         )
+        search_service.invalidate_search_cache()
         return {
             "status": "success",
             "photo_id": str(photo.id),

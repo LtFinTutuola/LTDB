@@ -11,6 +11,7 @@ from src.repositories.wms_repo import wms_repo
 from src.schemas.excel_sales import ExcelSaleCreate, ExcelSaleStatus, ExcelRowPushItem
 from src.schemas.wms import StockUpdate
 from src.models.wms import ArticleStatus, MovementReason
+from src.services.search_service import invalidate_search_cache
 
 try:
     import openpyxl
@@ -543,6 +544,7 @@ def reconcile_sale(db: Session, excel_sale_id: str, article_id: str) -> Dict[str
         
         # Commit the atomic transaction
         db.commit()
+        invalidate_search_cache()
         
         logger.log_execution("excel_synchronization_service", "reconcile_sale", "ok",
                              excel_sale_id=excel_sale_id, article_id=article_id)

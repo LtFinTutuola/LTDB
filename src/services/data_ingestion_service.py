@@ -16,6 +16,7 @@ from src.services.wms_service import register_inbound_movement
 from src.repositories import staging_repo
 from src.models.staging import JobStatus, JobType
 from src.core.logger import get_logger
+from src.services.search_service import invalidate_search_cache
 
 logger = get_logger()
 
@@ -634,7 +635,8 @@ async def confirm_and_persist_staging(
                 )
         db.commit()
 
-
+    # Invalidate cached search snapshots now that new blueprints/articles are committed
+    invalidate_search_cache()
 
     # Delete job from staging area in a separate, isolated transaction
     try:

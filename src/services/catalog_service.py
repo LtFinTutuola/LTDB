@@ -23,6 +23,7 @@ from src.schemas.catalog import (
 )
 from src.agents.llm_client import LLMClient
 from src.core.logger import get_logger
+from src.services.search_service import invalidate_search_cache
 
 logger = get_logger()
 
@@ -285,6 +286,7 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
 
     db.commit()
     db.refresh(bp)
+    invalidate_search_cache()
 
     logger.log_execution("catalog_service", "update_blueprint_committed", "ok",
                          blueprint_id=blueprint_id, updated_fields=updated_fields_list)
@@ -382,6 +384,7 @@ def delete_catalog_item(
         deleted_blueprint = True
 
     db.commit()
+    invalidate_search_cache()
 
     logger.log_execution(
         "catalog_service",

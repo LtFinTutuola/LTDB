@@ -49,6 +49,21 @@ def _format_search_message(
     return f"Ho trovato {count} articoli corrispondenti alla ricerca «{query}»{trunc_info}."
 
 
+def invalidate_search_cache() -> None:
+    """
+    Invalidate all cached search snapshots in search_snapshot_cache.
+    Must be called whenever catalog items, articles, blueprints, or stock levels change.
+    """
+    count = len(search_snapshot_cache)
+    search_snapshot_cache.clear()
+    logger.log_execution(
+        "search_service",
+        "snapshot_cache_invalidated",
+        "ok",
+        cleared_entries=count,
+    )
+
+
 async def execute_search(
     db: Session,
     query: str,
