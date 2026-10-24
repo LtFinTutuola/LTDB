@@ -10,7 +10,7 @@ excel_retention_days: 30
 logging:
   logs_dir: data/logs
   logging_level: DEBUG
-  saving_interval: 2
+  saving_interval: 48
 auth:
   bootstrap_admin_password: admin
   jwt_secret: FjHsoDD99NSFBzkwjqGJEKdtBb7PB376iSgU2GBZeLNK8hY7a2QSyRb0IuwdwgIH
