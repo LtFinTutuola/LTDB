@@ -339,6 +339,26 @@ def test_password_length_policy_4_chars(db_session: Session):
     )
     assert res_create_3.status_code == 422
 
+    # 2b. User creation with 4-char username and 4-char password (e.g. luisa/luisa and luis/luis) -> 201 Created
+    res_luisa = client.post(
+        "/api/v1/users",
+        json={"username": "luisa", "password": "luisa", "role": "base"},
+    )
+    assert res_luisa.status_code == 201
+
+    res_user_4 = client.post(
+        "/api/v1/users",
+        json={"username": "luis", "password": "luis", "role": "base"},
+    )
+    assert res_user_4.status_code == 201
+
+    # 2c. User creation with 3-char username -> 422 Unprocessable Entity
+    res_user_3 = client.post(
+        "/api/v1/users",
+        json={"username": "lui", "password": "validpass", "role": "base"},
+    )
+    assert res_user_3.status_code == 422
+
     # 3. Admin reset password with 4-char password -> 200 OK
     res_reset_4 = client.put(
         f"/api/v1/users/{created_id}/password",

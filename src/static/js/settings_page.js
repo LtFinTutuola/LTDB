@@ -323,8 +323,8 @@ async function handleCreateUser(e) {
     const password = dom.newPassword.value;
     const role = dom.newRole.value;
 
-    if (!username || password.length < 6) {
-        showToast('Nome utente valido e password di almeno 6 caratteri obbligatori', 'error');
+    if (username.length < 4 || password.length < 4) {
+        showToast('Nome utente e password devono contenere almeno 4 caratteri', 'error');
         return;
     }
 
