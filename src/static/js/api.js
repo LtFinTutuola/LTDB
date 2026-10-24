@@ -7,6 +7,9 @@
 const API_BASE = '/api/v1';
 
 async function _handleResponse(res) {
+    if (res.status === 401 && window.location.pathname !== '/login') {
+        window.location.replace('/login?next=' + encodeURIComponent(window.location.pathname));
+    }
     if (!res.ok) {
         let detail = `HTTP ${res.status}`;
         try {

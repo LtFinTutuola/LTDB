@@ -109,6 +109,15 @@ class AppLogger:
             "event": event,
             "status": status,
         }
+        try:
+            from src.core.request_context import current_user_var
+            u = current_user_var.get()
+            if u is not None:
+                record["user"] = u.username
+                record["role"] = u.role
+        except Exception:
+            pass
+
         record.update(kwargs)
         
         try:
@@ -123,6 +132,10 @@ class AppLogger:
     def log_execution(self, component: str, event: str, status: str, **kwargs):
         """Always logs execution events."""
         self._write_record("EXEC", component, event, status, kwargs)
+
+    def log_security(self, component: str, event: str, status: str, **kwargs):
+        """Always logs security-related events."""
+        self._write_record("SEC", component, event, status, kwargs)
 
     def log_agent(self, component: str, event: str, status: str, **kwargs):
         """Logs agent events only if LOGGING_LEVEL is DEBUG."""

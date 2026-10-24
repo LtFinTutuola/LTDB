@@ -45,33 +45,61 @@ class SaleRepository(BaseRepository[Sale, SaleCreate, SaleCreate]):
 class SalesChatRepository:
     """Repository for persisting and retrieving SalesChatSession and SalesChatMessage records."""
 
-    def create_session(self, db: Session, title: str, is_active: bool = True) -> SalesChatSession:
+    def create_session(
+        self,
+        db: Session,
+        title: str,
+        user_id: Optional[str] = None,
+        is_active: bool = True,
+    ) -> SalesChatSession:
         clean_title = (title or "Nuova conversazione").strip()
         if len(clean_title) > 80:
             clean_title = clean_title[:77] + "..."
+        if user_id is None:
+            try:
+                from src.core.request_context import current_user_var
+                u = current_user_var.get()
+                if u:
+                    user_id = u.id
+            except Exception:
+                pass
         if is_active:
-            db.query(SalesChatSession).update({SalesChatSession.is_active: False}, synchronize_session=False)
-        session_obj = SalesChatSession(title=clean_title, is_active=is_active)
+            q = db.query(SalesChatSession)
+            if user_id:
+                q = q.filter(SalesChatSession.user_id == user_id)
+            q.update({SalesChatSession.is_active: False}, synchronize_session=False)
+        session_obj = SalesChatSession(title=clean_title, is_active=is_active, user_id=user_id)
         db.add(session_obj)
         db.commit()
         db.refresh(session_obj)
         return session_obj
 
-    def set_active_session(self, db: Session, session_id: Optional[str]) -> Optional[SalesChatSession]:
-        """Mark session_id as the single active session, or deactivate all sessions if session_id is None."""
+    def set_active_session(
+        self,
+        db: Session,
+        session_id: Optional[str],
+        user_id: Optional[str] = None,
+    ) -> Optional[SalesChatSession]:
+        """Mark session_id as the single active session for the user, or deactivate all user sessions if session_id is None."""
         if session_id:
-            db.query(SalesChatSession).filter(SalesChatSession.id != session_id).update(
-                {SalesChatSession.is_active: False}, synchronize_session=False
-            )
-            target = db.query(SalesChatSession).filter(SalesChatSession.id == session_id).first()
+            q_other = db.query(SalesChatSession).filter(SalesChatSession.id != session_id)
+            if user_id:
+                q_other = q_other.filter(SalesChatSession.user_id == user_id)
+            q_other.update({SalesChatSession.is_active: False}, synchronize_session=False)
+
+            target_q = db.query(SalesChatSession).filter(SalesChatSession.id == session_id)
+            if user_id:
+                target_q = target_q.filter(SalesChatSession.user_id == user_id)
+            target = target_q.first()
             if target:
                 target.is_active = True
             db.commit()
             return target
         else:
-            db.query(SalesChatSession).update(
-                {SalesChatSession.is_active: False}, synchronize_session=False
-            )
+            q_all = db.query(SalesChatSession)
+            if user_id:
+                q_all = q_all.filter(SalesChatSession.user_id == user_id)
+            q_all.update({SalesChatSession.is_active: False}, synchronize_session=False)
             db.commit()
             return None
 
@@ -79,19 +107,22 @@ class SalesChatRepository:
         self,
         db: Session,
         target_date: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[SalesChatSession]:
         """
-        Return the active chat session for target_date (defaulting to today UTC).
+        Return the active chat session for target_date (defaulting to today UTC) for the given user.
         A session is valid if its most recent message was generated on target_date.
         If multiple sessions exist on target_date, the latest updated/active one is selected.
         """
         if not target_date:
             target_date = datetime.utcnow().strftime("%Y-%m-%d")
 
+        q = db.query(SalesChatSession).options(joinedload(SalesChatSession.messages))
+        if user_id:
+            q = q.filter(SalesChatSession.user_id == user_id)
+
         sessions = (
-            db.query(SalesChatSession)
-            .options(joinedload(SalesChatSession.messages))
-            .order_by(SalesChatSession.updated_at.desc(), SalesChatSession.created_at.desc())
+            q.order_by(SalesChatSession.updated_at.desc(), SalesChatSession.created_at.desc())
             .all()
         )
 
@@ -112,23 +143,37 @@ class SalesChatRepository:
             if s.messages:
                 last_msg = s.messages[-1]
                 if _is_message_on_date(last_msg):
-                    self.set_active_session(db, str(s.id))
+                    self.set_active_session(db, str(s.id), user_id=user_id)
                     return s
 
         return None
 
-    def get_session_with_messages(self, db: Session, session_id: str) -> Optional[SalesChatSession]:
-        return (
+    def get_session_with_messages(
+        self,
+        db: Session,
+        session_id: str,
+        user_id: Optional[str] = None,
+    ) -> Optional[SalesChatSession]:
+        q = (
             db.query(SalesChatSession)
             .options(joinedload(SalesChatSession.messages))
             .filter(SalesChatSession.id == session_id)
-            .first()
         )
+        if user_id:
+            q = q.filter(SalesChatSession.user_id == user_id)
+        return q.first()
 
-    def list_sessions(self, db: Session, limit: int = 50) -> List[SalesChatSession]:
+    def list_sessions(
+        self,
+        db: Session,
+        limit: int = 50,
+        user_id: Optional[str] = None,
+    ) -> List[SalesChatSession]:
+        q = db.query(SalesChatSession)
+        if user_id:
+            q = q.filter(SalesChatSession.user_id == user_id)
         return (
-            db.query(SalesChatSession)
-            .order_by(SalesChatSession.updated_at.desc(), SalesChatSession.created_at.desc())
+            q.order_by(SalesChatSession.updated_at.desc(), SalesChatSession.created_at.desc())
             .limit(limit)
             .all()
         )
@@ -154,9 +199,10 @@ class SalesChatRepository:
         if session_obj:
             session_obj.updated_at = datetime.utcnow()
             session_obj.is_active = True
-            db.query(SalesChatSession).filter(SalesChatSession.id != session_id).update(
-                {SalesChatSession.is_active: False}, synchronize_session=False
-            )
+            q_other = db.query(SalesChatSession).filter(SalesChatSession.id != session_id)
+            if session_obj.user_id:
+                q_other = q_other.filter(SalesChatSession.user_id == session_obj.user_id)
+            q_other.update({SalesChatSession.is_active: False}, synchronize_session=False)
         db.commit()
         db.refresh(msg)
         return msg
@@ -166,8 +212,16 @@ class SalesChatRepository:
         db: Session,
         message_id: str,
         reason: str,
+        user_id: Optional[str] = None,
     ) -> Optional[SalesChatMessage]:
-        msg = db.query(SalesChatMessage).filter(SalesChatMessage.id == message_id).first()
+        q = (
+            db.query(SalesChatMessage)
+            .join(SalesChatSession, SalesChatMessage.session_id == SalesChatSession.id)
+            .filter(SalesChatMessage.id == message_id)
+        )
+        if user_id:
+            q = q.filter(SalesChatSession.user_id == user_id)
+        msg = q.first()
         if not msg:
             return None
         msg.is_reported = True

@@ -20,10 +20,11 @@ from src.services.excel_synchronization_service import HistoricalFileError
 
 logger = get_logger()
 
+edge_router = APIRouter(prefix="/api/v1/excel-synchronization", tags=["Excel Edge Synchronization"])
 router = APIRouter(prefix="/api/v1/excel-synchronization", tags=["Excel Synchronization"])
 
 
-@router.get("/agent-config", response_model=ExcelAgentConfigResponse, status_code=status.HTTP_200_OK)
+@edge_router.get("/agent-config", response_model=ExcelAgentConfigResponse, status_code=status.HTTP_200_OK)
 def get_agent_config():
     """
     Returns runtime configuration parameters for the standalone edge agent.
@@ -37,7 +38,7 @@ def get_agent_config():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/push-batch", response_model=ExcelPushBatchResponse, status_code=status.HTTP_200_OK)
+@edge_router.post("/push-batch", response_model=ExcelPushBatchResponse, status_code=status.HTTP_200_OK)
 def push_batch(
     payload: ExcelPushBatchRequest,
     db: Session = Depends(get_db)

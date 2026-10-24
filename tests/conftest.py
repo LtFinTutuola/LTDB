@@ -10,10 +10,38 @@ from sqlalchemy.orm import sessionmaker
 
 from src.models.base import Base
 # Import all model modules so every table is registered on Base.metadata
-from src.models import pim, wms, sales, staging, excel_sales  # noqa: F401
+from src.models import pim, wms, sales, staging, excel_sales, users  # noqa: F401
 
 # Register the test logger plugin hooks
 from tests.test_logger_plugin import pytest_runtest_makereport, pytest_sessionfinish  # noqa: F401
+from src.core.request_context import AuthUser, current_user_var
+from src.core.auth import get_current_user
+
+FAKE_ADMIN = AuthUser(
+    id="00000000-0000-0000-0000-000000000001",
+    username="admin_test",
+    role="admin",
+    token_version=1,
+)
+
+
+@pytest.fixture(autouse=True)
+def _auth_override():
+    """
+    Autouse fixture that overrides get_current_user with a mock admin user
+    so that all existing tests continue to pass without 401 Unauthorized errors.
+    """
+    from src.main import app
+
+    def override_user():
+        current_user_var.set(FAKE_ADMIN)
+        return FAKE_ADMIN
+
+    app.dependency_overrides[get_current_user] = override_user
+    current_user_var.set(FAKE_ADMIN)
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
+    current_user_var.set(None)
 
 
 @pytest.fixture(scope="function")
@@ -42,6 +70,18 @@ def db_session():
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = TestSession()
 
+    from src.models.users import User
+    admin_user = User(
+        id=FAKE_ADMIN.id,
+        username=FAKE_ADMIN.username,
+        hashed_password="fake_hashed_password",
+        role=FAKE_ADMIN.role,
+        is_active=True,
+        token_version=FAKE_ADMIN.token_version,
+    )
+    session.add(admin_user)
+    session.commit()
+
     from src.core.cache import search_snapshot_cache, query_plan_cache, color_decision_cache
     search_snapshot_cache.clear()
     query_plan_cache.clear()
@@ -61,6 +101,6 @@ def db_session():
     yield session
 
     session.close()
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(get_db, None)
     Base.metadata.drop_all(bind=engine)
     engine.dispose()

@@ -11,3 +11,10 @@ logging:
   logs_dir: data/logs
   logging_level: DEBUG
   saving_interval: 2
+auth:
+  bootstrap_admin_password: admin
+  jwt_secret: ""
+  token_ttl_days: 90
+  cookie_name: ltdb_token
+  cookie_secure: false
+  min_password_length: 6

@@ -24,6 +24,7 @@ async def process_chat_message(
     message: str,
     context_date: Optional[str] = None,
     session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Process a user message in the sales conversational chat:
@@ -42,7 +43,7 @@ async def process_chat_message(
     chat_history: List[Dict[str, str]] = []
 
     if session_id and session_id.strip():
-        session_obj = sales_chat_repo.get_session_with_messages(db, session_id.strip())
+        session_obj = sales_chat_repo.get_session_with_messages(db, session_id.strip(), user_id=user_id)
         if session_obj:
             chat_history = [
                 {"role": m.role, "content": m.content}
@@ -50,7 +51,7 @@ async def process_chat_message(
             ]
 
     if not session_obj:
-        session_obj = sales_chat_repo.create_session(db, title=clean_message)
+        session_obj = sales_chat_repo.create_session(db, title=clean_message, user_id=user_id)
 
     # Persist incoming user message
     sales_chat_repo.add_message(
@@ -106,39 +107,48 @@ async def process_chat_message(
     }
 
 
-def list_chat_sessions(db: Session, limit: int = 50) -> List[SalesChatSession]:
-    """Return past chat sessions ordered from most recent to oldest."""
-    return sales_chat_repo.list_sessions(db, limit=limit)
+def list_chat_sessions(db: Session, limit: int = 50, user_id: Optional[str] = None) -> List[SalesChatSession]:
+    """Return past chat sessions for user_id ordered from most recent to oldest."""
+    return sales_chat_repo.list_sessions(db, limit=limit, user_id=user_id)
 
 
-def get_active_chat_session(db: Session, target_date: Optional[str] = None) -> Optional[SalesChatSession]:
-    """Find and return the active chat session whose last message is on target_date."""
-    return sales_chat_repo.get_active_session(db=db, target_date=target_date)
+def get_active_chat_session(
+    db: Session,
+    target_date: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Optional[SalesChatSession]:
+    """Find and return the active chat session for user_id whose last message is on target_date."""
+    return sales_chat_repo.get_active_session(db=db, target_date=target_date, user_id=user_id)
 
 
-def activate_chat_session(db: Session, session_id: str) -> SalesChatSession:
-    """Explicitly activate a chat session and return its detail."""
-    session_obj = sales_chat_repo.set_active_session(db=db, session_id=session_id)
+def activate_chat_session(db: Session, session_id: str, user_id: Optional[str] = None) -> SalesChatSession:
+    """Explicitly activate a chat session for user_id and return its detail."""
+    session_obj = sales_chat_repo.set_active_session(db=db, session_id=session_id, user_id=user_id)
     if not session_obj:
         raise ValueError(f"Chat session '{session_id}' not found.")
-    return sales_chat_repo.get_session_with_messages(db, session_id)
+    return sales_chat_repo.get_session_with_messages(db, session_id, user_id=user_id)
 
 
-def deactivate_chat_sessions(db: Session) -> None:
-    """Deactivate all chat sessions (e.g. when starting a new conversation)."""
-    sales_chat_repo.set_active_session(db=db, session_id=None)
+def deactivate_chat_sessions(db: Session, user_id: Optional[str] = None) -> None:
+    """Deactivate all chat sessions for user_id (e.g. when starting a new conversation)."""
+    sales_chat_repo.set_active_session(db=db, session_id=None, user_id=user_id)
 
 
-def get_chat_session_detail(db: Session, session_id: str) -> SalesChatSession:
-    """Return a single chat session with all its chronological messages."""
-    session_obj = sales_chat_repo.get_session_with_messages(db, session_id)
+def get_chat_session_detail(db: Session, session_id: str, user_id: Optional[str] = None) -> SalesChatSession:
+    """Return a single chat session with all its chronological messages for user_id."""
+    session_obj = sales_chat_repo.get_session_with_messages(db, session_id, user_id=user_id)
     if not session_obj:
         raise ValueError(f"Chat session '{session_id}' not found.")
     return session_obj
 
 
-def report_chat_message(db: Session, message_id: str, reason: str) -> Dict[str, Any]:
-    """Flag a chat message as reported with a user explanation."""
+def report_chat_message(
+    db: Session,
+    message_id: str,
+    reason: str,
+    user_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Flag a chat message as reported with a user explanation, scoped by user_id."""
     clean_id = (message_id or "").strip()
     clean_reason = (reason or "").strip()
     if not clean_id:
@@ -146,7 +156,7 @@ def report_chat_message(db: Session, message_id: str, reason: str) -> Dict[str, 
     if not clean_reason:
         raise ValueError("Il motivo della segnalazione non può essere vuoto.")
 
-    updated_msg = sales_chat_repo.report_message(db=db, message_id=clean_id, reason=clean_reason)
+    updated_msg = sales_chat_repo.report_message(db=db, message_id=clean_id, reason=clean_reason, user_id=user_id)
     if not updated_msg:
         raise KeyError(f"Messaggio '{clean_id}' non trovato.")
 

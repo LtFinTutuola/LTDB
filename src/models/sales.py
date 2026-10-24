@@ -53,9 +53,25 @@ class SaleLine(Base, UUIDMixin, TimestampMixin):
     article: Mapped["Article"] = relationship("Article", back_populates="sale_lines")
 
 
+def _get_default_user_id() -> Optional[str]:
+    try:
+        from src.core.request_context import current_user_var
+        u = current_user_var.get()
+        return u.id if u else None
+    except Exception:
+        return None
+
+
 class SalesChatSession(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "sales_chat_sessions"
 
+    user_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id"),
+        index=True,
+        nullable=True,
+        default=_get_default_user_id,
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="Nuova conversazione")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

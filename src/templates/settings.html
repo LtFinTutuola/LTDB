@@ -115,7 +115,19 @@
       </div>
     </header>
 
-    <!-- Settings Form -->
+    <!-- Settings Tabs -->
+    <div class="settings-tabs" style="display: flex; gap: 16px; margin-bottom: 24px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">
+      <button type="button" id="tab-btn-config" class="btn-tab-active" style="background: none; border: none; border-bottom: 2px solid var(--accent); color: var(--accent); font-weight: 600; font-size: 14px; padding: 8px 12px; cursor: pointer;">
+        <span class="material-symbols-rounded" style="font-size: 18px; vertical-align: middle; margin-right: 4px;">tune</span>
+        Configurazioni
+      </button>
+      <button type="button" id="tab-btn-users" style="background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-muted); font-weight: 500; font-size: 14px; padding: 8px 12px; cursor: pointer;">
+        <span class="material-symbols-rounded" style="font-size: 18px; vertical-align: middle; margin-right: 4px;">group</span>
+        Gestione Utenze
+      </button>
+    </div>
+
+    <!-- Settings Form (Tab 1) -->
     <form id="settings-form">
       <!-- Card 1: Configurazione Sistema & Magazzino -->
       <div class="settings-card">
@@ -198,6 +210,82 @@
         </button>
       </div>
     </form>
+
+    <!-- Users Management Section (Tab 2) -->
+    <div id="users-section" style="display: none;">
+      <!-- Card: Create User -->
+      <div class="settings-card">
+        <div class="settings-card__header">
+          <span class="material-symbols-rounded settings-card__icon">person_add</span>
+          <h2 class="settings-card__title">Crea Nuovo Utente</h2>
+        </div>
+        <form id="create-user-form" style="display: flex; flex-direction: column; gap: 14px;">
+          <div style="display: flex; gap: 14px; flex-wrap: wrap;">
+            <div class="form-group" style="flex: 1; min-width: 180px;">
+              <label for="new-user-username" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Nome Utente *</label>
+              <input type="text" id="new-user-username" class="form-control" placeholder="es. mario" required minlength="3" maxlength="32">
+            </div>
+            <div class="form-group" style="flex: 1; min-width: 180px;">
+              <label for="new-user-password" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Password Iniziale *</label>
+              <input type="password" id="new-user-password" class="form-control" placeholder="Minimo 6 caratteri" required minlength="6">
+            </div>
+            <div class="form-group" style="width: 140px;">
+              <label for="new-user-role" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Ruolo *</label>
+              <select id="new-user-role" class="form-control">
+                <option value="base" selected>Base</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: flex-end;">
+            <button type="submit" id="btn-create-user" class="btn-primary">
+              <span class="material-symbols-rounded">add</span>
+              Aggiungi Utente
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Card: Existing Users List -->
+      <div class="settings-card">
+        <div class="settings-card__header">
+          <span class="material-symbols-rounded settings-card__icon">badge</span>
+          <h2 class="settings-card__title">Utenti Registrati</h2>
+        </div>
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
+            <thead>
+              <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-secondary);">
+                <th style="padding: 10px 8px;">Nome Utente</th>
+                <th style="padding: 10px 8px;">Ruolo</th>
+                <th style="padding: 10px 8px;">Stato</th>
+                <th style="padding: 10px 8px; text-align: right;">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="users-tbody">
+              <!-- Dynamically rendered -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Card: Hard Reset / Global Session Invalidation -->
+      <div class="settings-card" style="border-color: rgba(248, 81, 73, 0.4);">
+        <div class="settings-card__header">
+          <span class="material-symbols-rounded settings-card__icon" style="color: #f85149;">lock_reset</span>
+          <h2 class="settings-card__title" style="color: #f85149;">Hard Reset di Sicurezza</h2>
+        </div>
+        <p style="font-size: 13px; color: var(--text-secondary); margin: 0;">
+          Questa operazione incrementa la versione dei token di tutti gli utenti registrati. Tutte le sessioni attive su qualsiasi dispositivo verranno disconnesse immediatamente e forzate al login.
+        </p>
+        <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+          <button type="button" id="btn-revoke-all" class="btn-secondary" style="color: #f85149; border-color: rgba(248, 81, 73, 0.4);">
+            <span class="material-symbols-rounded">power_settings_new</span>
+            Disconnetti Tutte le Sessioni
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

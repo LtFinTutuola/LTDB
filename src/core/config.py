@@ -14,6 +14,9 @@ with open(config_path, "r") as f:
 # Logging
 logging_config = yaml_config.get("logging", {})
 
+# Auth
+auth_config = yaml_config.get("auth", {})
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = yaml_config.get("project_name", "")
     
@@ -35,6 +38,14 @@ class Settings(BaseSettings):
     LOGS_DIR: str = logging_config.get("logs_dir", "data/logs/execution").replace("{BASE_DIR}", str(BASE_DIR))
     LOGGING_LEVEL: str = logging_config.get("logging_level", "STANDARD").upper()
     SAVING_INTERVAL: int = int(logging_config.get("saving_interval", 24))
+
+    # Auth Config
+    AUTH_BOOTSTRAP_ADMIN_PASSWORD: str = str(auth_config.get("bootstrap_admin_password", "admin"))
+    AUTH_JWT_SECRET: str = str(auth_config.get("jwt_secret", ""))
+    AUTH_TOKEN_TTL_DAYS: int = int(auth_config.get("token_ttl_days", 90))
+    AUTH_COOKIE_NAME: str = str(auth_config.get("cookie_name", "ltdb_token"))
+    AUTH_COOKIE_SECURE: bool = bool(auth_config.get("cookie_secure", False))
+    AUTH_MIN_PASSWORD_LENGTH: int = int(auth_config.get("min_password_length", 6))
     
     class Config:
         env_file = ".env"

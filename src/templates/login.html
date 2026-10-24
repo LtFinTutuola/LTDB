@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Accedi — LTDB</title>
+  <link rel="stylesheet" href="/static/css/app.css?v=20261024">
+  <style>
+    body.login-page {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #0b0f17;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #e6edf3;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 380px;
+      margin: 20px;
+      padding: 36px 32px;
+      background: #151b26;
+      border: 1px solid #2d3748;
+      border-radius: 14px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+      box-sizing: border-box;
+    }
+    .login-header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .login-logo {
+      width: 64px;
+      height: 64px;
+      object-fit: contain;
+      margin-bottom: 12px;
+      border-radius: 8px;
+    }
+    .login-title {
+      margin: 0;
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: #ffffff;
+    }
+    .login-subtitle {
+      margin-top: 6px;
+      font-size: 0.88rem;
+      color: #8b949e;
+    }
+    .login-form {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      text-align: left;
+    }
+    .form-label {
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: #c9d1d9;
+    }
+    .form-input {
+      padding: 11px 14px;
+      border-radius: 8px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: #f0f6fc;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .form-input:focus {
+      border-color: #58a6ff;
+      box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.2);
+    }
+    .login-btn {
+      margin-top: 8px;
+      padding: 12px;
+      border-radius: 8px;
+      border: none;
+      background: #238636;
+      color: #ffffff;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 0.15s ease;
+    }
+    .login-btn:hover:not(:disabled) {
+      background: #2ea043;
+    }
+    .login-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .login-error {
+      display: none;
+      margin-bottom: 16px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: rgba(248, 81, 73, 0.15);
+      border: 1px solid rgba(248, 81, 73, 0.4);
+      color: #f85149;
+      font-size: 0.85rem;
+      text-align: center;
+    }
+    .login-footer {
+      margin-top: 24px;
+      font-size: 0.78rem;
+      text-align: center;
+      color: #6e7681;
+    }
+  </style>
+</head>
+<body class="login-page">
+  <div class="login-card">
+    <div class="login-header">
+      <img src="/static/assets/logo.png" alt="LTDB Logo" class="login-logo">
+      <h1 class="login-title">La Triestina</h1>
+      <div class="login-subtitle">Accesso gestionale LTDB</div>
+    </div>
+
+    <div id="login-error" class="login-error"></div>
+
+    <form id="login-form" class="login-form" autocomplete="on">
+      <div class="form-group">
+        <label for="username" class="form-label">Nome utente</label>
+        <input type="text" id="username" name="username" class="form-input" required autofocus autocomplete="username">
+      </div>
+
+      <div class="form-group">
+        <label for="password" class="form-label">Password</label>
+        <input type="password" id="password" name="password" class="form-input" required autocomplete="current-password">
+      </div>
+
+      <button type="submit" id="login-submit" class="login-btn">Accedi</button>
+    </form>
+
+    <div class="login-footer">
+      Per supporto o credenziali smarrite, contatta l'amministratore.
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('login-form');
+    const errBox = document.getElementById('login-error');
+    const btn = document.getElementById('login-submit');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errBox.style.display = 'none';
+      btn.disabled = true;
+      btn.textContent = 'Verifica in corso...';
+
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+
+      try {
+        const res = await fetch('/api/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+
+        if (!res.ok) {
+          let msg = 'Credenziali non valide';
+          try {
+            const data = await res.json();
+            if (data.detail) msg = data.detail;
+          } catch (_) {}
+          errBox.textContent = msg;
+          errBox.style.display = 'block';
+          btn.disabled = false;
+          btn.textContent = 'Accedi';
+          return;
+        }
+
+        // On successful login, redirect to requested next page or /vendite
+        const params = new URLSearchParams(window.location.search);
+        const nextUrl = params.get('next') || '/vendite';
+        window.location.replace(nextUrl);
+      } catch (err) {
+        errBox.textContent = 'Errore di connessione con il server';
+        errBox.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Accedi';
+      }
+    });
+  </script>
+</body>
+</html>

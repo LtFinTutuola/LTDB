@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>{% block title %}LTDB{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/app.css?v=20261021">
+  <script type="module" src="/static/js/auth.js"></script>
   {% block extra_head %}{% endblock %}
 </head>
 <body>
@@ -37,10 +38,12 @@
         <span class="material-symbols-rounded">category</span>
         <span class="mobile-nav-label">Categorie</span>
       </a>
+      {% if not current_user or current_user.role == 'admin' %}
       <a href="/settings" class="mobile-nav-item {% if active_page == 'settings' %}mobile-nav-item--active{% endif %}">
         <span class="material-symbols-rounded">settings</span>
         <span class="mobile-nav-label">Impostazioni</span>
       </a>
+      {% endif %}
     </nav>
   </div>
   {% block scripts %}{% endblock %}

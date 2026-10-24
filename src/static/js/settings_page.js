@@ -1,6 +1,6 @@
 /**
  * settings_page.js
- * Client-side logic for the Settings configuration page in LTDB.
+ * Client-side logic for the Settings configuration and User Management (IAM) page in LTDB.
  */
 import * as api from './api.js';
 
@@ -42,10 +42,17 @@ function showToast(message, type = 'success') {
 
 // State
 let initialSettings = null;
+let usersList = [];
 
 // DOM references
 const dom = {
-    form: document.getElementById('settings-form'),
+    // Tabs
+    tabBtnConfig: document.getElementById('tab-btn-config'),
+    tabBtnUsers: document.getElementById('tab-btn-users'),
+    settingsForm: document.getElementById('settings-form'),
+    usersSection: document.getElementById('users-section'),
+
+    // Settings inputs
     inputDb: document.getElementById('setting-db'),
     inputExcelPath: document.getElementById('setting-excel-path'),
     inputExcelCol: document.getElementById('setting-excel-col'),
@@ -56,11 +63,48 @@ const dom = {
     btnSave: document.getElementById('btn-save-settings'),
     btnReset: document.getElementById('btn-reset-settings'),
     loadingState: document.getElementById('loading-state'),
+
+    // Users IAM
+    createUserForm: document.getElementById('create-user-form'),
+    newUsername: document.getElementById('new-user-username'),
+    newPassword: document.getElementById('new-user-password'),
+    newRole: document.getElementById('new-user-role'),
+    usersTbody: document.getElementById('users-tbody'),
+    btnRevokeAll: document.getElementById('btn-revoke-all'),
 };
 
+// --- Tab Navigation ---
+function switchTab(target) {
+    if (target === 'config') {
+        dom.tabBtnConfig.style.borderBottom = '2px solid var(--accent)';
+        dom.tabBtnConfig.style.color = 'var(--accent)';
+        dom.tabBtnConfig.style.fontWeight = '600';
+
+        dom.tabBtnUsers.style.borderBottom = '2px solid transparent';
+        dom.tabBtnUsers.style.color = 'var(--text-muted)';
+        dom.tabBtnUsers.style.fontWeight = '500';
+
+        dom.settingsForm.style.display = 'block';
+        dom.usersSection.style.display = 'none';
+    } else {
+        dom.tabBtnUsers.style.borderBottom = '2px solid var(--accent)';
+        dom.tabBtnUsers.style.color = 'var(--accent)';
+        dom.tabBtnUsers.style.fontWeight = '600';
+
+        dom.tabBtnConfig.style.borderBottom = '2px solid transparent';
+        dom.tabBtnConfig.style.color = 'var(--text-muted)';
+        dom.tabBtnConfig.style.fontWeight = '500';
+
+        dom.settingsForm.style.display = 'none';
+        dom.usersSection.style.display = 'block';
+        loadUsers();
+    }
+}
+
+// --- Settings Logic ---
 async function loadSettings() {
     dom.loadingState.style.display = 'flex';
-    dom.form.style.opacity = '0.5';
+    dom.settingsForm.style.opacity = '0.5';
     dom.btnSave.disabled = true;
 
     try {
@@ -71,7 +115,7 @@ async function loadSettings() {
         showToast(`Errore durante il caricamento delle impostazioni: ${err.message}`, 'error');
     } finally {
         dom.loadingState.style.display = 'none';
-        dom.form.style.opacity = '1';
+        dom.settingsForm.style.opacity = '1';
         dom.btnSave.disabled = false;
     }
 }
@@ -135,6 +179,7 @@ async function handleSaveSettings(e) {
         const updated = await api.updateSettings(payload);
         initialSettings = { ...updated };
         populateForm(updated);
+        showToast('Impostazioni salvate con successo.');
     } catch (err) {
         showToast(`Errore durante il salvataggio: ${err.message}`, 'error');
     } finally {
@@ -150,10 +195,202 @@ function handleResetSettings() {
     }
 }
 
+// --- Users Management (IAM) Logic ---
+async function loadUsers() {
+    try {
+        const res = await fetch('/api/v1/users');
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Impossibile caricare gli utenti');
+        }
+        usersList = await res.json();
+        renderUsersTable();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+function renderUsersTable() {
+    dom.usersTbody.innerHTML = '';
+    if (!usersList.length) {
+        dom.usersTbody.innerHTML = `<tr><td colspan="4" style="padding: 16px; text-align: center; color: var(--text-muted);">Nessun utente trovato.</td></tr>`;
+        return;
+    }
+
+    usersList.forEach((u) => {
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid var(--border-color)';
+
+        tr.innerHTML = `
+            <td style="padding: 12px 8px; font-weight: 500;">
+                ${escapeHtml(u.username)}
+            </td>
+            <td style="padding: 12px 8px;">
+                <select class="form-control user-role-select" data-user-id="${u.id}" style="padding: 4px 8px; font-size: 12px; width: auto;">
+                    <option value="base" ${u.role === 'base' ? 'selected' : ''}>Base</option>
+                    <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+                </select>
+            </td>
+            <td style="padding: 12px 8px;">
+                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                    <input type="checkbox" class="user-active-toggle" data-user-id="${u.id}" ${u.is_active ? 'checked' : ''}>
+                    <span style="color: ${u.is_active ? '#3fb950' : '#8b949e'}; font-size: 12px;">
+                        ${u.is_active ? 'Attivo' : 'Disattivato'}
+                    </span>
+                </label>
+            </td>
+            <td style="padding: 12px 8px; text-align: right;">
+                <button type="button" class="btn-secondary btn-reset-user-pw" data-user-id="${u.id}" data-username="${escapeHtml(u.username)}" style="padding: 4px 10px; font-size: 12px;">
+                    <span class="material-symbols-rounded" style="font-size: 16px;">key</span>
+                    Imposta Password
+                </button>
+            </td>
+        `;
+
+        dom.usersTbody.appendChild(tr);
+    });
+
+    // Attach event listeners for row actions
+    document.querySelectorAll('.user-role-select').forEach((sel) => {
+        sel.addEventListener('change', async (e) => {
+            const userId = e.target.getAttribute('data-user-id');
+            const newRole = e.target.value;
+            await updateUserField(userId, { role: newRole });
+        });
+    });
+
+    document.querySelectorAll('.user-active-toggle').forEach((chk) => {
+        chk.addEventListener('change', async (e) => {
+            const userId = e.target.getAttribute('data-user-id');
+            const isActive = e.target.checked;
+            await updateUserField(userId, { is_active: isActive });
+        });
+    });
+
+    document.querySelectorAll('.btn-reset-user-pw').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            const userId = btn.getAttribute('data-user-id');
+            const username = btn.getAttribute('data-username');
+            promptResetPassword(userId, username);
+        });
+    });
+}
+
+async function updateUserField(userId, payload) {
+    try {
+        const res = await fetch(`/api/v1/users/${userId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.detail || 'Operazione non riuscita');
+        }
+        showToast('Profilo utente aggiornato');
+        loadUsers();
+    } catch (err) {
+        showToast(err.message, 'error');
+        loadUsers(); // Revert UI
+    }
+}
+
+function promptResetPassword(userId, username) {
+    const newPass = prompt(`Inserisci la nuova password per l'utente "${username}" (minimo 6 caratteri):`);
+    if (!newPass) return;
+    if (newPass.length < 6) {
+        alert('La password deve contenere almeno 6 caratteri.');
+        return;
+    }
+
+    fetch(`/api/v1/users/${userId}/password`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_password: newPass }),
+    })
+        .then(async (res) => {
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Errore nel reset');
+            showToast(`Password impostata per ${username}`);
+        })
+        .catch((err) => showToast(err.message, 'error'));
+}
+
+async function handleCreateUser(e) {
+    e.preventDefault();
+    const username = dom.newUsername.value.trim().toLowerCase();
+    const password = dom.newPassword.value;
+    const role = dom.newRole.value;
+
+    if (!username || password.length < 6) {
+        showToast('Nome utente valido e password di almeno 6 caratteri obbligatori', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/v1/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password, role }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.detail || 'Errore creazione utente');
+        }
+
+        showToast(`Utente "${username}" creato con successo`);
+        dom.createUserForm.reset();
+        loadUsers();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+async function handleRevokeAll() {
+    if (!confirm('Sei sicuro di voler disconnettere TUTTE le sessioni del punto vendita? Tutti i dispositivi (incluso questo) dovranno effettuare nuovamente il login.')) {
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/v1/users/revoke-all', {
+            method: 'POST',
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Operazione fallita');
+        alert('Tutte le sessioni sono state revocate. Verrai reindirizzato al login.');
+        window.location.replace('/login');
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/[&<>'"]/g, (tag) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;',
+    }[tag] || tag));
+}
+
+// --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
     loadSettings();
 
+    // Tabs
+    dom.tabBtnConfig.addEventListener('click', () => switchTab('config'));
+    dom.tabBtnUsers.addEventListener('click', () => switchTab('users'));
+
+    // Config form
     dom.btnToggleToken.addEventListener('click', toggleTokenVisibility);
-    dom.form.addEventListener('submit', handleSaveSettings);
+    dom.settingsForm.addEventListener('submit', handleSaveSettings);
     dom.btnReset.addEventListener('click', handleResetSettings);
+
+    // Users form
+    dom.createUserForm.addEventListener('submit', handleCreateUser);
+    dom.btnRevokeAll.addEventListener('click', handleRevokeAll);
 });
