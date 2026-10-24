@@ -305,3 +305,64 @@ def test_route_guard_whitelist():
                 assert response.status_code in {401, 403, 303}, (
                     f"Rotta non protetta rilevata: {method} {path} ha risposto con {response.status_code}"
                 )
+
+
+def test_password_length_policy_4_chars(db_session: Session):
+    """Verifies that the minimum password length policy is exactly 4 characters across all auth endpoints."""
+    app.dependency_overrides.pop(get_current_user, None)
+    admin = User(
+        username="policy_admin",
+        hashed_password=hash_password("admin123"),
+        role=UserRole.ADMIN.value,
+        is_active=True,
+        token_version=1,
+    )
+    db_session.add(admin)
+    db_session.commit()
+
+    admin_token = create_access_token(admin.id, admin.username, admin.role, 1)
+    client = TestClient(app)
+    client.cookies.set(settings.AUTH_COOKIE_NAME, admin_token)
+
+    # 1. User creation with 4-char password -> 201 Created
+    res_create_4 = client.post(
+        "/api/v1/users",
+        json={"username": "user4chars", "password": "abcd", "role": "base"},
+    )
+    assert res_create_4.status_code == 201
+    created_id = res_create_4.json()["id"]
+
+    # 2. User creation with 3-char password -> 422 Unprocessable Entity
+    res_create_3 = client.post(
+        "/api/v1/users",
+        json={"username": "user3chars", "password": "abc", "role": "base"},
+    )
+    assert res_create_3.status_code == 422
+
+    # 3. Admin reset password with 4-char password -> 200 OK
+    res_reset_4 = client.put(
+        f"/api/v1/users/{created_id}/password",
+        json={"new_password": "1234"},
+    )
+    assert res_reset_4.status_code == 200
+
+    # 4. Admin reset password with 3-char password -> 422 Unprocessable Entity
+    res_reset_3 = client.put(
+        f"/api/v1/users/{created_id}/password",
+        json={"new_password": "123"},
+    )
+    assert res_reset_3.status_code == 422
+
+    # 5. User self change-password with 4-char password -> 200 OK
+    res_cp_4 = client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "admin123", "new_password": "pass"},
+    )
+    assert res_cp_4.status_code == 200
+
+    # 6. User self change-password with 3-char password -> 422 Unprocessable Entity
+    res_cp_3 = client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "pass", "new_password": "pas"},
+    )
+    assert res_cp_3.status_code == 422

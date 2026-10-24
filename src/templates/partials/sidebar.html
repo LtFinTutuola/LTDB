@@ -33,24 +33,24 @@
 
   </div>
 
-  <!-- Bottom: settings + admin chip -->
+  <!-- Bottom: action buttons on the left + user chip on the right -->
   <div class="sidebar__bottom">
-    {% if not current_user or current_user.role == 'admin' %}
-    <a href="/settings" class="sidebar__settings-btn {% if active_page == 'settings' %}sidebar__settings-btn--active{% endif %}" title="Impostazioni">
-      <span class="material-symbols-rounded">settings</span>
-    </a>
-    {% endif %}
-    <div class="sidebar__user-container">
+    <div class="sidebar__bottom-left">
+      {% if not current_user or current_user.role == 'admin' %}
+      <a href="/settings" class="sidebar__action-btn {% if active_page == 'settings' %}sidebar__action-btn--active{% endif %}" title="Impostazioni">
+        <span class="material-symbols-rounded">settings</span>
+      </a>
+      {% endif %}
+      <button type="button" class="sidebar__action-btn" id="user-change-password-btn" title="Modifica password">
+        <span class="material-symbols-rounded">key</span>
+      </button>
+      <button type="button" class="sidebar__action-btn" id="user-logout-btn" title="Esci">
+        <span class="material-symbols-rounded">logout</span>
+      </button>
+    </div>
+    <div class="sidebar__user-wrapper" title="{% if current_user %}{{ current_user.username }}{% if current_user.role == 'admin' %} (admin){% endif %}{% else %}admin{% endif %}">
       <div class="chip chip--admin">
-        {% if current_user %}{{ current_user.username }}{% if current_user.role == 'admin' %} (admin){% endif %}{% else %}admin{% endif %}
-      </div>
-      <div class="sidebar__user-actions">
-        <button type="button" class="sidebar__user-action-btn" id="user-change-password-btn" title="Cambia password">
-          <span class="material-symbols-rounded">key</span>
-        </button>
-        <button type="button" class="sidebar__user-action-btn" id="user-logout-btn" title="Esci">
-          <span class="material-symbols-rounded">logout</span>
-        </button>
+        <span class="chip__username">{% if current_user %}{{ current_user.username }}{% if current_user.role == 'admin' %} (admin){% endif %}{% else %}admin{% endif %}</span>
       </div>
     </div>
   </div>

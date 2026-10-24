@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     AUTH_TOKEN_TTL_DAYS: int = int(auth_config.get("token_ttl_days", 90))
     AUTH_COOKIE_NAME: str = str(auth_config.get("cookie_name", "ltdb_token"))
     AUTH_COOKIE_SECURE: bool = bool(auth_config.get("cookie_secure", False))
-    AUTH_MIN_PASSWORD_LENGTH: int = int(auth_config.get("min_password_length", 6))
+    AUTH_MIN_PASSWORD_LENGTH: int = int(auth_config.get("min_password_length", 4))
     
     class Config:
         env_file = ".env"

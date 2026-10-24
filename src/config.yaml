@@ -17,4 +17,4 @@ auth:
   token_ttl_days: 90
   cookie_name: ltdb_token
   cookie_secure: false
-  min_password_length: 6
+  min_password_length: 4

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>{% block title %}LTDB{% endblock %}</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=20261021">
+  <link rel="stylesheet" href="/static/css/app.css?v=20261024c">
   <script type="module" src="/static/js/auth.js"></script>
   {% block extra_head %}{% endblock %}
 </head>
@@ -44,7 +44,38 @@
         <span class="mobile-nav-label">Impostazioni</span>
       </a>
       {% endif %}
+      <button type="button" class="mobile-nav-item" id="mobile-user-btn" aria-label="Profilo Utente">
+        <span class="material-symbols-rounded">account_circle</span>
+        <span class="mobile-nav-label">Utente</span>
+      </button>
     </nav>
+    <!-- Mobile User Bottom Sheet -->
+    <div id="mobile-user-sheet" class="mobile-sheet-backdrop" style="display: none;">
+      <div class="mobile-sheet-card">
+        <div class="mobile-sheet-header">
+          <div class="mobile-sheet-user-info">
+            <div class="mobile-sheet-avatar">
+              <span class="material-symbols-rounded">person</span>
+            </div>
+            <div class="mobile-sheet-user-meta">
+              <span class="mobile-sheet-username">{% if current_user %}{{ current_user.username }}{% else %}admin{% endif %}</span>
+              <span class="mobile-sheet-role">{% if current_user %}{{ current_user.role|upper }}{% else %}ADMIN{% endif %}</span>
+            </div>
+          </div>
+          <button type="button" class="mobile-sheet-close" id="mobile-user-sheet-close" aria-label="Chiudi">&times;</button>
+        </div>
+        <div class="mobile-sheet-actions">
+          <button type="button" class="mobile-sheet-action-btn" id="mobile-btn-change-password">
+            <span class="material-symbols-rounded">key</span>
+            <span>Modifica Password</span>
+          </button>
+          <button type="button" class="mobile-sheet-action-btn mobile-sheet-action-btn--danger" id="mobile-btn-logout">
+            <span class="material-symbols-rounded">logout</span>
+            <span>Esci dall'Account</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
   {% block scripts %}{% endblock %}
   {% block extra_scripts %}{% endblock %}

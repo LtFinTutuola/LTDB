@@ -22,7 +22,7 @@ class UserOut(BaseModel):
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=32, pattern=r"^[a-zA-Z0-9._-]+$")
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=4)
     role: str = Field(default="base", pattern=r"^(admin|base)$")
 
 
@@ -32,4 +32,4 @@ class UserUpdate(BaseModel):
 
 
 class SetPasswordRequest(BaseModel):
-    new_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=4)

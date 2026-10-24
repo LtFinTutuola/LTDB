@@ -126,29 +126,27 @@
 
 /* ---- Bottom ---- */
 .sidebar__bottom {
-    padding: var(--space-md);
+    padding: var(--space-sm) var(--space-md);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    /* Punto 2: rimosso border-top */
+    gap: var(--space-xs);
+    min-height: 48px;
+    box-sizing: border-box;
 }
 
-/* Punto 2: semplificato il chip admin (rimosso bordo esplicito) */
-.chip--admin {
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-    padding: var(--space-xs) var(--space-md);
-    border-radius: var(--radius-pill);
-    font-size: var(--font-size-sm);
-    font-weight: 500;
-    letter-spacing: 0.03em;
-    white-space: nowrap;
+.sidebar__bottom-left {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
 }
 
+.sidebar__action-btn,
 .sidebar__settings-btn {
     background: transparent;
     border: none;
-    color: var(--text-secondary);
+    color: var(--accent);
     text-decoration: none;
     cursor: pointer;
     padding: var(--space-xs);
@@ -159,14 +157,62 @@
     transition: background var(--transition-fast), color var(--transition-fast);
 }
 
+.sidebar__action-btn:hover,
 .sidebar__settings-btn:hover {
     background: var(--bg-elevated);
-    color: var(--text-primary);
+    color: var(--accent-hover);
 }
 
+.sidebar__action-btn--active,
 .sidebar__settings-btn--active {
     background: var(--bg-elevated);
     color: var(--accent);
+}
+
+.sidebar__action-btn .material-symbols-rounded,
+.sidebar__settings-btn .material-symbols-rounded {
+    font-size: 20px;
+    line-height: 1;
+    color: var(--accent);
+    transition: color var(--transition-fast);
+}
+
+.sidebar__action-btn:hover .material-symbols-rounded,
+.sidebar__settings-btn:hover .material-symbols-rounded {
+    color: var(--accent-hover);
+}
+
+.sidebar__user-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
+    flex: 1;
+}
+
+.chip--admin,
+.chip--user {
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    padding: var(--space-xs) var(--space-sm);
+    border-radius: var(--radius-pill);
+    font-size: var(--font-size-xs, 12px);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    max-width: 100%;
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+}
+
+.chip--admin .chip__username,
+.chip--user .chip__username {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+    max-width: 100%;
 }
 
 
@@ -296,10 +342,18 @@
         color: var(--text-muted);
         text-decoration: none;
         padding: var(--space-xs) 0;
+        margin: 0;
         min-width: 0;
+        background: transparent;
+        border: none;
+        outline: none;
+        font: inherit;
+        font-family: inherit;
         cursor: pointer;
         transition: color var(--transition-fast), background var(--transition-fast);
         -webkit-tap-highlight-color: transparent;
+        appearance: none;
+        -webkit-appearance: none;
     }
 
     .mobile-nav-item .material-symbols-rounded {

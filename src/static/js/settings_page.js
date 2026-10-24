@@ -297,10 +297,10 @@ async function updateUserField(userId, payload) {
 }
 
 function promptResetPassword(userId, username) {
-    const newPass = prompt(`Inserisci la nuova password per l'utente "${username}" (minimo 6 caratteri):`);
+    const newPass = prompt(`Inserisci la nuova password per l'utente "${username}" (minimo 4 caratteri):`);
     if (!newPass) return;
-    if (newPass.length < 6) {
-        alert('La password deve contenere almeno 6 caratteri.');
+    if (newPass.length < 4) {
+        alert('La password deve contenere almeno 4 caratteri.');
         return;
     }
 
