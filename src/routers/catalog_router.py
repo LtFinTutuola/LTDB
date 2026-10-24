@@ -461,6 +461,50 @@ async def catalog_search(
         )
 
 
+@router.get("/search", response_model=CatalogSearchResponse)
+async def catalog_search_get(
+    query: str = Query("", description="Search term or code"),
+    in_stock_only: bool = Query(False, description="Filter only items in stock"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Page size"),
+    sort_by: str = Query("date", description="Sort criteria"),
+    sort_dir: str = Query("desc", description="Sort direction"),
+    db: Session = Depends(get_db),
+):
+    """
+    Search warehouse catalog via HTTP GET for mobile devices, URL query strings, and standard GET clients.
+    """
+    logger.log_execution("catalog_router", "request_received", "ok",
+                         path="/api/v1/catalog/search", method="GET",
+                         query=query, page=page,
+                         sort_by=sort_by, sort_dir=sort_dir)
+    start = time.time()
+    try:
+        result = await search_service.execute_search(
+            db=db,
+            query=query,
+            in_stock_only=in_stock_only,
+            page=page,
+            page_size=page_size,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+        )
+        latency_ms = int((time.time() - start) * 1000)
+        logger.log_execution("catalog_router", "response_dispatched", "ok",
+                             path="/api/v1/catalog/search",
+                             results_count=len(result.get("results", [])),
+                             latency_ms=latency_ms)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.log_execution("catalog_router", "exception_caught", "err", exc=exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc) or "unknown server error",
+        )
+
+
 @router.post("/search/semantic", response_model=SemanticSearchResponse)
 async def semantic_search(
     request: SemanticSearchRequest,
@@ -483,6 +527,50 @@ async def semantic_search(
             page_size=request.page_size,
             sort_by=request.sort_by,
             sort_dir=request.sort_dir,
+        )
+        latency_ms = int((time.time() - start) * 1000)
+        logger.log_execution("catalog_router", "response_dispatched", "ok",
+                             path="/api/v1/catalog/search/semantic",
+                             results_count=len(result.get("results", [])),
+                             latency_ms=latency_ms)
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.log_execution("catalog_router", "exception_caught", "err", exc=exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc) or "unknown server error",
+        )
+
+
+@router.get("/search/semantic", response_model=SemanticSearchResponse)
+async def semantic_search_get(
+    query: str = Query("", description="Natural language search term"),
+    in_stock_only: bool = Query(False, description="Filter only items in stock"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Page size"),
+    sort_by: str = Query("date", description="Sort criteria"),
+    sort_dir: str = Query("desc", description="Sort direction"),
+    db: Session = Depends(get_db),
+):
+    """
+    Backward-compatibility alias for warehouse catalog search via HTTP GET.
+    """
+    logger.log_execution("catalog_router", "request_received", "ok",
+                         path="/api/v1/catalog/search/semantic", method="GET",
+                         query=query, page=page,
+                         sort_by=sort_by, sort_dir=sort_dir)
+    start = time.time()
+    try:
+        result = await search_service.execute_search(
+            db=db,
+            query=query,
+            in_stock_only=in_stock_only,
+            page=page,
+            page_size=page_size,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
         )
         latency_ms = int((time.time() - start) * 1000)
         logger.log_execution("catalog_router", "response_dispatched", "ok",

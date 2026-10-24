@@ -531,7 +531,7 @@ function _bindSearchControls() {
         });
 
         searchInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' || e.keyCode === 13 || e.which === 13) {
                 e.preventDefault();
                 executeWarehouseSearch();
             }

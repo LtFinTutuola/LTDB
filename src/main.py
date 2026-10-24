@@ -15,6 +15,7 @@ from src.routers.settings_router import router as settings_router
 # Initialize the logger at startup
 logger = get_logger()
 
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
@@ -26,6 +27,15 @@ async def lifespan(app: FastAPI):
     logger.log_execution("main", "shutdown", "ok", message="Shutting down application services...")
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+
+# Enable CORS for mobile devices, LAN IPs, and web clients
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Static files (JS, CSS)
 _STATIC_DIR = Path(__file__).resolve().parent / "static"

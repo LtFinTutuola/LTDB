@@ -1054,3 +1054,63 @@ class TestCatalogPhotoEndpoints:
         assert serve_res.status_code == 200
         assert serve_res.content == raw_bytes
 
+
+class TestCatalogSearchGetAndPostEndpoints:
+    def test_search_post_and_get_both_supported(self, db_session):
+        """
+        Verify that warehouse search can be invoked via both POST (JSON body)
+        and GET (query parameters), preventing HTTP 405 Method Not Allowed.
+        """
+        client = TestClient(app)
+        brand = _make_brand(db_session, "SearchBrand")
+        bp = _make_blueprint(db_session, brand.id, article_name="Search Tote Bag")
+
+        # 1. POST /api/v1/catalog/search
+        post_res = client.post(
+            "/api/v1/catalog/search",
+            json={"query": "Tote", "in_stock_only": False, "page": 1, "page_size": 10},
+        )
+        assert post_res.status_code == 200
+        post_data = post_res.json()
+        assert "results" in post_data
+
+        # 2. GET /api/v1/catalog/search
+        get_res = client.get(
+            "/api/v1/catalog/search?query=Tote&in_stock_only=false&page=1&page_size=10"
+        )
+        assert get_res.status_code == 200
+        get_data = get_res.json()
+        assert "results" in get_data
+
+        # 3. POST /api/v1/catalog/search/semantic (alias)
+        semantic_post = client.post(
+            "/api/v1/catalog/search/semantic",
+            json={"query": "Tote", "in_stock_only": False, "page": 1, "page_size": 10},
+        )
+        assert semantic_post.status_code == 200
+        assert "results" in semantic_post.json()
+
+        # 4. GET /api/v1/catalog/search/semantic (alias GET)
+        semantic_get = client.get(
+            "/api/v1/catalog/search/semantic?query=Tote&in_stock_only=false&page=1&page_size=10"
+        )
+        assert semantic_get.status_code == 200
+        assert "results" in semantic_get.json()
+
+    def test_search_cors_preflight_options(self, db_session):
+        """
+        Verify that CORS OPTIONS preflight request succeeds with 200 OK.
+        """
+        client = TestClient(app)
+        res = client.options(
+            "/api/v1/catalog/search",
+            headers={
+                "Origin": "http://192.168.1.100:8000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "Content-Type",
+            },
+        )
+        assert res.status_code == 200
+        assert res.headers.get("access-control-allow-origin") in ("*", "http://192.168.1.100:8000")
+
+
