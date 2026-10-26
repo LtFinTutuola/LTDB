@@ -1,7 +1,11 @@
-import * as api from './api.js?v=20261026_2';
+import * as api from './api.js?v=20261026_4';
 import { setupBarcodeScanner } from './barcode_scanner.js?v=20261022_6';
 import { requestPhotoUpload } from './photo_upload_helper.js?v=20261022_6';
-import { openBlueprintRevision } from './blueprint_revision.js?v=20261026_2';
+import {
+    openBlueprintRevision,
+    refreshWarehouseAnomaliesBadge,
+    openWarehouseAnomaliesModal,
+} from './blueprint_revision.js?v=20261026_4';
 
 let _controlsBound = false;
 let _editingItem = null;
@@ -25,6 +29,12 @@ export async function initWarehouse() {
     if (!_controlsBound) {
         _bindSearchControls();
         _bindArticleModals();
+        const anomaliesBtn = document.getElementById('btn-warehouse-anomalies');
+        if (anomaliesBtn) {
+            anomaliesBtn.addEventListener('click', () => {
+                openWarehouseAnomaliesModal(_refreshWarehouseView);
+            });
+        }
         _controlsBound = true;
     }
 
@@ -42,6 +52,7 @@ async function _refreshWarehouseView() {
     } else {
         await fetchLatestItems(inStockOnly, _currentPage);
     }
+    await refreshWarehouseAnomaliesBadge();
 }
 
 function _esc(str) {

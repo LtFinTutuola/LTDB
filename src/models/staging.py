@@ -16,6 +16,7 @@ class JobType(str, enum.Enum):
     SINGLE_ITEM_IMPORT = "single_item_import"
     HEURISTIC_DEDUCTION = "heuristic_deduction"
     HEURISTIC_REVISION = "heuristic_revision"
+    WAREHOUSE_ANOMALIES = "warehouse_anomalies"
 
 
 class StagingArea(Base, UUIDMixin, TimestampMixin):

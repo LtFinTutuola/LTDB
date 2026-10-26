@@ -447,8 +447,12 @@ class TestBlueprintRevisionEndToEnd:
 
             plan = stage_job["data"]["reconciliation_plan"]
             assert len(plan["target_split"]["after"]) == 2
-            assert len(plan["warehouse_splits"]) == 1
-            assert len(plan["warehouse_merges"]) == 1
+            # All partitions in target_split["after"] are recreated from scratch as new blueprints
+            assert all(abp["is_new"] is True for abp in plan["target_split"]["after"])
+            assert all(abp["id"].startswith("new_bp_") for abp in plan["target_split"]["after"])
+            # Staging Area is strictly scoped to the split blueprint (no auto-populated warehouse splits/merges)
+            assert plan["warehouse_splits"] == []
+            assert plan["warehouse_merges"] == []
             assert len(plan["aligned_blueprints"]) == 1
 
             # 4. Inline Edit in Staging Area before commit
@@ -466,24 +470,38 @@ class TestBlueprintRevisionEndToEnd:
             assert updated_after["article_name"] == "Portafoglio GuessTest Mini Editato"
             assert updated_after["tags"] == ["portafoglio", "mini"]
 
-            # 5. Execute Atomic 5-Step Commit
+            # 5. Execute Atomic Commit
             res_commit = client.post(f"/api/v1/brands/blueprint-revision/{job_id}/commit")
             assert res_commit.status_code == 200
             commit_data = res_commit.json()
             assert commit_data["status"] == "success"
             assert commit_data["splits_created"] == 2
-            assert commit_data["merges_executed"] == 1
+            assert commit_data["merges_executed"] == 0
+            # Remaining warehouse anomalies (bp-extra-split-1 and bp-dup-1/bp-dup-2) are signaled for manual review
+            assert commit_data["remaining_anomalies"] == 2
 
         # Verify Database State after Atomic Commit:
-        # A) Original bp-merged-1 keeps the 3 HWVG870123* articles and has normalized code HWVG870123#
-        bp_orig = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-merged-1").first()
-        assert bp_orig is not None
-        assert bp_orig.normalized_vendor_code == "HWVG870123#"
-        orig_arts = db_session.query(Article).filter(Article.article_blueprint_id == "bp-merged-1").all()
-        assert len(orig_arts) == 3
+        # A) Old fused bp-merged-1 was replaced and deleted; a brand-new blueprint exists for HWVG870123#
+        bp_old = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-merged-1").first()
+        assert bp_old is None
 
-        # B) Newly split blueprint exists with normalized code HWVG870999#, edited name, reassigned article, and cloned nero photo
-        bp_new = (
+        bp_first_new = (
+            db_session.query(ArticleBlueprint)
+            .filter(
+                ArticleBlueprint.brand_id == "brand-guess-1",
+                ArticleBlueprint.normalized_vendor_code == "HWVG870123#",
+            )
+            .first()
+        )
+        assert bp_first_new is not None
+        assert bp_first_new.id != "bp-merged-1"
+        orig_arts = db_session.query(Article).filter(Article.article_blueprint_id == bp_first_new.id).all()
+        assert len(orig_arts) == 3
+        first_photos = db_session.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp_first_new.id).all()
+        assert {p.canonical_color_name for p in first_photos} == {"nero", "rosso"}
+
+        # B) Second newly split blueprint exists with normalized code HWVG870999#, edited name, reassigned article, and cloned nero photo
+        bp_second_new = (
             db_session.query(ArticleBlueprint)
             .filter(
                 ArticleBlueprint.brand_id == "brand-guess-1",
@@ -491,28 +509,19 @@ class TestBlueprintRevisionEndToEnd:
             )
             .first()
         )
-        assert bp_new is not None
-        assert bp_new.article_name == "Portafoglio GuessTest Mini Editato"
-        new_arts = db_session.query(Article).filter(Article.article_blueprint_id == bp_new.id).all()
+        assert bp_second_new is not None
+        assert bp_second_new.article_name == "Portafoglio GuessTest Mini Editato"
+        new_arts = db_session.query(Article).filter(Article.article_blueprint_id == bp_second_new.id).all()
         assert len(new_arts) == 1
         assert new_arts[0].id == "art-999-bla-1"
-        new_photos = db_session.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp_new.id).all()
+        new_photos = db_session.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp_second_new.id).all()
         assert len(new_photos) == 1
         assert new_photos[0].canonical_color_name == "nero"
 
-        # C) Duplicate blueprints (bp-dup-1 & bp-dup-2) merged into bp-dup-1 with normalized code HWVG870777#
-        bp_survivor = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-dup-1").first()
-        bp_absorbed = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-dup-2").first()
-        assert bp_survivor is not None
-        assert bp_absorbed is None
-        assert bp_survivor.normalized_vendor_code == "HWVG870777#"
-        merged_arts = db_session.query(Article).filter(Article.article_blueprint_id == "bp-dup-1").all()
-        assert len(merged_arts) == 2
-        survivor_photos = (
-            db_session.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == "bp-dup-1").all()
-        )
-        # Must have preserved both 'nero' and 'bianco' photos without UniqueConstraint error
-        assert {p.canonical_color_name for p in survivor_photos} == {"nero", "bianco"}
+        # C) Untouched anomalous blueprints in warehouse (bp-extra-split-1 and bp-dup-1/bp-dup-2) remain intact until manual review
+        assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-extra-split-1").first() is not None
+        assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-dup-1").first() is not None
+        assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-dup-2").first() is not None
 
         # D) Aligned blueprint (bp-aligned-1) updated its normalized_vendor_code to HWVG870888#
         bp_al = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-aligned-1").first()
@@ -733,4 +742,215 @@ class TestBlueprintRevisionPhotoStagingAndPersistence:
             called_urls = [call[1]["photo_url"] for call in mock_dl_save.call_args_list]
             assert any(u.startswith("data:image/jpeg;base64,") for u in called_urls)
             assert "https://example.com/test_bag_red.png" in called_urls
+
+
+class TestManualAnomalyCorrectionAndFromScratchRecreation:
+    """Tests for warehouse anomalies detection and manual one-by-one blueprint correction without regex recalculation."""
+
+    def test_detect_anomalies_and_fix_manually_one_by_one(self, db_session):
+        _seed_brand_and_warehouse(db_session)
+
+        # 1. Before any brand rule revision is executed by the operator, anomalies queue is empty (total_count == 0)
+        #    Untouched brands (The Bridge, Gherardini, Alviero Martini, etc.) NEVER show up in anomalies!
+        res_initial_anom = client.get("/api/v1/brands/blueprint-revision/anomalies")
+        assert res_initial_anom.status_code == 200
+        assert res_initial_anom.json()["total_count"] == 0
+
+        # 2. Operator revises bp-merged-1 of brand-guess-1: regex is recalculated and Guess articles are reviewed
+        mock_deduction = {
+            "regex": r"^HWVG87[0-9]{4}(?P<color_code>[A-Z]{3})$",
+            "explanation": "I primi 10 caratteri indicano il modello, gli ultimi 3 il colore.",
+            "examples": [{"raw": "HWVG870123BLA", "normalized": "HWVG870123#"}],
+        }
+        with patch("src.services.blueprint_revision_service.CodesDeductionAgent.aexecute", new_callable=AsyncMock, return_value=mock_deduction), \
+             patch("src.services.blueprint_revision_service.LLMClient.call", new_callable=AsyncMock, return_value="Spiegazione per Guess"), \
+             patch("src.services.blueprint_revision_service.ArticleBlueprintsAgent.aexecute", new_callable=AsyncMock, return_value={"blueprints": []}), \
+             patch("src.services.blueprint_revision_service.LLMClient.generate_embedding_sync", return_value=[0.1, 0.2, 0.3]):
+
+            res_deduce = client.post(
+                "/api/v1/brands/blueprint-revision/deduce-rule",
+                json={
+                    "blueprint_id": "bp-merged-1",
+                    "partitions": [
+                        {
+                            "group_id": "group_original",
+                            "label": "Borsa Grande",
+                            "is_original": True,
+                            "article_ids": ["art-123-bla-1", "art-123-bla-2", "art-123-red-1"],
+                            "supplier_codes": ["HWVG870123BLA", "HWVG870123RED"],
+                        },
+                        {
+                            "group_id": "group_new_1",
+                            "label": "Portafoglio Piccolo",
+                            "is_original": False,
+                            "article_ids": ["art-999-bla-1"],
+                            "supplier_codes": ["HWVG870999BLA"],
+                        },
+                    ],
+                },
+            )
+            assert res_deduce.status_code == 200
+            rev_job_id = res_deduce.json()["job_id"]
+
+            res_prep = client.post(f"/api/v1/brands/blueprint-revision/{rev_job_id}/prepare-staging")
+            assert res_prep.status_code == 200
+
+            res_commit = client.post(f"/api/v1/brands/blueprint-revision/{rev_job_id}/commit")
+            assert res_commit.status_code == 200
+            assert res_commit.json()["remaining_anomalies"] == 2
+
+        # 3. GET /anomalies now returns ONLY the 2 anomalies that emerged for the brand of reference (brand-guess-1):
+        #    - bp-extra-split-1 (SPLIT_REQUIRED)
+        #    - bp-dup-1 / bp-dup-2 (DUPLICATE_MODEL)
+        res_anom = client.get("/api/v1/brands/blueprint-revision/anomalies")
+        assert res_anom.status_code == 200
+        anom_data = res_anom.json()
+        assert anom_data["total_count"] == 2
+        anomaly_by_bp = {item["blueprint_id"]: item for item in anom_data["anomalies"]}
+        assert "bp-extra-split-1" in anomaly_by_bp
+        assert anomaly_by_bp["bp-extra-split-1"]["anomaly_type"] == "SPLIT_REQUIRED"
+        assert anomaly_by_bp["bp-extra-split-1"]["brand_id"] == "brand-guess-1"
+        assert "bp-dup-1" in anomaly_by_bp
+        assert anomaly_by_bp["bp-dup-1"]["anomaly_type"] == "DUPLICATE_MODEL"
+        assert anomaly_by_bp["bp-dup-1"]["brand_id"] == "brand-guess-1"
+        assert anomaly_by_bp["bp-dup-1"]["related_blueprint_ids"] == ["bp-dup-2"]
+
+        # 2. Operator manually splits bp-extra-split-1 WITHOUT recalculating the brand heuristic
+        with patch(
+            "src.services.blueprint_revision_service.CodesDeductionAgent.aexecute",
+            new_callable=AsyncMock,
+        ) as mock_deduce_agent, patch(
+            "src.services.blueprint_revision_service.ArticleBlueprintsAgent.aexecute",
+            new_callable=AsyncMock,
+            return_value={
+                "blueprints": [
+                    {
+                        "vendor_code": "HWVG870555BLA",
+                        "article_name": "Zaino GuessTest Grande Nuovo",
+                        "description": "Descrizione generata da zero per Zaino Grande",
+                        "tags": ["zaino", "grande"],
+                        "materials": ["ecopelle"],
+                    },
+                    {
+                        "vendor_code": "HWVG870666BLA",
+                        "article_name": "Beauty Case GuessTest Nuovo",
+                        "description": "Descrizione generata da zero per Beauty Case",
+                        "tags": ["beauty", "piccolo"],
+                        "materials": ["ecopelle"],
+                    },
+                ]
+            },
+        ), patch(
+            "src.services.blueprint_revision_service.LLMClient.generate_embedding_sync",
+            return_value=[0.2, 0.3, 0.4],
+        ):
+            res_manual_prep = client.post(
+                "/api/v1/brands/blueprint-revision/prepare-manual-split",
+                json={
+                    "blueprint_id": "bp-extra-split-1",
+                    "source_blueprint_ids": [],
+                    "partitions": [
+                        {
+                            "group_id": "group_original",
+                            "label": "Zaino Grande",
+                            "is_original": True,
+                            "article_ids": ["art-555-bla-1"],
+                            "supplier_codes": ["HWVG870555BLA"],
+                        },
+                        {
+                            "group_id": "group_new_1",
+                            "label": "Beauty Case",
+                            "is_original": False,
+                            "article_ids": ["art-666-bla-1"],
+                            "supplier_codes": ["HWVG870666BLA"],
+                        },
+                    ],
+                },
+            )
+            assert res_manual_prep.status_code == 200
+            # Verify heuristic deduction was NOT invoked
+            mock_deduce_agent.assert_not_called()
+
+            manual_job = res_manual_prep.json()
+            manual_job_id = manual_job["job_id"]
+            assert manual_job["data"]["skip_rule_update"] is True
+            after_cards = manual_job["data"]["reconciliation_plan"]["target_split"]["after"]
+            assert len(after_cards) == 2
+            assert after_cards[0]["article_name"] == "Zaino GuessTest Grande Nuovo"
+            assert after_cards[0]["description"] == "Descrizione generata da zero per Zaino Grande"
+            assert after_cards[1]["article_name"] == "Beauty Case GuessTest Nuovo"
+
+            # Commit manual split
+            res_manual_commit = client.post(f"/api/v1/brands/blueprint-revision/{manual_job_id}/commit")
+            assert res_manual_commit.status_code == 200
+            assert res_manual_commit.json()["splits_created"] == 2
+
+        # Verify bp-extra-split-1 was deleted and replaced by 2 brand-new blueprints
+        assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-extra-split-1").first() is None
+        bp_555 = (
+            db_session.query(ArticleBlueprint)
+            .filter(ArticleBlueprint.normalized_vendor_code == "HWVG870555#")
+            .first()
+        )
+        bp_666 = (
+            db_session.query(ArticleBlueprint)
+            .filter(ArticleBlueprint.normalized_vendor_code == "HWVG870666#")
+            .first()
+        )
+        assert bp_555 is not None
+        assert bp_555.article_name == "Zaino GuessTest Grande Nuovo"
+        assert bp_666 is not None
+        assert bp_666.article_name == "Beauty Case GuessTest Nuovo"
+
+        # 3. Operator manually resolves duplicate blueprints (bp-dup-1 + bp-dup-2)
+        res_ctx_dup = client.get("/api/v1/brands/blueprint-revision/bp-dup-1/context?related_ids=bp-dup-2")
+        assert res_ctx_dup.status_code == 200
+        ctx_dup = res_ctx_dup.json()
+        # Both articles from bp-dup-1 and bp-dup-2 are loaded in the same screen
+        assert len(ctx_dup["article_groups"]) == 2
+
+        with patch(
+            "src.services.blueprint_revision_service.ArticleBlueprintsAgent.aexecute",
+            new_callable=AsyncMock,
+            return_value={"blueprints": []},
+        ), patch(
+            "src.services.blueprint_revision_service.LLMClient.generate_embedding_sync",
+            return_value=[0.5, 0.5, 0.5],
+        ):
+            res_dup_prep = client.post(
+                "/api/v1/brands/blueprint-revision/prepare-manual-split",
+                json={
+                    "blueprint_id": "bp-dup-1",
+                    "source_blueprint_ids": ["bp-dup-2"],
+                    "partitions": [
+                        {
+                            "group_id": "group_original",
+                            "label": "Tracolla GuessTest Unificata",
+                            "is_original": True,
+                            "article_ids": ["art-777-bla-1", "art-777-whi-1"],
+                            "supplier_codes": ["HWVG870777BLA", "HWVG870777WHI"],
+                        }
+                    ],
+                },
+            )
+            assert res_dup_prep.status_code == 200
+            dup_job_id = res_dup_prep.json()["job_id"]
+
+            res_dup_commit = client.post(f"/api/v1/brands/blueprint-revision/{dup_job_id}/commit")
+            assert res_dup_commit.status_code == 200
+            # All anomalies for this brand are now resolved (queue is empty)
+            assert res_dup_commit.json()["remaining_anomalies"] == 0
+
+        # Verify both old duplicate blueprints were replaced by 1 new blueprint preserving both nero and bianco photos
+        assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-dup-1").first() is None
+        assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-dup-2").first() is None
+        bp_777 = (
+            db_session.query(ArticleBlueprint)
+            .filter(ArticleBlueprint.normalized_vendor_code == "HWVG870777#")
+            .first()
+        )
+        assert bp_777 is not None
+        photos_777 = db_session.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp_777.id).all()
+        assert {p.canonical_color_name for p in photos_777} == {"nero", "bianco"}
+
 

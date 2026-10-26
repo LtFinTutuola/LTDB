@@ -20,9 +20,11 @@ from src.schemas.data_ingestion import (
     HeuristicDeductionRequest,
     HeuristicJobStatusResponse,
     BlueprintRevisionContextResponse,
+    ManualSplitPrepareRequest,
     RuleDeductionRequest,
     RuleDeductionResponse,
     ReconciliationPlanUpdateRequest,
+    WarehouseAnomaliesResponse,
 )
 
 router = APIRouter(prefix="/api/v1/brands", tags=["Heuristic Deduction"])
@@ -71,15 +73,47 @@ def confirm_heuristic(
 
 
 @router.get(
+    "/blueprint-revision/anomalies",
+    response_model=WarehouseAnomaliesResponse,
+)
+def get_warehouse_anomalies(
+    brand_id: Optional[str] = Query(None, description="Optional brand ID filter"),
+    db: Session = Depends(get_db),
+):
+    """Scan warehouse blueprints against active BrandHeuristic rules and return unresolved anomalies."""
+    return blueprint_revision_service.get_warehouse_anomalies(db, brand_id=brand_id)
+
+
+@router.post("/blueprint-revision/prepare-manual-split")
+async def prepare_manual_blueprint_split(
+    request: ManualSplitPrepareRequest,
+    db: Session = Depends(get_db),
+):
+    """Prepare a Before & After Staging Area plan directly from manual partitions without recalculating the brand heuristic."""
+    return await blueprint_revision_service.prepare_manual_split_staging_plan(db, request)
+
+
+@router.get(
     "/blueprint-revision/{blueprint_id}/context",
     response_model=BlueprintRevisionContextResponse,
 )
 def get_blueprint_revision_context(
     blueprint_id: str,
+    related_ids: Optional[str] = Query(
+        None,
+        description="Optional comma-separated list of additional blueprint IDs to include in the selection screen",
+    ),
     db: Session = Depends(get_db),
 ):
     """Return physical article groups and metadata for a blueprint to initiate visual separation."""
-    return blueprint_revision_service.get_blueprint_revision_context(db, blueprint_id)
+    parsed_related_ids = (
+        [item.strip() for item in related_ids.split(",") if item.strip()]
+        if related_ids
+        else None
+    )
+    return blueprint_revision_service.get_blueprint_revision_context(
+        db, blueprint_id, related_blueprint_ids=parsed_related_ids
+    )
 
 
 @router.post(

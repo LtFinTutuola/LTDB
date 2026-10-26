@@ -35,7 +35,7 @@ from src.agents.codes_deduction_agent import CodesDeductionAgent
 from src.agents.llm_client import LLMClient
 from src.core.logger import get_logger
 from src.models.pim import ArticleBlueprint, ArticlePhoto, Brand, BrandHeuristic, Category
-from src.models.staging import JobStatus, JobType
+from src.models.staging import JobStatus, JobType, StagingArea
 from src.models.wms import Article, ArticleStatus
 from src.repositories import staging_repo
 from src.repositories.pim_repo import category_repo, heuristic_repo, pim_repo
@@ -44,10 +44,13 @@ from src.schemas.data_ingestion import (
     BlueprintRevisionContextResponse,
     BlueprintRevisionPhotoRetryRequest,
     HeuristicExampleSchema,
+    ManualSplitPrepareRequest,
     PartitionGroupInput,
     ReconciliationPlanUpdateRequest,
     RuleDeductionRequest,
     RuleDeductionResponse,
+    WarehouseAnomaliesResponse,
+    WarehouseAnomalyItemSchema,
 )
 from src.services import photo_service
 from src.services.pim_service import build_blueprint_embedding_text
@@ -151,10 +154,15 @@ def _build_article_groups_for_blueprint(
 # Phase 1: Context Retrieval for Visual Bucket Selector
 # ---------------------------------------------------------------------------
 
-def get_blueprint_revision_context(db: Session, blueprint_id: str) -> BlueprintRevisionContextResponse:
+def get_blueprint_revision_context(
+    db: Session,
+    blueprint_id: str,
+    related_blueprint_ids: Optional[List[str]] = None,
+) -> BlueprintRevisionContextResponse:
     """
     Fetch full blueprint metadata and all physical articles (grouped by supplier_code + colors + ean)
     to populate the visual Bucket Selector screen.
+    If related_blueprint_ids are provided (e.g. duplicate model anomaly), loads articles across all of them.
     """
     logger.log_execution("blueprint_revision_service", "get_context_start", "ok", blueprint_id=blueprint_id)
 
@@ -170,8 +178,14 @@ def get_blueprint_revision_context(db: Session, blueprint_id: str) -> BlueprintR
 
     cat_dict, sub_cat_dict = _resolve_category_dicts(db, bp)
 
-    bp_articles = db.query(Article).filter(Article.article_blueprint_id == bp.id).all()
-    bp_photos = db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp.id).all()
+    all_bp_ids = [str(bp.id)]
+    if related_blueprint_ids:
+        for rid in related_blueprint_ids:
+            if rid and str(rid) not in all_bp_ids:
+                all_bp_ids.append(str(rid))
+
+    bp_articles = db.query(Article).filter(Article.article_blueprint_id.in_(all_bp_ids)).all()
+    bp_photos = db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id.in_(all_bp_ids)).all()
 
     article_groups = _build_article_groups_for_blueprint(bp_articles, bp_photos)
     sample_codes = [g.supplier_code for g in article_groups if g.supplier_code]
@@ -196,6 +210,191 @@ def get_blueprint_revision_context(db: Session, blueprint_id: str) -> BlueprintR
         current_heuristic_explanation=matched_heuristic.explanation if matched_heuristic else None,
         article_groups=article_groups,
     )
+
+
+def get_warehouse_anomalies(
+    db: Session,
+    brand_id: Optional[str] = None,
+) -> WarehouseAnomaliesResponse:
+    """
+    Retrieve warehouse anomalies specifically emerged during the manual blueprint revision phase
+    for the brand(s) of reference, stored in the StagingArea under job_type='warehouse_anomalies'.
+
+    Blueprints that no longer exist (e.g. already split, merged, or deleted) are dynamically pruned.
+    """
+    query = db.query(StagingArea).filter(StagingArea.job_type == JobType.WAREHOUSE_ANOMALIES.value)
+    if brand_id:
+        query = query.filter(StagingArea.file_path == str(brand_id))
+    jobs = query.all()
+    if not jobs:
+        return WarehouseAnomaliesResponse(total_count=0, anomalies=[])
+
+    all_anomalies: List[WarehouseAnomalyItemSchema] = []
+
+    for job in jobs:
+        data = job.data or {}
+        raw_list = data.get("anomalies") or []
+        if not raw_list:
+            continue
+
+        bp_ids_to_check = set()
+        for item in raw_list:
+            if item.get("blueprint_id"):
+                bp_ids_to_check.add(str(item["blueprint_id"]))
+            for r_id in (item.get("related_blueprint_ids") or []):
+                bp_ids_to_check.add(str(r_id))
+
+        existing_bps = (
+            db.query(ArticleBlueprint)
+            .filter(ArticleBlueprint.id.in_(list(bp_ids_to_check)))
+            .all()
+            if bp_ids_to_check
+            else []
+        )
+        existing_bp_map = {str(b.id): b for b in existing_bps}
+
+        pruned_list: List[WarehouseAnomalyItemSchema] = []
+        for item in raw_list:
+            primary_id = str(item.get("blueprint_id") or "")
+            if not primary_id or primary_id not in existing_bp_map:
+                continue
+
+            related = [str(r) for r in (item.get("related_blueprint_ids") or []) if str(r) in existing_bp_map]
+            if item.get("anomaly_type") == "DUPLICATE_MODEL" and not related:
+                continue
+
+            item["related_blueprint_ids"] = related
+            primary_bp = existing_bp_map[primary_id]
+            if item.get("anomaly_type") == "SPLIT_REQUIRED":
+                item["article_name"] = primary_bp.article_name
+            else:
+                names = [primary_bp.article_name] + [
+                    existing_bp_map[r].article_name for r in related if r in existing_bp_map
+                ]
+                item["article_name"] = " / ".join(dict.fromkeys(n for n in names if n))
+
+            pruned_list.append(WarehouseAnomalyItemSchema(**item))
+
+        if len(pruned_list) != len(raw_list):
+            if pruned_list:
+                data["anomalies"] = [a.model_dump() for a in pruned_list]
+                staging_repo.update_job_data(db, job.id, data=data)
+            else:
+                staging_repo.delete_job(db, job.id)
+
+        all_anomalies.extend(pruned_list)
+
+    return WarehouseAnomaliesResponse(
+        total_count=len(all_anomalies),
+        anomalies=all_anomalies,
+    )
+
+
+def _build_brand_anomalies_from_diff(
+    db: Session,
+    brand_id: str,
+    brand_name: str,
+    diff_summary: dict,
+) -> List[WarehouseAnomalyItemSchema]:
+    """
+    Constructs the list of WarehouseAnomalyItemSchema for anomalies that emerged
+    during the review of all articles of the brand of reference.
+    """
+    splits_raw = diff_summary.get("warehouse_splits_raw") or []
+    merges_raw = diff_summary.get("warehouse_merges_raw") or []
+    if not splits_raw and not merges_raw:
+        return []
+
+    all_bp_ids: set[str] = set()
+    for s in splits_raw:
+        all_bp_ids.add(str(s["source_blueprint_id"]))
+    for m in merges_raw:
+        for bid in m.get("blueprint_ids", []):
+            all_bp_ids.add(str(bid))
+
+    bps = db.query(ArticleBlueprint).filter(ArticleBlueprint.id.in_(list(all_bp_ids))).all() if all_bp_ids else []
+    bp_map = {str(b.id): b for b in bps}
+
+    arts = db.query(Article).filter(Article.article_blueprint_id.in_(list(all_bp_ids))).all() if all_bp_ids else []
+    arts_by_bp: Dict[str, List[Article]] = defaultdict(list)
+    for a in arts:
+        arts_by_bp[str(a.article_blueprint_id)].append(a)
+
+    photos = db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id.in_(list(all_bp_ids))).all() if all_bp_ids else []
+    photos_by_bp: Dict[str, List[ArticlePhoto]] = defaultdict(list)
+    for p in photos:
+        photos_by_bp[str(p.article_blueprint_id)].append(p)
+
+    anomalies: List[WarehouseAnomalyItemSchema] = []
+
+    # 1. Splits discovered in brand of reference
+    for s in splits_raw:
+        bp_id = str(s["source_blueprint_id"])
+        bp = bp_map.get(bp_id)
+        if not bp:
+            continue
+        bp_arts = arts_by_bp.get(bp_id, [])
+        bp_photos = photos_by_bp.get(bp_id, [])
+        photo_url = f"/api/v1/ingestion/photos/{bp_photos[0].id}" if bp_photos else None
+        sup_codes = sorted({(a.supplier_code or "").strip().upper() for a in bp_arts if a.supplier_code})
+        distinct_norms = sorted(list(s.get("clusters", {}).keys()))
+        anomalies.append(
+            WarehouseAnomalyItemSchema(
+                anomaly_id=f"split_{bp_id}",
+                anomaly_type="SPLIT_REQUIRED",
+                blueprint_id=bp_id,
+                related_blueprint_ids=[],
+                article_name=bp.article_name,
+                brand_id=brand_id,
+                brand_name=brand_name,
+                normalized_vendor_code=bp.normalized_vendor_code,
+                distinct_normalized_codes=distinct_norms,
+                supplier_codes=sup_codes,
+                total_physical_units=len(bp_arts),
+                photo_url=photo_url,
+                reason=f"Contiene {len(distinct_norms)} modelli diversi accorpati ({', '.join(distinct_norms)})",
+            )
+        )
+
+    # 2. Merges discovered in brand of reference
+    for m in merges_raw:
+        bp_ids = [str(x) for x in m.get("blueprint_ids", [])]
+        if len(bp_ids) < 2:
+            continue
+        primary_id = bp_ids[0]
+        related_ids = bp_ids[1:]
+        primary_bp = bp_map.get(primary_id)
+        if not primary_bp:
+            continue
+        combined_arts = []
+        photo_url = None
+        for bid in bp_ids:
+            combined_arts.extend(arts_by_bp.get(bid, []))
+            if not photo_url and photos_by_bp.get(bid):
+                photo_url = f"/api/v1/ingestion/photos/{photos_by_bp[bid][0].id}"
+        names = [bp_map[b].article_name for b in bp_ids if b in bp_map and bp_map[b].article_name]
+        sup_codes = sorted({(a.supplier_code or "").strip().upper() for a in combined_arts if a.supplier_code})
+        norm_code = m.get("normalized_vendor_code") or ""
+        anomalies.append(
+            WarehouseAnomalyItemSchema(
+                anomaly_id=f"dup_{primary_id}",
+                anomaly_type="DUPLICATE_MODEL",
+                blueprint_id=primary_id,
+                related_blueprint_ids=related_ids,
+                article_name=" / ".join(dict.fromkeys(names)) or primary_bp.article_name,
+                brand_id=brand_id,
+                brand_name=brand_name,
+                normalized_vendor_code=norm_code,
+                distinct_normalized_codes=[norm_code],
+                supplier_codes=sup_codes,
+                total_physical_units=len(combined_arts),
+                photo_url=photo_url,
+                reason=f"{len(bp_ids)} schede separate per lo stesso modello ({norm_code})",
+            )
+        )
+
+    return anomalies
+
 
 
 # ---------------------------------------------------------------------------
@@ -730,8 +929,9 @@ def _compute_warehouse_diff_preview(
 async def prepare_staging_plan(db: Session, job_id: str) -> dict:
     """
     Triggered once the user confirms the natural language rule explanation.
-    Runs AI synthesis for newly split blueprints and builds the complete
-    Before & After reconciliation plan in the Staging Area.
+    Runs AI synthesis from scratch for all blueprints resulting from the user's manual split
+    and builds the Before & After reconciliation plan in the Staging Area ONLY for the split blueprint.
+    Other warehouse anomalies are left untouched in the database to be resolved manually one by one.
     """
     logger.log_execution("blueprint_revision_service", "prepare_staging_plan_start", "ok", job_id=job_id)
 
@@ -746,75 +946,154 @@ async def prepare_staging_plan(db: Session, job_id: str) -> dict:
     compiled_regex = re.compile(new_regex) if new_regex else None
 
     data["heuristic_state"]["user_confirmed_rule"] = True
+    data["skip_rule_update"] = False
 
     categories_hierarchy = category_repo.get_brand_hierarchy(db, brand_id)
 
-    # 1. Build Target Split Operation (from trigger_context)
+    # Build Target Split Operation ONLY for the blueprint manually split by the operator
     source_bp_id = data["trigger_context"]["source_blueprint_id"]
+    source_bp_ids = data["trigger_context"].get("source_blueprint_ids") or [source_bp_id]
     partitions = data["trigger_context"]["partitions"]
     target_split_plan = await _build_split_operation_plan(
         db=db,
         brand_id=brand_id,
         brand_name=brand_name,
         source_bp_id=source_bp_id,
+        source_blueprint_ids=source_bp_ids,
         partitions=partitions,
         compiled_regex=compiled_regex,
         categories_hierarchy=categories_hierarchy,
     )
 
-    # 2. Build Additional Warehouse Splits (if any)
-    warehouse_splits_plans = []
-    for ws in data.get("diff_preview", {}).get("warehouse_splits_raw", []):
-        ws_bp_id = ws["source_blueprint_id"]
-        ws_bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == ws_bp_id).first()
-        if not ws_bp:
-            continue
-        ws_partitions = []
-        for idx, (nc, aid_list) in enumerate(ws["clusters"].items()):
-            ws_partitions.append({
-                "group_id": f"ws_{ws_bp_id}_{idx}",
-                "label": ws_bp.article_name if idx == 0 else f"{ws_bp.article_name} ({nc})",
-                "is_original": idx == 0,
-                "article_ids": aid_list,
-                "supplier_codes": [],
-                "user_hint": None,
-            })
-        ws_plan = await _build_split_operation_plan(
-            db=db,
-            brand_id=brand_id,
-            brand_name=brand_name,
-            source_bp_id=ws_bp_id,
-            partitions=ws_partitions,
-            compiled_regex=compiled_regex,
-            categories_hierarchy=categories_hierarchy,
-        )
-        warehouse_splits_plans.append(ws_plan)
-
-    # 3. Build Warehouse Merges (if any)
-    warehouse_merges_plans = []
-    for wm in data.get("diff_preview", {}).get("warehouse_merges_raw", []):
-        m_plan = _build_merge_operation_plan(
-            db=db,
-            blueprint_ids=wm["blueprint_ids"],
-            normalized_vendor_code=wm["normalized_vendor_code"],
-        )
-        if m_plan:
-            warehouse_merges_plans.append(m_plan)
-
-    # 4. Aligned blueprints list
+    # Aligned blueprints list (single-model non-anomalous blueprints whose normalized code is updated)
     aligned_list = data.get("diff_preview", {}).get("aligned_blueprints_raw", [])
 
     data["phase"] = "READY_FOR_REVIEW"
     data["reconciliation_plan"] = {
         "target_split": target_split_plan,
-        "warehouse_splits": warehouse_splits_plans,
-        "warehouse_merges": warehouse_merges_plans,
+        "warehouse_splits": [],
+        "warehouse_merges": [],
         "aligned_blueprints": aligned_list,
     }
 
     staging_repo.update_job(db, job_id=job_id, status=JobStatus.COMPLETED.value, data=data)
     logger.log_execution("blueprint_revision_service", "prepare_staging_plan_success", "ok", job_id=job_id)
 
+    return get_sanitized_revision_job(db, job_id)
+
+
+async def prepare_manual_split_staging_plan(
+    db: Session,
+    request: ManualSplitPrepareRequest,
+) -> dict:
+    """
+    Prepare the Staging Area 'Before & After' directly from the operator's manual partitions
+    without recalculating the vendor code heuristic (used when resolving warehouse anomalies one-by-one).
+    All resulting blueprints are recreated from scratch via AI while preserving user-selected photos.
+    """
+    logger.log_execution(
+        "blueprint_revision_service",
+        "prepare_manual_split_start",
+        "ok",
+        blueprint_id=request.blueprint_id,
+        partitions_count=len(request.partitions),
+    )
+
+    bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == request.blueprint_id).first()
+    if not bp:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Blueprint '{request.blueprint_id}' non trovato.",
+        )
+
+    brand = db.query(Brand).filter(Brand.id == bp.brand_id).first()
+    brand_name = brand.name if brand else "Unknown"
+    brand_id_str = str(bp.brand_id)
+
+    all_source_ids = [str(bp.id)]
+    if request.source_blueprint_ids:
+        for sid in request.source_blueprint_ids:
+            if sid and str(sid) not in all_source_ids:
+                all_source_ids.append(str(sid))
+
+    active_partitions = [
+        p.model_dump()
+        for p in request.partitions
+        if p.article_ids or p.supplier_codes
+    ]
+
+    if len(all_source_ids) == 1 and len(active_partitions) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Per dividere la scheda è necessario separare gli articoli in almeno due modelli distinti.",
+        )
+    if not active_partitions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inserire almeno un gruppo di articoli valido.",
+        )
+
+    bp_articles = db.query(Article).filter(Article.article_blueprint_id.in_(all_source_ids)).all()
+    sample_codes = [a.supplier_code for a in bp_articles if a.supplier_code]
+    matched_heuristic = heuristic_repo.find_matching_heuristic(db, brand_id_str, sample_codes)
+
+    compiled_regex: Optional[re.Pattern] = None
+    if matched_heuristic and matched_heuristic.pattern:
+        try:
+            compiled_regex = re.compile(matched_heuristic.pattern)
+        except re.error:
+            compiled_regex = None
+
+    categories_hierarchy = category_repo.get_brand_hierarchy(db, brand_id_str)
+
+    target_split_plan = await _build_split_operation_plan(
+        db=db,
+        brand_id=brand_id_str,
+        brand_name=brand_name,
+        source_bp_id=str(bp.id),
+        source_blueprint_ids=all_source_ids,
+        partitions=active_partitions,
+        compiled_regex=compiled_regex,
+        categories_hierarchy=categories_hierarchy,
+    )
+
+    job_data = {
+        "brand_id": brand_id_str,
+        "brand_name": brand_name,
+        "heuristic_id": str(matched_heuristic.id) if matched_heuristic else None,
+        "skip_rule_update": True,
+        "phase": "READY_FOR_REVIEW",
+        "trigger_context": {
+            "source_blueprint_id": str(bp.id),
+            "source_blueprint_ids": all_source_ids,
+            "partitions": active_partitions,
+        },
+        "heuristic_state": {
+            "textual_explanation": (
+                matched_heuristic.explanation
+                if matched_heuristic and matched_heuristic.explanation
+                else f"Correzione manuale scheda {brand_name} secondo la regola attiva del brand."
+            ),
+            "user_confirmed_rule": True,
+        },
+        "reconciliation_plan": {
+            "target_split": target_split_plan,
+            "warehouse_splits": [],
+            "warehouse_merges": [],
+            "aligned_blueprints": [],
+        },
+    }
+
+    job_id = request.job_id
+    existing_job = staging_repo.get_job(db, job_id) if job_id else None
+    if existing_job:
+        staging_repo.update_job(db, job_id=job_id, status=JobStatus.COMPLETED.value, data=job_data)
+    else:
+        job_id = str(uuid.uuid4())
+        staging_repo.create_job(db, job_id=job_id, job_type=JobType.HEURISTIC_REVISION.value)
+        staging_repo.update_job(db, job_id=job_id, status=JobStatus.COMPLETED.value, data=job_data)
+
+    logger.log_execution("blueprint_revision_service", "prepare_manual_split_success", "ok", job_id=job_id)
     return get_sanitized_revision_job(db, job_id)
 
 
@@ -826,25 +1105,33 @@ async def _build_split_operation_plan(
     partitions: List[dict],
     compiled_regex: Optional[re.Pattern],
     categories_hierarchy: dict,
+    source_blueprint_ids: Optional[List[str]] = None,
 ) -> dict:
     """
-    Build a detailed Before / After representation for a Blueprint being split,
-    running ArticleBlueprintsAgent synthesis for the newly created Blueprint(s).
+    Build a detailed Before / After representation for a Blueprint being split (or duplicate blueprints unified/split).
+    Every resulting blueprint in the 'After' column is recreated from scratch via ArticleBlueprintsAgent
+    (without inheriting old descriptions/tags/materials from source_bp), while preserving the existing
+    ArticlePhotos associated with each partition's articles.
     """
-    source_bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == source_bp_id).first()
-    if not source_bp:
+    all_source_ids = list(dict.fromkeys(([source_bp_id] + (source_blueprint_ids or []))))
+    source_bps = db.query(ArticleBlueprint).filter(ArticleBlueprint.id.in_(all_source_ids)).all()
+    if not source_bps:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Blueprint '{source_bp_id}' non trovato.")
 
-    bp_articles = db.query(Article).filter(Article.article_blueprint_id == source_bp.id).all()
-    bp_photos = db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == source_bp.id).all()
+    source_bp = next((b for b in source_bps if str(b.id) == source_bp_id), source_bps[0])
+
+    bp_articles = db.query(Article).filter(Article.article_blueprint_id.in_(all_source_ids)).all()
+    bp_photos = db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id.in_(all_source_ids)).all()
     art_map = {str(a.id): a for a in bp_articles}
 
     cat_dict, sub_cat_dict = _resolve_category_dicts(db, source_bp)
     before_groups = [g.model_dump() for g in _build_article_groups_for_blueprint(bp_articles, bp_photos)]
 
+    before_names = " / ".join(dict.fromkeys(b.article_name for b in source_bps if b.article_name))
     before_card = {
         "blueprint_id": str(source_bp.id),
-        "article_name": source_bp.article_name,
+        "source_blueprint_ids": all_source_ids,
+        "article_name": before_names or source_bp.article_name,
         "description": source_bp.description,
         "extended_description": source_bp.extended_description,
         "normalized_vendor_code": source_bp.normalized_vendor_code,
@@ -856,10 +1143,10 @@ async def _build_split_operation_plan(
         "article_groups": before_groups,
     }
 
-    # Prepare new clusters for AI synthesis
+    # ALL partitions are treated as brand-new blueprints to be synthesized from scratch by ArticleBlueprintsAgent
     new_clusters_for_agent = []
     cluster_by_temp_id: Dict[str, dict] = {}
-    after_blueprints: List[dict] = []
+    ordered_temp_ids: List[str] = []
 
     for idx, part in enumerate(partitions):
         part_arts = [art_map[aid] for aid in part.get("article_ids", []) if aid in art_map]
@@ -867,59 +1154,51 @@ async def _build_split_operation_plan(
             target_scs = {s.upper() for s in part["supplier_codes"]}
             part_arts = [a for a in bp_articles if (a.supplier_code or "").upper() in target_scs]
 
+        if not part_arts:
+            continue
+
+        # Preserve existing photos from source blueprint(s) matching the colors of these articles
         part_groups = [g.model_dump() for g in _build_article_groups_for_blueprint(part_arts, bp_photos)]
         first_sc = next((a.supplier_code for a in part_arts if a.supplier_code), "")
         norm_code, _ = _normalize_vendor_code(first_sc, compiled_regex) if first_sc else (source_bp.normalized_vendor_code or "", True)
 
-        if part.get("is_original"):
-            after_blueprints.append({
-                "id": str(source_bp.id),
-                "is_new": False,
-                "excluded": False,
-                "article_name": part.get("user_hint") or source_bp.article_name,
-                "description": source_bp.description,
-                "extended_description": source_bp.extended_description,
-                "normalized_vendor_code": norm_code,
-                "category": cat_dict,
-                "sub_category": sub_cat_dict,
-                "tags": list(source_bp.tags or []),
-                "materials": list(source_bp.materials or []),
-                "dimensions": source_bp.dimensions,
-                "article_ids": [str(a.id) for a in part_arts],
-                "article_groups": part_groups,
-            })
-        else:
-            temp_id = f"new_bp_{uuid.uuid4().hex[:10]}"
-            hint_name = part.get("user_hint") or part.get("label") or f"{source_bp.article_name} ({first_sc})"
-            cluster_items = []
-            for a in part_arts:
-                cluster_items.append({
-                    "item_id": str(a.id),
-                    "vendor_code": a.supplier_code or "",
-                    "VendorCode": a.supplier_code or "",
-                    "normalized_vendor_code": norm_code,
-                    "barcode": a.ean or "",
-                    "quantity": 1,
-                    "colors": list(a.colors or []),
-                    "article_name": hint_name,
-                    "description": hint_name,
-                    "article_description": source_bp.description,
-                })
-            cluster_obj = {
-                "id": temp_id,
-                "is_new": True,
-                "cluster_items": cluster_items,
-            }
-            new_clusters_for_agent.append(cluster_obj)
-            cluster_by_temp_id[temp_id] = {
-                "temp_id": temp_id,
-                "norm_code": norm_code,
-                "part_arts": part_arts,
-                "part_groups": part_groups,
-                "hint_name": hint_name,
-            }
+        temp_id = f"new_bp_{uuid.uuid4().hex[:10]}"
+        user_hint = (part.get("user_hint") or "").strip()
+        clean_search_seed = user_hint if user_hint else f"{brand_name} {first_sc}".strip()
 
-    # Invoke ArticleBlueprintsAgent to synthesize new blueprints
+        cluster_items = []
+        for a in part_arts:
+            cluster_items.append({
+                "item_id": str(a.id),
+                "vendor_code": a.supplier_code or "",
+                "VendorCode": a.supplier_code or "",
+                "normalized_vendor_code": norm_code,
+                "barcode": a.ean or "",
+                "quantity": 1,
+                "colors": list(a.colors or []),
+                "article_name": clean_search_seed,
+                "description": clean_search_seed,
+                "article_description": clean_search_seed,
+            })
+
+        cluster_obj = {
+            "id": temp_id,
+            "is_new": True,
+            "cluster_items": cluster_items,
+        }
+        new_clusters_for_agent.append(cluster_obj)
+        ordered_temp_ids.append(temp_id)
+        cluster_by_temp_id[temp_id] = {
+            "temp_id": temp_id,
+            "norm_code": norm_code,
+            "first_sc": first_sc,
+            "part_arts": part_arts,
+            "part_groups": part_groups,
+            "user_hint": user_hint,
+            "fallback_label": clean_search_seed,
+        }
+
+    # Invoke ArticleBlueprintsAgent to synthesize all resulting blueprints from scratch
     synthesized_by_id: Dict[str, dict] = {}
     if new_clusters_for_agent:
         try:
@@ -931,12 +1210,24 @@ async def _build_split_operation_plan(
                 "brand_name": brand_name,
                 "resolved_blueprints": {},
             })
-            for abp in agent_res.get("blueprints", []):
-                synthesized_by_id[abp.get("id")] = abp
+            returned_bps = agent_res.get("blueprints", [])
+            for i, abp in enumerate(returned_bps):
+                if abp.get("id"):
+                    synthesized_by_id[abp["id"]] = abp
+                elif abp.get("vendor_code"):
+                    vc_upper = str(abp["vendor_code"]).strip().upper()
+                    for tid, ci in cluster_by_temp_id.items():
+                        if str(ci.get("first_sc") or "").strip().upper() == vc_upper:
+                            synthesized_by_id[tid] = abp
+                            break
+                elif i < len(ordered_temp_ids):
+                    synthesized_by_id[ordered_temp_ids[i]] = abp
         except Exception as exc:
             logger.log_execution("blueprint_revision_service", "agent_synthesis_fallback", "warn", exc=str(exc))
 
-    for temp_id, c_info in cluster_by_temp_id.items():
+    after_blueprints: List[dict] = []
+    for temp_id in ordered_temp_ids:
+        c_info = cluster_by_temp_id[temp_id]
         synth = synthesized_by_id.get(temp_id, {})
         resolved_cat = cat_dict
         resolved_sub = sub_cat_dict
@@ -958,28 +1249,33 @@ async def _build_split_operation_plan(
         elif isinstance(raw_sub, dict) and raw_sub.get("id"):
             resolved_sub = raw_sub
 
-        synth_tags = synth.get("tags") or list(source_bp.tags or ["articolo"])
-        synth_materials = synth.get("materials") if synth.get("materials") is not None else list(source_bp.materials or [])
+        fresh_name = synth.get("article_name") or c_info["user_hint"] or c_info["fallback_label"]
+        fresh_desc = synth.get("description") or f"Articolo {brand_name} modello {c_info['first_sc']}".strip()
+        fresh_ext_desc = synth.get("extended_description") or f"{fresh_name} - {fresh_desc}"
+        default_tags = [t for t in [brand_name.lower(), c_info["first_sc"].lower()] if t] or ["articolo"]
+        synth_tags = synth.get("tags") or default_tags
+        synth_materials = synth.get("materials") if synth.get("materials") is not None else []
 
         after_blueprints.append({
             "id": temp_id,
             "is_new": True,
             "excluded": False,
-            "article_name": synth.get("article_name") or c_info["hint_name"],
-            "description": synth.get("description") or source_bp.description,
-            "extended_description": synth.get("extended_description") or source_bp.extended_description,
+            "article_name": fresh_name,
+            "description": fresh_desc,
+            "extended_description": fresh_ext_desc,
             "normalized_vendor_code": c_info["norm_code"],
             "category": resolved_cat,
             "sub_category": resolved_sub,
             "tags": synth_tags if synth_tags else ["articolo"],
             "materials": synth_materials,
-            "dimensions": synth.get("dimensions") or source_bp.dimensions,
+            "dimensions": synth.get("dimensions"),
             "article_ids": [str(a.id) for a in c_info["part_arts"]],
             "article_groups": c_info["part_groups"],
         })
 
     return {
         "source_blueprint_id": str(source_bp.id),
+        "source_blueprint_ids": all_source_ids,
         "excluded": False,
         "before": before_card,
         "after": after_blueprints,
@@ -1403,12 +1699,13 @@ async def retry_or_set_staged_blueprint_photo(
 
 def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
     """
-    Executes the 5-Step Ordered Atomic Transaction:
-      Step 1: Reassign Articles & migrate ArticlePhotos for Merges (deduplicating on canonical_color_name).
-      Step 2: Delete absorbed orphan Blueprints + flush.
-      Step 3: Align normalized_vendor_code across all impacted Blueprints of the Brand + flush.
-      Step 4: Execute Splits (create new Blueprints with embeddings, reassign Articles, migrate/clone ArticlePhotos).
-      Step 5: Update BrandHeuristic in brand_heuristics, delete staging job, commit, and invalidate search cache.
+    Executes the Atomic Database Commit for the revised Blueprint:
+      Step 1: Align normalized_vendor_code on clean single-model Blueprints of the Brand (when updating heuristic).
+      Step 2: Recreate all split Blueprints from scratch (new UUIDs, fresh embeddings, reassigned Articles,
+              preserved existing ArticlePhotos + user-selected staged_photos_by_color overrides)
+              and delete the old faulty Blueprint(s).
+      Step 3: Update BrandHeuristic in brand_heuristics (unless skip_rule_update is True),
+              delete staging job, commit, and invalidate search cache.
     """
     logger.log_execution("blueprint_revision_service", "commit_plan_start", "ok", job_id=job_id)
 
@@ -1422,6 +1719,7 @@ def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Il piano di riconciliazione non è pronto per la conferma.")
 
     brand_id = data["brand_id"]
+    skip_rule_update = bool(data.get("skip_rule_update"))
     heuristic_id = data.get("heuristic_id")
     h_state = data.get("heuristic_state") or {}
     new_regex = h_state.get("new_regex", "")
@@ -1432,106 +1730,37 @@ def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
     codes_aligned = 0
 
     try:
-        # -------------------------------------------------------------------
-        # STEP 1 & 2: Execute Merges (Reassign Articles & Photos, Delete Orphans)
-        # -------------------------------------------------------------------
-        absorbed_bp_ids_deleted: set[str] = set()
-
-        for wm in plan.get("warehouse_merges", []):
-            if wm.get("excluded"):
-                continue
-            after_card = wm.get("after") or {}
-            if after_card.get("excluded"):
-                continue
-
-            surviving_id = after_card["surviving_blueprint_id"]
-            absorbed_ids = after_card.get("absorbed_blueprint_ids", [])
-
-            surviving_bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == surviving_id).first()
-            if not surviving_bp:
-                continue
-
-            # Update surviving blueprint metadata if edited
-            _apply_card_metadata_to_blueprint(db, surviving_bp, after_card)
-
-            # Apply any staged photo overrides for surviving blueprint
-            staged_photos = after_card.get("staged_photos_by_color") or {}
-            for c_name, photo_data_or_url in staged_photos.items():
-                if photo_data_or_url:
-                    photo_service.download_and_save_photo(
-                        db,
-                        blueprint_id=str(surviving_bp.id),
-                        color_name=c_name,
-                        photo_url=photo_data_or_url,
-                        commit_changes=False,
-                        force_update=True,
-                    )
-
-            # Existing photo colors on surviving blueprint
-            surviving_photos = db.query(ArticlePhoto).filter(
-                ArticlePhoto.article_blueprint_id == surviving_bp.id
-            ).all()
-            existing_colors = {
-                (p.canonical_color_name or "").strip().lower() for p in surviving_photos
-            }
-
-            for abs_id in absorbed_ids:
-                abs_bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == abs_id).first()
-                if not abs_bp:
-                    continue
-
-                # Reassign physical articles
-                abs_articles = db.query(Article).filter(Article.article_blueprint_id == abs_bp.id).all()
-                for art in abs_articles:
-                    art.article_blueprint_id = surviving_bp.id
-
-                # Migrate or deduplicate photos BEFORE deleting abs_bp (prevents CASCADE photo loss!)
-                abs_photos = db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == abs_bp.id).all()
-                for p in abs_photos:
-                    c_name = (p.canonical_color_name or "").strip().lower()
-                    if c_name not in existing_colors:
-                        p.article_blueprint_id = surviving_bp.id
-                        existing_colors.add(c_name)
-                    else:
-                        db.delete(p)
-
-                db.flush()
-                db.delete(abs_bp)
-                absorbed_bp_ids_deleted.add(str(abs_bp.id))
-                merges_executed += 1
-
-        db.flush()
-
-        # -------------------------------------------------------------------
-        # STEP 3: Global Alignment of normalized_vendor_code on Existing Blueprints
-        # -------------------------------------------------------------------
-        # Collect all target normalized code updates for existing blueprints
-        desired_norm_by_bp_id: Dict[str, str] = {}
-
-        # From aligned_blueprints
-        for al in plan.get("aligned_blueprints", []):
-            bid = al["blueprint_id"]
-            if bid not in absorbed_bp_ids_deleted and al.get("new_normalized_code"):
-                desired_norm_by_bp_id[bid] = al["new_normalized_code"]
-
-        # From merges surviving blueprints
-        for wm in plan.get("warehouse_merges", []):
-            if not wm.get("excluded") and not (wm.get("after") or {}).get("excluded"):
-                after_c = wm["after"]
-                if after_c.get("normalized_vendor_code"):
-                    desired_norm_by_bp_id[after_c["surviving_blueprint_id"]] = after_c["normalized_vendor_code"]
-
-        # From splits (the original "keep" blueprint in each split)
-        all_split_ops = [plan.get("target_split")] + list(plan.get("warehouse_splits", []))
+        all_split_ops = [plan.get("target_split")]
+        source_bp_ids_Being_replaced: set[str] = set()
         for sp_op in all_split_ops:
             if not sp_op or sp_op.get("excluded"):
                 continue
-            for after_c in sp_op.get("after", []):
-                if not after_c.get("is_new") and not after_c.get("excluded"):
-                    if after_c.get("normalized_vendor_code"):
-                        desired_norm_by_bp_id[after_c["id"]] = after_c["normalized_vendor_code"]
+            s_ids = sp_op.get("source_blueprint_ids") or ([sp_op["source_blueprint_id"]] if sp_op.get("source_blueprint_id") else [])
+            for sid in s_ids:
+                if sid:
+                    source_bp_ids_Being_replaced.add(str(sid))
 
-        # Two-stage update with temporary placeholders to avoid transient UniqueConstraint collisions
+        # Free normalized_vendor_code on source blueprints being replaced so new blueprints never collide
+        if source_bp_ids_Being_replaced:
+            bps_being_replaced = (
+                db.query(ArticleBlueprint)
+                .filter(ArticleBlueprint.id.in_(list(source_bp_ids_Being_replaced)))
+                .all()
+            )
+            for s_bp in bps_being_replaced:
+                s_bp.normalized_vendor_code = f"__del_{uuid.uuid4().hex[:12]}__"
+            db.flush()
+
+        # -------------------------------------------------------------------
+        # STEP 1: Alignment of normalized_vendor_code on Clean Single-Model Blueprints
+        # -------------------------------------------------------------------
+        desired_norm_by_bp_id: Dict[str, str] = {}
+        if not skip_rule_update:
+            for al in plan.get("aligned_blueprints", []):
+                bid = al["blueprint_id"]
+                if bid not in source_bp_ids_Being_replaced and al.get("new_normalized_code"):
+                    desired_norm_by_bp_id[bid] = al["new_normalized_code"]
+
         bps_to_align = (
             db.query(ArticleBlueprint)
             .filter(ArticleBlueprint.id.in_(list(desired_norm_by_bp_id.keys())))
@@ -1544,12 +1773,13 @@ def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
         if bps_to_align:
             db.flush()
 
-        # Check already occupied normalized codes for this brand (e.g. if a merge was excluded)
         existing_brand_bps = db.query(ArticleBlueprint).filter(ArticleBlueprint.brand_id == brand_id).all()
         occupied_norms = {
             bp_o.normalized_vendor_code
             for bp_o in existing_brand_bps
-            if bp_o.normalized_vendor_code and not bp_o.normalized_vendor_code.startswith("__tmp_")
+            if bp_o.normalized_vendor_code
+            and not bp_o.normalized_vendor_code.startswith("__tmp_")
+            and not bp_o.normalized_vendor_code.startswith("__del_")
         }
 
         for bp_obj in bps_to_align:
@@ -1559,61 +1789,40 @@ def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
                 occupied_norms.add(target_norm)
                 codes_aligned += 1
             else:
-                # Disambiguate if another blueprint already holds that code (e.g. excluded merge)
                 bp_obj.normalized_vendor_code = f"{target_norm}_{str(bp_obj.id)[:4]}"
                 occupied_norms.add(bp_obj.normalized_vendor_code)
         if bps_to_align:
             db.flush()
 
         # -------------------------------------------------------------------
-        # STEP 4: Execute Splits (Create New Blueprints, Reassign Articles & Photos)
+        # STEP 2: Recreate All Split Blueprints From Scratch & Preserve User Photos
         # -------------------------------------------------------------------
         for sp_op in all_split_ops:
             if not sp_op or sp_op.get("excluded"):
                 continue
 
-            source_bp_id = sp_op["source_blueprint_id"]
-            source_bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == source_bp_id).first()
-            if not source_bp:
+            s_ids = sp_op.get("source_blueprint_ids") or ([sp_op["source_blueprint_id"]] if sp_op.get("source_blueprint_id") else [])
+            source_bps = db.query(ArticleBlueprint).filter(ArticleBlueprint.id.in_(s_ids)).all() if s_ids else []
+            if not source_bps:
                 continue
 
+            primary_source_bp = source_bps[0]
             source_photos = db.query(ArticlePhoto).filter(
-                ArticlePhoto.article_blueprint_id == source_bp.id
+                ArticlePhoto.article_blueprint_id.in_([str(b.id) for b in source_bps])
             ).all()
-            photos_by_color: Dict[str, ArticlePhoto] = {
-                (p.canonical_color_name or "").strip().lower(): p for p in source_photos
-            }
+            photos_by_color: Dict[str, ArticlePhoto] = {}
+            for p in source_photos:
+                c_key = (p.canonical_color_name or "").strip().lower()
+                if c_key and c_key not in photos_by_color:
+                    photos_by_color[c_key] = p
 
-            # Determine colors remaining on the original blueprint
-            orig_card = next((c for c in sp_op.get("after", []) if not c.get("is_new")), None)
-            if orig_card:
-                _apply_card_metadata_to_blueprint(db, source_bp, orig_card)
-                staged_orig_photos = orig_card.get("staged_photos_by_color") or {}
-                for c_name, photo_data_or_url in staged_orig_photos.items():
-                    if photo_data_or_url:
-                        photo_service.download_and_save_photo(
-                            db,
-                            blueprint_id=str(source_bp.id),
-                            color_name=c_name,
-                            photo_url=photo_data_or_url,
-                            commit_changes=False,
-                            force_update=True,
-                        )
+            created_new_bps: List[ArticleBlueprint] = []
 
-            orig_art_ids = set(orig_card.get("article_ids", [])) if orig_card else set()
-            orig_articles = db.query(Article).filter(Article.id.in_(list(orig_art_ids))).all() if orig_art_ids else []
-            colors_kept_on_source: set[str] = set()
-            for oa in orig_articles:
-                for c in (oa.colors or []):
-                    if c and str(c).strip():
-                        colors_kept_on_source.add(str(c).strip().lower())
-
-            # Create each new split blueprint
             for after_c in sp_op.get("after", []):
-                if not after_c.get("is_new") or after_c.get("excluded"):
+                if after_c.get("excluded"):
                     continue
 
-                cat_id = _extract_target_category_id(after_c, fallback_category_id=source_bp.category_id)
+                cat_id = _extract_target_category_id(after_c, fallback_category_id=primary_source_bp.category_id)
                 target_norm = after_c.get("normalized_vendor_code") or ""
                 if target_norm in occupied_norms:
                     target_norm = f"{target_norm}_{uuid.uuid4().hex[:4]}"
@@ -1625,17 +1834,18 @@ def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
                     brand_id=brand_id,
                     category_id=cat_id,
                     normalized_vendor_code=target_norm or None,
-                    article_name=after_c.get("article_name") or source_bp.article_name,
-                    description=after_c.get("description") or source_bp.description,
-                    extended_description=after_c.get("extended_description") or source_bp.extended_description,
+                    article_name=after_c.get("article_name") or primary_source_bp.article_name,
+                    description=after_c.get("description") or primary_source_bp.description,
+                    extended_description=after_c.get("extended_description") or primary_source_bp.extended_description,
                     dimensions=after_c.get("dimensions"),
-                    tags=after_c.get("tags") or list(source_bp.tags or ["articolo"]),
-                    materials=after_c.get("materials") if after_c.get("materials") is not None else list(source_bp.materials or []),
+                    tags=after_c.get("tags") or ["articolo"],
+                    materials=after_c.get("materials") if after_c.get("materials") is not None else [],
                 )
                 db.add(new_bp)
                 db.flush()
+                created_new_bps.append(new_bp)
 
-                # Generate embedding for the new blueprint
+                # Generate embedding for the newly created blueprint
                 try:
                     text_to_embed = build_blueprint_embedding_text(db, new_bp)
                     if text_to_embed:
@@ -1658,28 +1868,24 @@ def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
                         if c and str(c).strip():
                             moved_colors.add(str(c).strip().lower())
 
-                # Migrate or clone ArticlePhoto records for moved_colors
+                staged_new_photos = after_c.get("staged_photos_by_color") or {}
+
+                # Preserve existing ArticlePhoto records from source blueprint(s) for each moved color
                 for mc in moved_colors:
                     src_photo = photos_by_color.get(mc)
                     if not src_photo and source_photos and len(photos_by_color) == 1:
                         src_photo = source_photos[0]
                     if src_photo:
-                        if mc in colors_kept_on_source:
-                            # Both the original blueprint and the new split blueprint have articles of this color: clone photo
-                            cloned_photo = ArticlePhoto(
-                                id=str(uuid.uuid4()),
-                                article_blueprint_id=new_bp.id,
-                                canonical_color_name=src_photo.canonical_color_name,
-                                photo_data=src_photo.photo_data,
-                            )
-                            db.add(cloned_photo)
-                        else:
-                            # Only the new blueprint uses this color: move photo directly
-                            src_photo.article_blueprint_id = new_bp.id
-                            photos_by_color.pop(mc, None)
+                        cloned_photo = ArticlePhoto(
+                            id=str(uuid.uuid4()),
+                            article_blueprint_id=new_bp.id,
+                            canonical_color_name=src_photo.canonical_color_name,
+                            photo_data=src_photo.photo_data,
+                        )
+                        db.add(cloned_photo)
+                db.flush()
 
-                # Apply any staged photo overrides for this new split blueprint
-                staged_new_photos = after_c.get("staged_photos_by_color") or {}
+                # Apply any user-selected photo overrides from the Staging Area
                 for c_name, photo_data_or_url in staged_new_photos.items():
                     if photo_data_or_url:
                         photo_service.download_and_save_photo(
@@ -1694,25 +1900,99 @@ def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
                 splits_created += 1
                 db.flush()
 
+            # Delete the old replaced blueprint(s) after ensuring all physical articles have been reassigned
+            if created_new_bps:
+                fallback_new_bp_id = created_new_bps[0].id
+                remaining_arts = (
+                    db.query(Article)
+                    .filter(Article.article_blueprint_id.in_([str(b.id) for b in source_bps]))
+                    .all()
+                )
+                for ra in remaining_arts:
+                    ra.article_blueprint_id = fallback_new_bp_id
+                db.flush()
+
+                for old_p in source_photos:
+                    db.delete(old_p)
+                db.flush()
+
+                for s_bp in source_bps:
+                    db.delete(s_bp)
+                db.flush()
+
         # -------------------------------------------------------------------
-        # STEP 5: Update BrandHeuristic, Commit Transaction & Invalidate Cache
+        # STEP 3: Update BrandHeuristic (if deduced in this flow) & Commit
         # -------------------------------------------------------------------
-        if heuristic_id:
-            heuristic_repo.update_heuristic(
-                db,
-                heuristic_id=heuristic_id,
-                pattern=new_regex,
-                explanation=textual_explanation,
-                commit_changes=False,
+        if not skip_rule_update and new_regex:
+            if heuristic_id:
+                heuristic_repo.update_heuristic(
+                    db,
+                    heuristic_id=heuristic_id,
+                    pattern=new_regex,
+                    explanation=textual_explanation,
+                    commit_changes=False,
+                )
+            else:
+                heuristic_repo.create_heuristic(
+                    db,
+                    brand_id=brand_id,
+                    pattern=new_regex,
+                    explanation=textual_explanation,
+                    commit_changes=False,
+                )
+
+        # -------------------------------------------------------------------
+        # STEP 4: Persist or Prune Anomalies for the Brand of Reference
+        # -------------------------------------------------------------------
+        anom_job_id = f"anomalies_brand_{brand_id}"
+        if not skip_rule_update:
+            # Full brand review occurred during regex recalculation: record ONLY anomalies from this brand
+            brand_anomalies = _build_brand_anomalies_from_diff(
+                db=db,
+                brand_id=str(brand_id),
+                brand_name=data.get("brand_name", ""),
+                diff_summary=data.get("diff_preview") or {},
             )
+            existing_anom_job = staging_repo.get_job(db, anom_job_id)
+            anom_payload = {
+                "brand_id": str(brand_id),
+                "brand_name": data.get("brand_name", ""),
+                "anomalies": [a.model_dump() for a in brand_anomalies],
+            }
+            if brand_anomalies:
+                if existing_anom_job:
+                    existing_anom_job.data = anom_payload
+                    staging_repo.flag_modified(existing_anom_job, "data")
+                else:
+                    new_anom_job = StagingArea(
+                        id=anom_job_id,
+                        job_type=JobType.WAREHOUSE_ANOMALIES.value,
+                        file_path=str(brand_id),
+                        data=anom_payload,
+                        status=JobStatus.ACCEPTED.value,
+                    )
+                    db.add(new_anom_job)
+            else:
+                if existing_anom_job:
+                    db.delete(existing_anom_job)
         else:
-            heuristic_repo.create_heuristic(
-                db,
-                brand_id=brand_id,
-                pattern=new_regex,
-                explanation=textual_explanation,
-                commit_changes=False,
-            )
+            # Manual resolution of an individual blueprint anomaly: prune the resolved blueprint(s)
+            existing_anom_job = staging_repo.get_job(db, anom_job_id)
+            if existing_anom_job and existing_anom_job.data:
+                anom_data = existing_anom_job.data
+                current_anoms = anom_data.get("anomalies") or []
+                resolved_ids = set(source_bp_ids_Being_replaced)
+                remaining_list = [
+                    item for item in current_anoms
+                    if str(item.get("blueprint_id")) not in resolved_ids
+                    and not any(str(r) in resolved_ids for r in (item.get("related_blueprint_ids") or []))
+                ]
+                if remaining_list:
+                    anom_data["anomalies"] = remaining_list
+                    existing_anom_job.data = anom_data
+                    staging_repo.flag_modified(existing_anom_job, "data")
+                else:
+                    db.delete(existing_anom_job)
 
         db.commit()
 
@@ -1742,11 +2022,18 @@ def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
         codes_aligned=codes_aligned,
     )
 
+    remaining_anomalies = 0
+    try:
+        remaining_anomalies = get_warehouse_anomalies(db).total_count
+    except Exception:
+        pass
+
     return {
         "status": "success",
         "splits_created": splits_created,
         "merges_executed": merges_executed,
         "codes_aligned": codes_aligned,
+        "remaining_anomalies": remaining_anomalies,
     }
 
 

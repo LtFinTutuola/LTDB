@@ -301,8 +301,30 @@ export async function updateSettings(payload) {
 
 // --- Blueprint Revision & Heuristic Reconciliation ---
 
-export async function getBlueprintRevisionContext(blueprintId) {
-    const res = await fetch(`${API_BASE}/brands/blueprint-revision/${encodeURIComponent(blueprintId)}/context`);
+export async function getBlueprintRevisionContext(blueprintId, relatedIds = []) {
+    let url = `${API_BASE}/brands/blueprint-revision/${encodeURIComponent(blueprintId)}/context`;
+    if (Array.isArray(relatedIds) && relatedIds.length > 0) {
+        url += `?related_ids=${encodeURIComponent(relatedIds.join(','))}`;
+    }
+    const res = await fetch(url);
+    return _handleResponse(res);
+}
+
+export async function getWarehouseAnomalies(brandId = null) {
+    let url = `${API_BASE}/brands/blueprint-revision/anomalies`;
+    if (brandId) {
+        url += `?brand_id=${encodeURIComponent(brandId)}`;
+    }
+    const res = await fetch(url);
+    return _handleResponse(res);
+}
+
+export async function prepareManualBlueprintSplit(payload) {
+    const res = await fetch(`${API_BASE}/brands/blueprint-revision/prepare-manual-split`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
     return _handleResponse(res);
 }
 

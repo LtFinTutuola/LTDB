@@ -278,3 +278,35 @@ class BlueprintRevisionPhotoRetryRequest(BaseModel):
     user_feedback: Optional[str] = Field(default=None, description="Optional user feedback to guide AI retry")
     new_url: Optional[str] = Field(default=None, description="Direct external image URL provided by user")
 
+
+class ManualSplitPrepareRequest(BaseModel):
+    """Request to prepare the Staging Area 'Before & After' directly from manual partitions (skipping rule deduction)."""
+    blueprint_id: str = Field(..., description="Primary blueprint ID being manually revised/split")
+    source_blueprint_ids: Optional[List[str]] = Field(default=None, description="Optional list of blueprint IDs when resolving duplicate blueprints")
+    partitions: List[PartitionGroupInput] = Field(..., min_length=1)
+    job_id: Optional[str] = Field(default=None, description="Existing staging job ID if re-preparing")
+
+
+class WarehouseAnomalyItemSchema(BaseModel):
+    """Represents a single anomalous blueprint (or group of duplicate blueprints) detected in the warehouse."""
+    anomaly_id: str
+    anomaly_type: str = Field(..., description="'SPLIT_REQUIRED' or 'DUPLICATE_MODEL'")
+    blueprint_id: str
+    related_blueprint_ids: List[str] = Field(default_factory=list)
+    article_name: str
+    brand_id: str
+    brand_name: str
+    normalized_vendor_code: Optional[str] = None
+    distinct_normalized_codes: List[str] = Field(default_factory=list)
+    supplier_codes: List[str] = Field(default_factory=list)
+    total_physical_units: int = 0
+    photo_url: Optional[str] = None
+    reason: str
+
+
+class WarehouseAnomaliesResponse(BaseModel):
+    """Response body for GET /api/v1/brands/blueprint-revision/anomalies."""
+    total_count: int = 0
+    anomalies: List[WarehouseAnomalyItemSchema] = Field(default_factory=list)
+
+
