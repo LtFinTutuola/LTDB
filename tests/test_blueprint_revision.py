@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from src.main import app
 from src.models.pim import Brand, BrandHeuristic, BrandCategory, Category, ArticleBlueprint, ArticlePhoto
 from src.models.wms import Supplier, Batch, Article, ArticleStatus
+from src.models.staging import StagingArea, JobType, JobStatus
 from src.repositories.pim_repo import BrandHeuristicRepository
 from src.agents.codes_deduction_agent.nodes.validation_node import _check_contrastive_constraints
 from src.services.blueprint_revision_service import (
@@ -476,9 +477,9 @@ class TestBlueprintRevisionEndToEnd:
             commit_data = res_commit.json()
             assert commit_data["status"] == "success"
             assert commit_data["splits_created"] == 2
-            assert commit_data["merges_executed"] == 0
-            # Remaining warehouse anomalies (bp-extra-split-1 and bp-dup-1/bp-dup-2) are signaled for manual review
-            assert commit_data["remaining_anomalies"] == 2
+            # Remaining warehouse anomalies (only bp-extra-split-1, duplicates are ignored) are signaled for manual review
+            assert commit_data["remaining_anomalies"] == 1
+
 
         # Verify Database State after Atomic Commit:
         # A) Old fused bp-merged-1 was replaced and deleted; a brand-new blueprint exists for HWVG870123#
@@ -797,23 +798,21 @@ class TestManualAnomalyCorrectionAndFromScratchRecreation:
 
             res_commit = client.post(f"/api/v1/brands/blueprint-revision/{rev_job_id}/commit")
             assert res_commit.status_code == 200
-            assert res_commit.json()["remaining_anomalies"] == 2
+            assert res_commit.json()["remaining_anomalies"] == 1
 
-        # 3. GET /anomalies now returns ONLY the 2 anomalies that emerged for the brand of reference (brand-guess-1):
+        # 3. GET /anomalies now returns ONLY the 1 anomaly that emerged for the brand of reference (brand-guess-1):
         #    - bp-extra-split-1 (SPLIT_REQUIRED)
-        #    - bp-dup-1 / bp-dup-2 (DUPLICATE_MODEL)
+        #    Duplicate blueprints (DUPLICATE_MODEL) are ignored according to user requirements.
         res_anom = client.get("/api/v1/brands/blueprint-revision/anomalies")
         assert res_anom.status_code == 200
         anom_data = res_anom.json()
-        assert anom_data["total_count"] == 2
+        assert anom_data["total_count"] == 1
         anomaly_by_bp = {item["blueprint_id"]: item for item in anom_data["anomalies"]}
         assert "bp-extra-split-1" in anomaly_by_bp
         assert anomaly_by_bp["bp-extra-split-1"]["anomaly_type"] == "SPLIT_REQUIRED"
         assert anomaly_by_bp["bp-extra-split-1"]["brand_id"] == "brand-guess-1"
-        assert "bp-dup-1" in anomaly_by_bp
-        assert anomaly_by_bp["bp-dup-1"]["anomaly_type"] == "DUPLICATE_MODEL"
-        assert anomaly_by_bp["bp-dup-1"]["brand_id"] == "brand-guess-1"
-        assert anomaly_by_bp["bp-dup-1"]["related_blueprint_ids"] == ["bp-dup-2"]
+        assert "bp-dup-1" not in anomaly_by_bp
+
 
         # 2. Operator manually splits bp-extra-split-1 WITHOUT recalculating the brand heuristic
         with patch(
@@ -884,6 +883,7 @@ class TestManualAnomalyCorrectionAndFromScratchRecreation:
             res_manual_commit = client.post(f"/api/v1/brands/blueprint-revision/{manual_job_id}/commit")
             assert res_manual_commit.status_code == 200
             assert res_manual_commit.json()["splits_created"] == 2
+            assert res_manual_commit.json()["remaining_anomalies"] == 0
 
         # Verify bp-extra-split-1 was deleted and replaced by 2 brand-new blueprints
         assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-extra-split-1").first() is None
@@ -952,5 +952,332 @@ class TestManualAnomalyCorrectionAndFromScratchRecreation:
         assert bp_777 is not None
         photos_777 = db_session.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp_777.id).all()
         assert {p.canonical_color_name for p in photos_777} == {"nero", "bianco"}
+
+
+class TestAnomaliesGuardsAndManualClosure:
+    """
+    Tests for:
+    1. Blocking article importation and new anomaly/deduction when warehouse anomalies are active.
+    2. Rejection of manual anomaly closure when vendor codes violate brand heuristic syntax or generate divergent roots.
+    3. Acceptance of manual anomaly closure when vendor codes conform strictly to the brand heuristic.
+    """
+
+    def test_import_and_deduce_blocked_when_warehouse_anomalies_exist(self, db_session):
+        client = TestClient(app)
+        brand = Brand(id="b-guard-test", name="BrandGuard")
+        bp = ArticleBlueprint(
+            id="bp-guard-1",
+            brand_id=brand.id,
+            normalized_vendor_code="GUARD#",
+            article_name="Guard Article",
+            description="Descrizione articolo di guardia",
+            extended_description="Descrizione estesa articolo di guardia",
+        )
+        db_session.add_all([brand, bp])
+        db_session.flush()
+
+        # Seed an unresolved anomaly in StagingArea
+        staging_job = StagingArea(
+            id=f"anomalies_brand_{brand.id}",
+            job_type=JobType.WAREHOUSE_ANOMALIES.value,
+            file_path=str(brand.id),
+            status=JobStatus.COMPLETED.value,
+            data={
+                "anomalies": [
+                    {
+                        "anomaly_id": f"split_{bp.id}",
+                        "anomaly_type": "SPLIT_REQUIRED",
+                        "blueprint_id": bp.id,
+                        "related_blueprint_ids": [],
+                        "article_name": bp.article_name,
+                        "brand_id": brand.id,
+                        "brand_name": brand.name,
+                        "normalized_vendor_code": bp.normalized_vendor_code,
+                        "distinct_normalized_codes": ["G1#", "G2#"],
+                        "supplier_codes": ["G1-BLK", "G2-RED"],
+                        "total_physical_units": 2,
+                        "reason": "Split required",
+                    }
+                ]
+            },
+        )
+        db_session.add(staging_job)
+        db_session.commit()
+
+        # Verify get_warehouse_anomalies returns 1 anomaly
+        res_anom = client.get("/api/v1/brands/blueprint-revision/anomalies")
+        assert res_anom.status_code == 200
+        assert res_anom.json()["total_count"] == 1
+
+        # 1. POST /ingestion/extract must return 409 Conflict
+        res_extract = client.post(
+            "/api/v1/ingestion/extract",
+            json={"file_path": "dummy.pdf", "brand_id": brand.id},
+        )
+        assert res_extract.status_code == 409
+        assert "anomalie a magazzino non risolte" in res_extract.json()["detail"]
+
+        # 2. POST /ingestion/single-item must return 409 Conflict
+        res_single = client.post(
+            "/api/v1/ingestion/single-item",
+            json={
+                "brand_id": brand.id,
+                "vendor_code": "GUARD-123",
+                "article_name": "Nuovo Articolo",
+                "barcode": "8000000000001",
+                "quantity": 1,
+                "colors": ["nero"],
+            },
+        )
+        assert res_single.status_code == 409
+        assert "anomalie a magazzino non risolte" in res_single.json()["detail"]
+
+        # 3. POST /ingestion/confirm/{job_id} must return 409 Conflict
+        res_confirm = client.post("/api/v1/ingestion/confirm/dummy-job-id")
+        assert res_confirm.status_code == 409
+        assert "anomalie a magazzino non risolte" in res_confirm.json()["detail"]
+
+        # 4. POST /blueprint-revision/deduce-rule must return 409 Conflict
+        res_deduce = client.post(
+            "/api/v1/brands/blueprint-revision/deduce-rule",
+            json={
+                "blueprint_id": bp.id,
+                "partitions": [
+                    {
+                        "group_id": "g1",
+                        "label": "G1",
+                        "is_original": True,
+                        "article_ids": [],
+                        "supplier_codes": ["G1-BLK"],
+                    }
+                ],
+            },
+        )
+        assert res_deduce.status_code == 409
+        assert "anomalie a magazzino non risolte" in res_deduce.json()["detail"]
+
+    def test_close_anomaly_rejected_when_vendor_codes_violate_heuristic(self, db_session):
+        from datetime import date
+        client = TestClient(app)
+        brand = Brand(id="b-close-rej", name="BrandCloseRej")
+        heuristic = BrandHeuristic(
+            id="heur-close-rej",
+            brand_id=brand.id,
+            pattern=r"^(?P<model>[A-Z0-9]+)-(?P<color_code>[A-Z0-9]+)$",
+            explanation="Modello seguito da trattino e codice colore.",
+        )
+        supplier = Supplier(id="sup-close-rej", company_name="Close Rej SRL")
+        db_session.add_all([brand, heuristic, supplier])
+        db_session.flush()
+
+        batch = Batch(
+            id="batch-close-rej",
+            supplier_id=supplier.id,
+            delivery_note_number="DDT-REJ-01",
+            document_date=date(2026, 10, 26),
+        )
+        db_session.add(batch)
+        db_session.flush()
+
+        # Case A: Syntax error (code does not match the heuristic pattern)
+        bp_syntax = ArticleBlueprint(
+            id="bp-syn-err",
+            brand_id=brand.id,
+            normalized_vendor_code="SYN#",
+            article_name="Syntax Error Blueprint",
+            description="Descrizione syntax error",
+            extended_description="Descrizione estesa syntax error",
+        )
+        db_session.add(bp_syntax)
+        db_session.flush()
+
+        art_syn = Article(
+            id="art-syn-1",
+            article_blueprint_id=bp_syntax.id,
+            batch_id=batch.id,
+            supplier_code="INVALID_NO_HYPHEN",
+            colors=["nero"],
+            status=ArticleStatus.AVAILABLE,
+        )
+        db_session.add(art_syn)
+        db_session.flush()
+
+        job_syn = StagingArea(
+            id=f"anomalies_brand_{brand.id}",
+            job_type=JobType.WAREHOUSE_ANOMALIES.value,
+            file_path=str(brand.id),
+            status=JobStatus.COMPLETED.value,
+            data={
+                "anomalies": [
+                    {
+                        "anomaly_id": f"split_{bp_syntax.id}",
+                        "anomaly_type": "SPLIT_REQUIRED",
+                        "blueprint_id": bp_syntax.id,
+                        "article_name": bp_syntax.article_name,
+                        "brand_id": brand.id,
+                        "brand_name": brand.name,
+                    }
+                ]
+            },
+        )
+        db_session.add(job_syn)
+        db_session.commit()
+
+        res_syn = client.post(f"/api/v1/brands/blueprint-revision/anomalies/{bp_syntax.id}/close")
+        assert res_syn.status_code == 400
+        detail_syn = res_syn.json()["detail"]
+        assert "INVALID_NO_HYPHEN" in detail_syn
+        assert "sintassi" in detail_syn
+
+        # Case B: Multiple distinct normalized roots (e.g. MODA-BLK and MODB-RED)
+        bp_multi = ArticleBlueprint(
+            id="bp-multi-roots",
+            brand_id=brand.id,
+            normalized_vendor_code="MODA#",
+            article_name="Multi Roots Blueprint",
+            description="Descrizione multi roots",
+            extended_description="Descrizione estesa multi roots",
+        )
+        db_session.add(bp_multi)
+        db_session.flush()
+
+        art_multi_1 = Article(
+            id="art-multi-1",
+            article_blueprint_id=bp_multi.id,
+            batch_id=batch.id,
+            supplier_code="MODA-BLK",
+            colors=["nero"],
+            status=ArticleStatus.AVAILABLE,
+        )
+        art_multi_2 = Article(
+            id="art-multi-2",
+            article_blueprint_id=bp_multi.id,
+            batch_id=batch.id,
+            supplier_code="MODB-RED",
+            colors=["rosso"],
+            status=ArticleStatus.AVAILABLE,
+        )
+        db_session.add_all([art_multi_1, art_multi_2])
+        db_session.flush()
+
+        # Update staging anomalies to include bp_multi
+        job_syn.data = {
+            "anomalies": [
+                {
+                    "anomaly_id": f"split_{bp_multi.id}",
+                    "anomaly_type": "SPLIT_REQUIRED",
+                    "blueprint_id": bp_multi.id,
+                    "article_name": bp_multi.article_name,
+                    "brand_id": brand.id,
+                    "brand_name": brand.name,
+                }
+            ]
+        }
+        db_session.commit()
+
+        res_multi = client.post(f"/api/v1/brands/blueprint-revision/anomalies/{bp_multi.id}/close")
+        assert res_multi.status_code == 400
+        detail_multi = res_multi.json()["detail"]
+        assert "MODB-RED" in detail_multi
+        assert "radici distinte" in detail_multi
+
+    def test_close_anomaly_accepted_when_vendor_codes_conform(self, db_session):
+        from datetime import date
+        client = TestClient(app)
+        brand = Brand(id="b-close-ok", name="BrandCloseOk")
+        heuristic = BrandHeuristic(
+            id="heur-close-ok",
+            brand_id=brand.id,
+            pattern=r"^(?P<model>[A-Z0-9]+)-(?P<color_code>[A-Z0-9]+)$",
+            explanation="Modello seguito da trattino e codice colore.",
+        )
+        supplier = Supplier(id="sup-close-ok", company_name="Close Ok SRL")
+        db_session.add_all([brand, heuristic, supplier])
+        db_session.flush()
+
+        batch = Batch(
+            id="batch-close-ok",
+            supplier_id=supplier.id,
+            delivery_note_number="DDT-OK-01",
+            document_date=date(2026, 10, 26),
+        )
+        db_session.add(batch)
+        db_session.flush()
+
+        bp_ok = ArticleBlueprint(
+            id="bp-ok-1",
+            brand_id=brand.id,
+            normalized_vendor_code="OLD_INCORRECT_CODE#",
+            article_name="Conforming Blueprint",
+            description="Descrizione conforming blueprint",
+            extended_description="Descrizione estesa conforming blueprint",
+        )
+        db_session.add(bp_ok)
+        db_session.flush()
+
+        # Both articles conform to regex and produce the same normalized root "BAG100#"
+        art_1 = Article(
+            id="art-ok-1",
+            article_blueprint_id=bp_ok.id,
+            batch_id=batch.id,
+            supplier_code="BAG100-BLK",
+            colors=["nero"],
+            status=ArticleStatus.AVAILABLE,
+        )
+        art_2 = Article(
+            id="art-ok-2",
+            article_blueprint_id=bp_ok.id,
+            batch_id=batch.id,
+            supplier_code="BAG100-RED",
+            colors=["rosso"],
+            status=ArticleStatus.AVAILABLE,
+        )
+        db_session.add_all([art_1, art_2])
+        db_session.flush()
+
+        job_ok = StagingArea(
+            id=f"anomalies_brand_{brand.id}",
+            job_type=JobType.WAREHOUSE_ANOMALIES.value,
+            file_path=str(brand.id),
+            status=JobStatus.COMPLETED.value,
+            data={
+                "anomalies": [
+                    {
+                        "anomaly_id": f"split_{bp_ok.id}",
+                        "anomaly_type": "SPLIT_REQUIRED",
+                        "blueprint_id": bp_ok.id,
+                        "article_name": bp_ok.article_name,
+                        "brand_id": brand.id,
+                        "brand_name": brand.name,
+                        "reason": "Split required",
+                    }
+                ]
+            },
+        )
+        db_session.add(job_ok)
+        db_session.commit()
+
+        # Verify initial anomaly count is 1
+        res_initial = client.get("/api/v1/brands/blueprint-revision/anomalies")
+        assert res_initial.status_code == 200
+        assert res_initial.json()["total_count"] == 1
+
+        # Close anomaly successfully
+        res_close = client.post(f"/api/v1/brands/blueprint-revision/anomalies/{bp_ok.id}/close")
+        assert res_close.status_code == 200
+        close_data = res_close.json()
+        assert close_data["success"] is True
+        assert close_data["remaining_anomalies"] == 0
+        assert close_data["blueprint_id"] == bp_ok.id
+
+        # Verify normalized_vendor_code on blueprint was updated to verified root
+        refreshed_bp = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == bp_ok.id).first()
+        assert refreshed_bp.normalized_vendor_code == "BAG100-#"
+
+        # Verify anomaly is gone and queue is empty
+        res_after = client.get("/api/v1/brands/blueprint-revision/anomalies")
+        assert res_after.status_code == 200
+        assert res_after.json()["total_count"] == 0
+
 
 

@@ -10,13 +10,14 @@ Endpoints:
     POST   /api/v1/brands/heuristic/{job_id}/confirm      - Confirm heuristic
 """
 from typing import Optional
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from src.core.database import get_db
 from src.services import heuristic_service, blueprint_revision_service
 from src.schemas.data_ingestion import (
     BlueprintRevisionPhotoRetryRequest,
+    CloseAnomalyResponse,
     HeuristicDeductionRequest,
     HeuristicJobStatusResponse,
     BlueprintRevisionContextResponse,
@@ -84,6 +85,18 @@ def get_warehouse_anomalies(
     return blueprint_revision_service.get_warehouse_anomalies(db, brand_id=brand_id)
 
 
+@router.post(
+    "/blueprint-revision/anomalies/{blueprint_id}/close",
+    response_model=CloseAnomalyResponse,
+)
+def close_warehouse_anomaly(
+    blueprint_id: str,
+    db: Session = Depends(get_db),
+):
+    """Manually close an anomaly only if all vendor codes conform to the active deduction heuristic."""
+    return blueprint_revision_service.close_warehouse_anomaly(db, blueprint_id)
+
+
 @router.post("/blueprint-revision/prepare-manual-split")
 async def prepare_manual_blueprint_split(
     request: ManualSplitPrepareRequest,
@@ -125,6 +138,15 @@ async def deduce_blueprint_revision_rule(
     db: Session = Depends(get_db),
 ):
     """Deduce or refine the vendor code normalization rule from visual partitions and optional user feedback."""
+    anomalies = blueprint_revision_service.get_warehouse_anomalies(db)
+    if anomalies.total_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Impossibile avviare una nuova revisione di regole: sono presenti {anomalies.total_count} anomalie a magazzino non risolte. "
+                f"Risolvere o chiudere le anomalie esistenti prima di revisionare altri blueprint."
+            ),
+        )
     return await blueprint_revision_service.deduce_and_preview_rule(db, request)
 
 

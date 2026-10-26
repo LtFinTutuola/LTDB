@@ -301,12 +301,20 @@ class WarehouseAnomalyItemSchema(BaseModel):
     supplier_codes: List[str] = Field(default_factory=list)
     total_physical_units: int = 0
     photo_url: Optional[str] = None
-    reason: str
+    reason: str = Field(default="Anomalia di classificazione")
 
 
 class WarehouseAnomaliesResponse(BaseModel):
     """Response body for GET /api/v1/brands/blueprint-revision/anomalies."""
     total_count: int = 0
     anomalies: List[WarehouseAnomalyItemSchema] = Field(default_factory=list)
+
+
+class CloseAnomalyResponse(BaseModel):
+    """Response body for POST /api/v1/brands/blueprint-revision/anomalies/{blueprint_id}/close."""
+    success: bool
+    message: str
+    remaining_anomalies: int
+    blueprint_id: str
 
 

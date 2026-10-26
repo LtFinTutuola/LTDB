@@ -51,6 +51,7 @@ from src.schemas.data_ingestion import (
     RuleDeductionResponse,
     WarehouseAnomaliesResponse,
     WarehouseAnomalyItemSchema,
+    CloseAnomalyResponse,
 )
 from src.services import photo_service
 from src.services.pim_service import build_blueprint_embedding_text
@@ -255,24 +256,15 @@ def get_warehouse_anomalies(
 
         pruned_list: List[WarehouseAnomalyItemSchema] = []
         for item in raw_list:
+            if item.get("anomaly_type") != "SPLIT_REQUIRED":
+                continue
             primary_id = str(item.get("blueprint_id") or "")
             if not primary_id or primary_id not in existing_bp_map:
                 continue
 
-            related = [str(r) for r in (item.get("related_blueprint_ids") or []) if str(r) in existing_bp_map]
-            if item.get("anomaly_type") == "DUPLICATE_MODEL" and not related:
-                continue
-
-            item["related_blueprint_ids"] = related
             primary_bp = existing_bp_map[primary_id]
-            if item.get("anomaly_type") == "SPLIT_REQUIRED":
-                item["article_name"] = primary_bp.article_name
-            else:
-                names = [primary_bp.article_name] + [
-                    existing_bp_map[r].article_name for r in related if r in existing_bp_map
-                ]
-                item["article_name"] = " / ".join(dict.fromkeys(n for n in names if n))
-
+            item["related_blueprint_ids"] = []
+            item["article_name"] = primary_bp.article_name
             pruned_list.append(WarehouseAnomalyItemSchema(**item))
 
         if len(pruned_list) != len(raw_list):
@@ -299,19 +291,13 @@ def _build_brand_anomalies_from_diff(
     """
     Constructs the list of WarehouseAnomalyItemSchema for anomalies that emerged
     during the review of all articles of the brand of reference.
+    Only SPLIT_REQUIRED anomalies are included (duplicate blueprints are ignored).
     """
     splits_raw = diff_summary.get("warehouse_splits_raw") or []
-    merges_raw = diff_summary.get("warehouse_merges_raw") or []
-    if not splits_raw and not merges_raw:
+    if not splits_raw:
         return []
 
-    all_bp_ids: set[str] = set()
-    for s in splits_raw:
-        all_bp_ids.add(str(s["source_blueprint_id"]))
-    for m in merges_raw:
-        for bid in m.get("blueprint_ids", []):
-            all_bp_ids.add(str(bid))
-
+    all_bp_ids: set[str] = {str(s["source_blueprint_id"]) for s in splits_raw}
     bps = db.query(ArticleBlueprint).filter(ArticleBlueprint.id.in_(list(all_bp_ids))).all() if all_bp_ids else []
     bp_map = {str(b.id): b for b in bps}
 
@@ -327,7 +313,7 @@ def _build_brand_anomalies_from_diff(
 
     anomalies: List[WarehouseAnomalyItemSchema] = []
 
-    # 1. Splits discovered in brand of reference
+    # Splits discovered in brand of reference
     for s in splits_raw:
         bp_id = str(s["source_blueprint_id"])
         bp = bp_map.get(bp_id)
@@ -356,44 +342,134 @@ def _build_brand_anomalies_from_diff(
             )
         )
 
-    # 2. Merges discovered in brand of reference
-    for m in merges_raw:
-        bp_ids = [str(x) for x in m.get("blueprint_ids", [])]
-        if len(bp_ids) < 2:
-            continue
-        primary_id = bp_ids[0]
-        related_ids = bp_ids[1:]
-        primary_bp = bp_map.get(primary_id)
-        if not primary_bp:
-            continue
-        combined_arts = []
-        photo_url = None
-        for bid in bp_ids:
-            combined_arts.extend(arts_by_bp.get(bid, []))
-            if not photo_url and photos_by_bp.get(bid):
-                photo_url = f"/api/v1/ingestion/photos/{photos_by_bp[bid][0].id}"
-        names = [bp_map[b].article_name for b in bp_ids if b in bp_map and bp_map[b].article_name]
-        sup_codes = sorted({(a.supplier_code or "").strip().upper() for a in combined_arts if a.supplier_code})
-        norm_code = m.get("normalized_vendor_code") or ""
-        anomalies.append(
-            WarehouseAnomalyItemSchema(
-                anomaly_id=f"dup_{primary_id}",
-                anomaly_type="DUPLICATE_MODEL",
-                blueprint_id=primary_id,
-                related_blueprint_ids=related_ids,
-                article_name=" / ".join(dict.fromkeys(names)) or primary_bp.article_name,
-                brand_id=brand_id,
-                brand_name=brand_name,
-                normalized_vendor_code=norm_code,
-                distinct_normalized_codes=[norm_code],
-                supplier_codes=sup_codes,
-                total_physical_units=len(combined_arts),
-                photo_url=photo_url,
-                reason=f"{len(bp_ids)} schede separate per lo stesso modello ({norm_code})",
-            )
+    return anomalies
+
+
+def _remove_anomaly_from_staging(db: Session, brand_id: str, blueprint_id: str) -> None:
+    """Removes a resolved/closed blueprint anomaly from StagingArea for the brand."""
+    anom_job_id = f"anomalies_brand_{brand_id}"
+    anom_job = staging_repo.get_job(db, anom_job_id)
+    if not anom_job:
+        anom_job = db.query(StagingArea).filter(
+            StagingArea.job_type == JobType.WAREHOUSE_ANOMALIES.value,
+            StagingArea.file_path == str(brand_id),
+        ).first()
+
+    if anom_job and anom_job.data:
+        anom_data = anom_job.data
+        current_anoms = anom_data.get("anomalies") or []
+        bp_str = str(blueprint_id)
+        remaining = [
+            item for item in current_anoms
+            if str(item.get("blueprint_id")) != bp_str
+            and bp_str not in [str(r) for r in (item.get("related_blueprint_ids") or [])]
+        ]
+        if remaining:
+            anom_data["anomalies"] = remaining
+            staging_repo.update_job_data(db, anom_job.id, anom_data)
+        else:
+            staging_repo.delete_job(db, anom_job.id)
+
+
+def close_warehouse_anomaly(db: Session, blueprint_id: str) -> CloseAnomalyResponse:
+    """
+    Manually closes an anomaly for a blueprint, but strictly validates that all physical
+    articles' vendor codes conform to the active BrandHeuristic and produce a single normalized root.
+    If any vendor code violates the heuristic syntax or generates a divergent root, raises HTTP 400.
+    """
+    bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == blueprint_id).first()
+    if not bp:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Blueprint '{blueprint_id}' non trovato.",
         )
 
-    return anomalies
+    articles = db.query(Article).filter(Article.article_blueprint_id == bp.id).all()
+    supplier_codes = sorted({(a.supplier_code or "").strip().upper() for a in articles if a.supplier_code})
+
+    if not supplier_codes:
+        # Blueprint without physical supplier codes: can be closed safely
+        _remove_anomaly_from_staging(db, str(bp.brand_id), str(bp.id))
+        db.commit()
+        remaining = get_warehouse_anomalies(db).total_count
+        return CloseAnomalyResponse(
+            success=True,
+            message="Anomalia chiusa con successo: la scheda non presenta articoli fisici con codici fornitore da validare.",
+            remaining_anomalies=remaining,
+            blueprint_id=blueprint_id,
+        )
+
+    matched_heuristic = heuristic_repo.find_matching_heuristic(db, str(bp.brand_id), supplier_codes)
+    if not matched_heuristic or not matched_heuristic.pattern:
+        brand_name = bp.brand.name if bp.brand else str(bp.brand_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Nessuna euristica attiva configurata per il brand '{brand_name}'.",
+        )
+
+    try:
+        compiled_regex = re.compile(matched_heuristic.pattern)
+    except re.error as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Errore nella compilazione dell'euristica attiva del brand: {e}",
+        )
+
+    syntax_errors: List[str] = []
+    roots_by_code: Dict[str, str] = {}
+    codes_by_root: Dict[str, List[str]] = defaultdict(list)
+
+    for code in supplier_codes:
+        norm_root, matched = _normalize_vendor_code(code, compiled_regex)
+        if not matched:
+            syntax_errors.append(code)
+        else:
+            roots_by_code[code] = norm_root
+            codes_by_root[norm_root].append(code)
+
+    if syntax_errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Impossibile chiudere l'anomalia: i seguenti codici fornitore non rispettano la sintassi dell'euristica attiva: "
+                f"{', '.join(syntax_errors)}. Correggi i codici o l'euristica prima di chiudere l'anomalia."
+            ),
+        )
+
+    if len(codes_by_root) > 1:
+        # Multiple distinct normalized roots: blueprint merges disparate models!
+        target_root = (
+            bp.normalized_vendor_code
+            if bp.normalized_vendor_code in codes_by_root
+            else max(codes_by_root.keys(), key=lambda r: len(codes_by_root[r]))
+        )
+        violating_codes = [c for c, r in roots_by_code.items() if r != target_root]
+        roots_desc = [f"'{r}' ({len(cds)} articoli: {', '.join(cds)})" for r, cds in codes_by_root.items()]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Impossibile chiudere l'anomalia: la scheda articolo aggrega modelli differenti che generano radici distinte: "
+                f"{'; '.join(roots_desc)}. Codici non conformi rispetto al modello principale: {', '.join(violating_codes)}. "
+                f"È necessario procedere con la divisione manuale della scheda."
+            ),
+        )
+
+    # All codes strictly conform to the heuristic and produce a single normalized root!
+    single_root = next(iter(codes_by_root.keys()))
+    if bp.normalized_vendor_code != single_root:
+        bp.normalized_vendor_code = single_root
+
+    _remove_anomaly_from_staging(db, str(bp.brand_id), str(bp.id))
+    db.commit()
+
+    remaining = get_warehouse_anomalies(db).total_count
+    return CloseAnomalyResponse(
+        success=True,
+        message="Anomalia chiusa con successo: tutti i codici fornitore risultano conformi all'euristica attiva del brand.",
+        remaining_anomalies=remaining,
+        blueprint_id=blueprint_id,
+    )
+
 
 
 

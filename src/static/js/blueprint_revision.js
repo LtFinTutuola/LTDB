@@ -161,16 +161,47 @@ export async function openWarehouseAnomaliesModal(onComplete = null) {
                                         </div>
                                     </div>
                                 </div>
-                                <button type="button" class="btn-primary btn-fix-warehouse-anomaly" data-anomaly-idx="${idx}" style="white-space:nowrap;padding:7px 14px;font-size:12.5px;display:inline-flex;align-items:center;gap:6px;">
-                                    <span class="material-symbols-rounded" style="font-size:16px;">call_split</span>
-                                    Correggi Manualmente
-                                </button>
+                                <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                                    <button type="button" class="btn-secondary btn-close-warehouse-anomaly" data-anomaly-idx="${idx}" style="white-space:nowrap;padding:7px 12px;font-size:12px;display:inline-flex;align-items:center;gap:5px;">
+                                        <span class="material-symbols-rounded" style="font-size:16px;color:#81c995;">check_circle</span>
+                                        Chiudi Anomalia
+                                    </button>
+                                    <button type="button" class="btn-primary btn-fix-warehouse-anomaly" data-anomaly-idx="${idx}" style="white-space:nowrap;padding:7px 14px;font-size:12.5px;display:inline-flex;align-items:center;gap:6px;">
+                                        <span class="material-symbols-rounded" style="font-size:16px;">call_split</span>
+                                        Correggi Manualmente
+                                    </button>
+                                </div>
                             </div>
                         `;
                     })
                     .join('')}
             </div>
         `;
+
+        body.querySelectorAll('.btn-close-warehouse-anomaly').forEach((btn) => {
+            btn.addEventListener('click', async (e) => {
+                const idx = parseInt(e.currentTarget.dataset.anomalyIdx, 10);
+                const item = items[idx];
+                if (!item) return;
+
+                const originalHtml = btn.innerHTML;
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;"></span> Verifica...';
+
+                try {
+                    const res = await api.closeWarehouseAnomaly(item.blueprint_id);
+                    addMessage(`✅ ${res.message}`, 'system');
+                    await showWarehouseAnomaliesModal(onComplete);
+                    await refreshWarehouseAnomaliesBadge();
+                    if (typeof onComplete === 'function') onComplete();
+                } catch (err) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                    addMessage(`❌ ${err.message}`, 'error');
+                    alert(`Impossibile chiudere l'anomalia:\n\n${err.message}`);
+                }
+            });
+        });
 
         body.querySelectorAll('.btn-fix-warehouse-anomaly').forEach((btn) => {
             btn.addEventListener('click', (e) => {
@@ -207,7 +238,7 @@ function _ensureAnomaliesModalContainer() {
                     <div>
                         <h3 class="modal-title" style="margin: 0;">Anomalie Magazzino Rilevate</h3>
                         <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
-                            Correggi manualmente i blueprint anomali uno per uno
+                            Correggi manualmente o valida e chiudi le schede articolo anomale
                         </div>
                     </div>
                 </div>
@@ -242,12 +273,25 @@ export async function openBlueprintRevision(blueprintId, onComplete = null, opti
         return;
     }
 
+    _skipRuleDeduction = Boolean(options.skipRuleDeduction);
+    if (!_skipRuleDeduction) {
+        try {
+            const anomRes = await api.getWarehouseAnomalies();
+            if (anomRes && anomRes.total_count > 0) {
+                const msg = `Sono presenti ${anomRes.total_count} anomalie a magazzino non risolte. Risolvi o chiudi le anomalie aperte prima di dividere altri blueprint.`;
+                addMessage(`⚠️ ${msg}`, 'error');
+                alert(`Impossibile avviare la divisione del blueprint:\n\n${msg}`);
+                return;
+            }
+        } catch (_) {}
+    }
+
     _onCompleteCallback = onComplete;
     _currentJobId = null;
     _currentRuleResponse = null;
     _currentStagingJob = null;
-    _skipRuleDeduction = Boolean(options.skipRuleDeduction);
     _relatedBlueprintIds = Array.isArray(options.relatedBlueprintIds) ? options.relatedBlueprintIds : [];
+
 
     _ensureModalContainer();
     const modal = document.getElementById('modal-blueprint-revision');

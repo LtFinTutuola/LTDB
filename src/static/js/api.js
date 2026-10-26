@@ -384,4 +384,12 @@ export async function retryBlueprintRevisionPhoto(jobId, payload) {
     return _handleResponse(res);
 }
 
+export async function closeWarehouseAnomaly(blueprintId) {
+    const res = await fetch(`${API_BASE}/brands/blueprint-revision/anomalies/${encodeURIComponent(blueprintId)}/close`, {
+        method: 'POST',
+    });
+    return _handleResponse(res);
+}
+
+
 

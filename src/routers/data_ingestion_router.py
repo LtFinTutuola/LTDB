@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, 
 from sqlalchemy.orm import Session
 from src.core.database import get_db
 from src.schemas.data_ingestion import ExtractionRequest, JobStatusResponse, SingleItemIngestionRequest, StagingRevisionRequest, StagingRevisionResponse, PhotoRetryRequest
-from src.services import data_ingestion_service, staging_revision_service, photo_service
+from src.services import data_ingestion_service, staging_revision_service, photo_service, blueprint_revision_service
 from src.repositories import staging_repo
 from src.core.logger import get_logger
 
@@ -23,6 +23,15 @@ def extract_data(request: ExtractionRequest, background_tasks: BackgroundTasks, 
                          request_body=request.model_dump())
     start_time = time.time()
     try:
+        anomalies = blueprint_revision_service.get_warehouse_anomalies(db)
+        if anomalies.total_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Impossibile importare nuovi articoli: sono presenti {anomalies.total_count} anomalie a magazzino non risolte. "
+                    f"Risolvere o chiudere le anomalie prima di procedere con l'importazione."
+                ),
+            )
         job_id = data_ingestion_service.accept_job(db, request.file_path)
         background_tasks.add_task(
             data_ingestion_service.process_and_stage_pdf,
@@ -133,6 +142,15 @@ async def confirm_extraction(
                          job_id=job_id)
     start_time = time.time()
     try:
+        anomalies = blueprint_revision_service.get_warehouse_anomalies(db)
+        if anomalies.total_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Impossibile confermare l'importazione: sono presenti {anomalies.total_count} anomalie a magazzino non risolte. "
+                    f"Risolvere o chiudere le anomalie prima di procedere con l'inserimento a magazzino."
+                ),
+            )
         data_ingestion_service.check_job_status(db, job_id)
         await data_ingestion_service.confirm_and_persist_staging(db, job_id, background_tasks)
         response_body = {"status": "success", "message": "Data successfully ingested"}
@@ -168,6 +186,15 @@ async def process_single_item(
                          request_body=request.model_dump())
     start_time = time.time()
     try:
+        anomalies = blueprint_revision_service.get_warehouse_anomalies(db)
+        if anomalies.total_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Impossibile importare l'articolo: sono presenti {anomalies.total_count} anomalie a magazzino non risolte. "
+                    f"Risolvere o chiudere le anomalie prima di procedere con l'importazione."
+                ),
+            )
         job_id = data_ingestion_service.accept_single_item_job(db, request)
         background_tasks.add_task(
             data_ingestion_service.process_and_stage_single_item,
