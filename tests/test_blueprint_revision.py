@@ -1412,6 +1412,154 @@ class TestAnomaliesGuardsAndManualClosure:
         assert card_after_nosub["category"]["description"] == "Borse"
         assert card_after_nosub["sub_category"] is None
 
+    def test_mandarina_duck_order_invariance_and_anti_overfitting(self):
+        """
+        Regression test for the Mandarina Duck scenario:
+        1. build_contrastive_structural_hints deterministically identifies the 8-char root / 3-char color split
+           regardless of whether group (P10QMT7109K, P10QMT71803) is first or second.
+        2. _check_anti_overfitting and validation_node reject literal model alternations like
+           '^P10QMT(71|56)(?P<color_code>[A-Z0-9]{3})$' that would blind warehouse-wide anomaly detection.
+        """
+        from src.agents.codes_deduction_agent.nodes.validation_node import (
+            build_contrastive_structural_hints,
+            _check_anti_overfitting,
+            validation_node,
+        )
+        from src.agents.codes_deduction_agent.state import CodesDeductionGraphState
 
+        must_merge = [["P10QMT7109K", "P10QMT71803"]]
+        split_order_1 = [["P10QMT7109K", "P10QMT71803"], ["P10QMT56651"]]
+        split_order_2 = [["P10QMT56651"], ["P10QMT7109K", "P10QMT71803"]]
 
+        hints_1 = build_contrastive_structural_hints(split_order_1, must_merge)
+        hints_2 = build_contrastive_structural_hints(split_order_2, must_merge)
 
+        for hints in (hints_1, hints_2):
+            assert "P10QMT71" in hints
+            assert "primi 8 caratteri" in hints
+            assert "ULTIMI 3 caratteri" in hints
+            assert "CONCLUSIONE MATEMATICA ESATTA" in hints
+
+        # Overfitted regex with literal alternation (71|56) must be flagged
+        overfitted_regex = r"^P10QMT(71|56)(?P<color_code>[A-Z0-9]{3})$"
+        overfit_errs = _check_anti_overfitting(overfitted_regex, split_order_1)
+        assert len(overfit_errs) == 1
+        assert "Overfitting rilevato" in overfit_errs[0]
+        assert "(71|56)" in overfit_errs[0]
+
+        # validation_node must reject the overfitted regex even when only the 3 partition codes are passed
+        state_overfit = CodesDeductionGraphState(
+            vendor_codes=["P10QMT7109K", "P10QMT71803", "P10QMT56651"],
+            brand_name="Mandarina Duck",
+            must_split_groups=split_order_1,
+            must_merge_groups=must_merge,
+            candidate_regex=overfitted_regex,
+            iteration=1,
+            max_iterations=3,
+        )
+        res_overfit = validation_node(state_overfit)
+        assert res_overfit["success"] is False
+        assert any("Overfitting rilevato" in e for e in res_overfit["contrastive_errors"])
+
+        # General regex must pass without overfitting errors
+        general_regex = r"^(?P<base_code>[A-Z0-9]{8})(?P<color_code>[A-Z0-9]{3})$"
+        assert _check_anti_overfitting(general_regex, split_order_1) == []
+        state_general = CodesDeductionGraphState(
+            vendor_codes=["P10QMT7109K", "P10QMT71803", "P10QMT56651"],
+            brand_name="Mandarina Duck",
+            must_split_groups=split_order_1,
+            must_merge_groups=must_merge,
+            candidate_regex=general_regex,
+            iteration=1,
+            max_iterations=3,
+        )
+        res_general = validation_node(state_general)
+        assert res_general["success"] is True
+
+    def test_deduce_rule_does_not_discard_warehouse_corpus_on_contrastive_failure(self, db_session):
+        """
+        Verify that when CodesDeductionAgent fails due to contrastive errors (0 historical validation_failures),
+        deduce_and_preview_rule does NOT retry on partition codes alone (which previously allowed overfitting),
+        and when a specific outlier historical code fails regex validation, only that outlier is removed
+        while keeping the rest of the warehouse corpus intact.
+        """
+        from src.agents.base import AgentException
+
+        _seed_brand_and_warehouse(db_session)
+
+        partitions_payload = [
+            {
+                "group_id": "group_original",
+                "label": "Borsa GuessTest Grande",
+                "is_original": True,
+                "article_ids": ["art-123-bla-1", "art-123-bla-2", "art-123-red-1"],
+                "supplier_codes": ["HWVG870123BLA", "HWVG870123RED"],
+            },
+            {
+                "group_id": "group_new_1",
+                "label": "Portafoglio GuessTest Piccolo",
+                "is_original": False,
+                "article_ids": ["art-999-bla-1"],
+                "supplier_codes": ["HWVG870999BLA"],
+            },
+        ]
+
+        # Case 1: Failure caused purely by contrastive_errors (validation_failures=[]) -> must NOT retry on 3 codes
+        contrastive_exc = AgentException(
+            message="Contrastive failure",
+            output={
+                "error": "Contrastive failure",
+                "last_regex_attempt": r"^HWVG87[0-9]+(?P<color_code>[A-Z]{2})$",
+                "validation_failures": [],
+                "contrastive_errors": ["Vincolo Must-Merge violato"],
+            },
+        )
+        with patch(
+            "src.services.blueprint_revision_service.CodesDeductionAgent.aexecute",
+            new_callable=AsyncMock,
+            side_effect=[contrastive_exc],
+        ) as mock_agent_1:
+            res_fail = client.post(
+                "/api/v1/brands/blueprint-revision/deduce-rule",
+                json={"blueprint_id": "bp-merged-1", "partitions": partitions_payload},
+            )
+            assert res_fail.status_code == 422
+            # Must have been called only ONCE (no blind fallback to partition codes)
+            assert mock_agent_1.call_count == 1
+
+        # Case 2: Failure caused by 1 outlier historical code -> retry removes ONLY that outlier, keeping other historical codes
+        outlier_exc = AgentException(
+            message="Outlier failure",
+            output={
+                "error": "1 code failed",
+                "last_regex_attempt": r"^[A-Z0-9]{10}(?P<color_code>[A-Z]{3})$",
+                "validation_failures": ["HWVG870888GRN"],
+                "contrastive_errors": [],
+            },
+        )
+        mock_success_res = {
+            "regex": r"^[A-Z0-9]{10}(?P<color_code>[A-Z]{3})$",
+            "explanation": "Primi 10 caratteri modello, ultimi 3 colore.",
+            "examples": [{"raw": "HWVG870123BLA", "normalized": "HWVG870123#"}],
+        }
+        with patch(
+            "src.services.blueprint_revision_service.CodesDeductionAgent.aexecute",
+            new_callable=AsyncMock,
+            side_effect=[outlier_exc, mock_success_res],
+        ) as mock_agent_2, patch(
+            "src.services.blueprint_revision_service.LLMClient.call",
+            new_callable=AsyncMock,
+            return_value="Spiegazione chiara per l'operatore.",
+        ):
+            res_ok = client.post(
+                "/api/v1/brands/blueprint-revision/deduce-rule",
+                json={"blueprint_id": "bp-merged-1", "partitions": partitions_payload},
+            )
+            assert res_ok.status_code == 200
+            assert mock_agent_2.call_count == 2
+            second_call_codes = mock_agent_2.call_args_list[1][0][0]["vendor_codes"]
+            # The outlier 'HWVG870888GRN' was removed, but other warehouse historical codes (e.g. 'HWVG870555BLA') were kept!
+            assert "HWVG870888GRN" not in second_call_codes
+            assert "HWVG870555BLA" in second_call_codes
+            # And warehouse anomaly detection still detected the extra split in warehouse!
+            assert res_ok.json()["estimated_splits_count"] == 2

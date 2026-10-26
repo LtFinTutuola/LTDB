@@ -11,6 +11,7 @@ import yaml
 
 from src.agents.llm_client import LLMClient
 from src.agents.codes_deduction_agent.state import CodesDeductionGraphState
+from src.agents.codes_deduction_agent.nodes.validation_node import build_contrastive_structural_hints
 from src.core.logger import get_logger
 
 logger = get_logger()
@@ -105,6 +106,11 @@ async def pattern_analysis_node(state: CodesDeductionGraphState) -> dict:
                 "I seguenti codici sono varianti colore dello STESSO identico modello e DEVONO produrre lo stesso codice normalizzato:\n"
                 + "\n".join(merge_desc) + "\n\n"
             )
+
+    # Add deterministic mathematical breakdown of Must-Merge / Must-Split boundaries
+    structural_hints = build_contrastive_structural_hints(state.must_split_groups, state.must_merge_groups)
+    if structural_hints:
+        prompt += structural_hints + "\n"
 
     # Add explicit user feedback / correction
     if state.user_feedback:

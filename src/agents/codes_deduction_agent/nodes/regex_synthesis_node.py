@@ -10,6 +10,7 @@ import yaml
 
 from src.agents.llm_client import LLMClient
 from src.agents.codes_deduction_agent.state import CodesDeductionGraphState
+from src.agents.codes_deduction_agent.nodes.validation_node import build_contrastive_structural_hints
 from src.core.logger import get_logger
 
 logger = get_logger()
@@ -31,7 +32,7 @@ _SYSTEM_PROMPT = (
     "1. Il regex DEVE validare l'intera struttura morfologica del codice fornitore (è consigliato usare `^` e `$`).\n"
     "2. Se l'analisi indica la presenza di una variante colore, il regex DEVE contenere un named capture group chiamato 'color_code' che catturi ESATTAMENTE E SOLO il segmento colore.\n"
     "3. Se l'analisi indica che non c'è nessun codice colore, il regex DEVE validare la struttura del codice senza alcun gruppo 'color_code'. Non restituire mai una stringa vuota.\n"
-    "4. Usa classi generiche (es. `[A-Z]+[0-9]+`) piuttosto che lunghezze fisse strette (es. `[A-Z]{2}[0-9]{5}`) per la struttura base, al fine di evitare overfitting, a meno che il pattern non sia palesemente rigido.\n"
+    "4. DIVIETO DI OVERFITTING SUI MODELLI: Usa classi di caratteri generali (es. `[A-Z0-9]{8}` o `[A-Z]+[0-9]+`) per la struttura base. È SEVERAMENTE VIETATO inserire alternanze letterali con gli identificativi specifici dei modelli presenti negli esempi (es. VIETATO scrivere `(71|56)` o `(QMT71|QMT56)`): il regex deve matchare TUTTI i modelli presenti e futuri del brand!\n"
     "5. NON usare lookbehind/lookahead complessi che potrebbero causare backtracking catastrofico.\n"
     "6. Mantieni il regex il più semplice e leggibile possibile.\n\n"
     "Restituisci ESCLUSIVAMENTE un JSON con le seguenti chiavi:\n"
@@ -72,6 +73,9 @@ async def regex_synthesis_node(state: CodesDeductionGraphState) -> dict:
                 "\n**Vincolo Must-Merge (DEVONO avere lo stesso codice normalizzato dopo aver mascherato `color_code` con `#`):**\n"
                 + "\n".join(m_lines) + "\n"
             )
+    structural_hints = build_contrastive_structural_hints(state.must_split_groups, state.must_merge_groups)
+    if structural_hints:
+        extra_constraints += "\n" + structural_hints
     if state.user_feedback:
         extra_constraints += f"\n**Indicazione esplicita dell'utente:** \"{state.user_feedback}\"\n"
     if state.contrastive_errors:

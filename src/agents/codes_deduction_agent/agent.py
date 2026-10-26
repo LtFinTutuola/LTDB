@@ -91,12 +91,16 @@ class CodesDeductionAgent(BaseAgent):
             output_explanation = final_state.get("output_explanation", "")
             output_examples = final_state.get("output_examples", [])
             error_message = final_state.get("error_message", "")
+            validation_failures = final_state.get("validation_failures", [])
+            contrastive_errors = final_state.get("contrastive_errors", [])
         else:
             success = getattr(final_state, "success", False)
             output_regex = getattr(final_state, "output_regex", "")
             output_explanation = getattr(final_state, "output_explanation", "")
             output_examples = getattr(final_state, "output_examples", [])
             error_message = getattr(final_state, "error_message", "")
+            validation_failures = getattr(final_state, "validation_failures", [])
+            contrastive_errors = getattr(final_state, "contrastive_errors", [])
 
         if not success:
             raise AgentException(
@@ -104,6 +108,8 @@ class CodesDeductionAgent(BaseAgent):
                 output={
                     "error": error_message,
                     "last_regex_attempt": output_regex,
+                    "validation_failures": validation_failures,
+                    "contrastive_errors": contrastive_errors,
                 },
             )
 

@@ -791,17 +791,37 @@ async def deduce_and_preview_rule(
             "user_feedback": request.user_correction,
         })
     except AgentException as exc:
-        # Fallback: if historical codes from other product lines conflicted, retry with the blueprint's codes only
-        if historical_codes:
-            logger.log_execution("blueprint_revision_service", "deduce_retry_scoped_corpus", "warn", exc=str(exc))
-            deduction_res = await deduction_agent.aexecute({
-                "vendor_codes": all_partition_codes,
-                "brand_name": brand.name,
-                "previous_explanation": prev_explanation_ctx,
-                "must_split_groups": must_split_groups,
-                "must_merge_groups": must_merge_groups,
-                "user_feedback": request.user_correction,
-            })
+        # Only filter out specific historical codes if they explicitly failed regex matching
+        # (e.g. outlier codes from a different product line). Never discard historical codes
+        # when the failure was due to contrastive constraints on the partitioned blueprint itself.
+        exc_out = getattr(exc, "output", None) or {}
+        failed_codes_set = set(exc_out.get("validation_failures") or [])
+        failed_historical = [c for c in historical_codes if c in failed_codes_set]
+        if historical_codes and failed_historical:
+            surviving_historical = [c for c in historical_codes if c not in failed_codes_set]
+            scoped_corpus = all_partition_codes + surviving_historical
+            logger.log_execution(
+                "blueprint_revision_service",
+                "deduce_retry_scoped_corpus",
+                "warn",
+                exc=str(exc),
+                removed_outliers_count=len(failed_historical),
+                remaining_corpus_count=len(scoped_corpus),
+            )
+            try:
+                deduction_res = await deduction_agent.aexecute({
+                    "vendor_codes": scoped_corpus,
+                    "brand_name": brand.name,
+                    "previous_explanation": prev_explanation_ctx,
+                    "must_split_groups": must_split_groups,
+                    "must_merge_groups": must_merge_groups,
+                    "user_feedback": request.user_correction,
+                })
+            except AgentException as retry_exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Impossibile dedurre una regola coerente con la separazione indicata: {retry_exc}",
+                )
         else:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
