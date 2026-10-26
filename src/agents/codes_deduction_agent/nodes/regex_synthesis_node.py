@@ -55,13 +55,33 @@ async def regex_synthesis_node(state: CodesDeductionGraphState) -> dict:
     model = _get_model()
 
     # Provide a few sample codes for the LLM to test against mentally
-    sample_codes = state.vendor_codes[:10]
+    sample_codes = state.vendor_codes[:15]
     samples_text = "\n".join(f"- {code}" for code in sample_codes)
+
+    extra_constraints = ""
+    if state.must_split_groups and len(state.must_split_groups) >= 2:
+        grp_lines = [f"  * Gruppo {i+1}: {', '.join(g)}" for i, g in enumerate(state.must_split_groups)]
+        extra_constraints += (
+            "\n**Vincolo Must-Split (NON devono avere lo stesso codice normalizzato dopo aver mascherato `color_code` con `#`):**\n"
+            + "\n".join(grp_lines) + "\n"
+        )
+    if state.must_merge_groups:
+        m_lines = [f"  * Stesso modello: {', '.join(g)}" for g in state.must_merge_groups if len(g) >= 2]
+        if m_lines:
+            extra_constraints += (
+                "\n**Vincolo Must-Merge (DEVONO avere lo stesso codice normalizzato dopo aver mascherato `color_code` con `#`):**\n"
+                + "\n".join(m_lines) + "\n"
+            )
+    if state.user_feedback:
+        extra_constraints += f"\n**Indicazione esplicita dell'utente:** \"{state.user_feedback}\"\n"
+    if state.contrastive_errors:
+        extra_constraints += "\n**Errori da correggere rispetto al tentativo precedente:**\n" + "\n".join(f"- {e}" for e in state.contrastive_errors) + "\n"
 
     prompt = (
         f"**Analisi Strutturale:**\n{state.analysis_result}\n\n"
-        f"**Codici Esempio per Verifica:**\n{samples_text}\n\n"
-        f"Genera il regex Python con il named capture group 'color_code'."
+        f"**Codici Esempio per Verifica:**\n{samples_text}\n"
+        f"{extra_constraints}\n"
+        f"Genera il regex Python con il named capture group 'color_code' (se presente il segmento colore) e la spiegazione in linguaggio naturale semplice."
     )
 
     try:

@@ -190,3 +190,83 @@ class HeuristicJobStatusResponse(BaseModel):
     """Response body for GET /api/v1/brands/{brand_id}/heuristic/{job_id}."""
     status: str
     data: Optional[dict] = None
+
+
+# ---------------------------------------------------------------------------
+# Blueprint & Heuristic Revision Schemas
+# ---------------------------------------------------------------------------
+
+class BlueprintArticleGroupSchema(BaseModel):
+    """Represents a homogeneous group of physical articles under a blueprint (grouped by supplier_code, colors, ean)."""
+    group_key: str
+    article_ids: List[str]
+    supplier_code: str
+    ean: Optional[str] = None
+    colors: List[str] = Field(default_factory=list)
+    quantity: int = 0
+    available_stock: int = 0
+    photo_id: Optional[str] = None
+    photo_url: Optional[str] = None
+
+
+class BlueprintRevisionContextResponse(BaseModel):
+    """Context returned when opening the visual split/revision workspace for a blueprint."""
+    blueprint_id: str
+    article_name: str
+    description: str
+    extended_description: str
+    brand_id: str
+    brand_name: str
+    normalized_vendor_code: Optional[str] = None
+    category_id: Optional[str] = None
+    category_name: Optional[str] = None
+    sub_category_name: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    materials: List[str] = Field(default_factory=list)
+    dimensions: Optional[str] = None
+    current_heuristic_id: Optional[str] = None
+    current_heuristic_explanation: Optional[str] = None
+    article_groups: List[BlueprintArticleGroupSchema] = Field(default_factory=list)
+
+
+class PartitionGroupInput(BaseModel):
+    """A bucket defined by the user in the visual Bucket Selector."""
+    group_id: str
+    label: Optional[str] = None
+    is_original: bool = False
+    article_ids: List[str] = Field(default_factory=list)
+    supplier_codes: List[str] = Field(default_factory=list)
+    user_hint: Optional[str] = None
+
+
+class RuleDeductionRequest(BaseModel):
+    """Request to deduce or refine the brand heuristic from visual partitions and optional user feedback."""
+    blueprint_id: str
+    job_id: Optional[str] = None
+    partitions: List[PartitionGroupInput]
+    user_correction: Optional[str] = None
+
+
+class RuleDeductionResponse(BaseModel):
+    """Response with plain-language explanation, examples, and impact summary (never exposes raw regex)."""
+    job_id: str
+    textual_explanation: str
+    examples: List[HeuristicExampleSchema] = Field(default_factory=list)
+    estimated_splits_count: int = 0
+    estimated_merges_count: int = 0
+    aligned_blueprints_count: int = 0
+
+
+class ReconciliationPlanUpdateRequest(BaseModel):
+    """Inline edit request for proposed blueprints in the 'Before & After' Staging review."""
+    target_blueprint_id: str
+    article_name: Optional[str] = None
+    description: Optional[str] = None
+    extended_description: Optional[str] = None
+    category: Optional[Dict[str, str]] = None
+    sub_category: Optional[Dict[str, str]] = None
+    tags: Optional[List[str]] = None
+    materials: Optional[List[str]] = None
+    dimensions: Optional[str] = None
+    excluded: Optional[bool] = None
+

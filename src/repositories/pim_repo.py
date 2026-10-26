@@ -559,16 +559,60 @@ class CategoryRepository:
 
 
 class BrandHeuristicRepository:
-    def create_heuristic(self, db: Session, brand_id: str, pattern: str, explanation: str = None) -> BrandHeuristic:
+    def create_heuristic(self, db: Session, brand_id: str, pattern: str, explanation: str = None, commit_changes: bool = True) -> BrandHeuristic:
         logger.log_execution("pim_repo", "create_brand_heuristic", "ok", brand_id=brand_id, pattern=pattern)
         heuristic = BrandHeuristic(brand_id=brand_id, pattern=pattern, explanation=explanation)
         db.add(heuristic)
-        db.commit()
-        db.refresh(heuristic)
+        if commit_changes:
+            db.commit()
+            db.refresh(heuristic)
+        else:
+            db.flush()
+        return heuristic
+
+    def update_heuristic(
+        self,
+        db: Session,
+        heuristic_id: str,
+        pattern: str,
+        explanation: Optional[str] = None,
+        commit_changes: bool = True,
+    ) -> Optional[BrandHeuristic]:
+        heuristic = db.query(BrandHeuristic).filter(BrandHeuristic.id == heuristic_id).first()
+        if not heuristic:
+            return None
+        heuristic.pattern = pattern
+        if explanation is not None:
+            heuristic.explanation = explanation
+        if commit_changes:
+            db.commit()
+            db.refresh(heuristic)
+        else:
+            db.flush()
+        logger.log_execution("pim_repo", "update_brand_heuristic", "ok", heuristic_id=heuristic_id, pattern=pattern)
         return heuristic
 
     def get_heuristics_by_brand(self, db: Session, brand_id: str) -> list[BrandHeuristic]:
         return db.query(BrandHeuristic).filter(BrandHeuristic.brand_id == brand_id).all()
+
+    def find_matching_heuristic(self, db: Session, brand_id: str, sample_codes: list[str]) -> Optional[BrandHeuristic]:
+        """
+        Identify which BrandHeuristic record matches the provided sample codes (or fallback to the most recent heuristic for the brand).
+        """
+        import re
+        heuristics = self.get_heuristics_by_brand(db, brand_id)
+        if not heuristics:
+            return None
+        for h in heuristics:
+            if not h.pattern:
+                continue
+            try:
+                compiled = re.compile(h.pattern)
+                if any(compiled.search(c) for c in sample_codes if c):
+                    return h
+            except re.error:
+                continue
+        return heuristics[-1]
 
 
 pim_repo = ArticleBlueprintRepository()

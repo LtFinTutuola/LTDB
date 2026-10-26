@@ -1,0 +1,512 @@
+"""
+test_blueprint_revision.py
+--------------------------
+Comprehensive unit and integration tests for the Visual Blueprint Split/Merge
+and Vendor Code Heuristic Revision System:
+- BrandHeuristicRepository new methods (update_heuristic, find_matching_heuristic)
+- Contrastive Sandbox validation (Must-Split & Must-Merge enforcement)
+- Blueprint revision context retrieval (grouping physical articles by supplier_code + colors + ean)
+- Rule deduction & natural-language correction loop (zero regex exposure to frontend)
+- Warehouse-wide retroactive diffing & "Before/After" Staging plan preparation + inline editing
+- 5-step ordered atomic DB commit (splits, merges, ArticlePhoto preservation, global normalized_vendor_code alignment, brand_heuristics update)
+"""
+from unittest.mock import AsyncMock, patch
+from fastapi.testclient import TestClient
+
+from src.main import app
+from src.models.pim import Brand, BrandHeuristic, BrandCategory, Category, ArticleBlueprint, ArticlePhoto
+from src.models.wms import Supplier, Batch, Article, ArticleStatus
+from src.repositories.pim_repo import BrandHeuristicRepository
+from src.agents.codes_deduction_agent.nodes.validation_node import _check_contrastive_constraints
+
+
+client = TestClient(app)
+
+
+def _seed_brand_and_warehouse(db_session):
+    """
+    Create a Brand ('GuessTest'), Categories, Supplier, Batch, and a set of
+    Blueprints + Articles simulating:
+    1) bp_merged: Falsely merged blueprint containing two distinct models:
+       - Large bag: HWVG870123BLA (nero, 2 pcs), HWVG870123RED (rosso, 1 pc)
+       - Small wallet: HWVG870999BLA (nero, 1 pc)
+    2) bp_extra_split: Another blueprint in warehouse with 2 distinct models merged:
+       - HWVG870555BLA (nero) and HWVG870666BLA (nero)
+    3) bp_dup_1 & bp_dup_2: Falsely separated duplicate blueprints of the same model:
+       - bp_dup_1: HWVG870777BLA (nero) with old wrong normalized code 'HWVG870777BLA'
+       - bp_dup_2: HWVG870777WHI (bianco) with old wrong normalized code 'HWVG870777WHI'
+    4) bp_aligned: Already single-model blueprint whose normalized_vendor_code needs alignment:
+       - HWVG870888GRN (verde) with old normalized code 'OLD_NORM_888'
+    """
+    brand = Brand(id="brand-guess-1", name="GuessTest")
+    db_session.add(brand)
+
+    heuristic = BrandHeuristic(
+        id="heur-guess-1",
+        brand_id=brand.id,
+        pattern=r"^HWVG87(?P<color_code>[A-Z0-9]+)$",
+        explanation="Vecchia regola errata che considerava tutto suffisso colore.",
+    )
+    db_session.add(heuristic)
+
+    cat = Category(id="cat-borse", name="Borse", description="Borse da donna", parent_id=None)
+    sub_cat = Category(id="subcat-tracolla", name="Tracolla", description="Borse a tracolla", parent_id=cat.id)
+    db_session.add_all([cat, sub_cat])
+    db_session.flush()
+
+    db_session.add(BrandCategory(brand_id=brand.id, category_id=cat.id))
+
+    from datetime import date
+    supplier = Supplier(id="sup-1", company_name="Guess Italia SRL", vat_number="IT99999999999")
+    db_session.add(supplier)
+    db_session.flush()
+
+    batch = Batch(id="batch-1", supplier_id=supplier.id, delivery_note_number="DDT-100", document_date=date(2026, 10, 26))
+    db_session.add(batch)
+
+    # 1. Target blueprint to split (bp_merged)
+    bp_merged = ArticleBlueprint(
+        id="bp-merged-1",
+        brand_id=brand.id,
+        category_id=sub_cat.id,
+        normalized_vendor_code="HWVG87#",
+        article_name="Borsa GuessTest",
+        description="Borsa elegante con tracolla",
+        extended_description="Borsa in ecopelle con logo frontale",
+        materials=["ecopelle"],
+        tags=["borsa", "tracolla"],
+    )
+    # 2. Additional warehouse blueprint that also has 2 models merged
+    bp_extra_split = ArticleBlueprint(
+        id="bp-extra-split-1",
+        brand_id=brand.id,
+        category_id=sub_cat.id,
+        normalized_vendor_code="HWVG87_EXTRA#",
+        article_name="Zaino GuessTest",
+        description="Zaino casual",
+        extended_description="Zaino giornaliero",
+        materials=["ecopelle"],
+        tags=["zaino"],
+    )
+    # 3. Duplicate blueprints to merge (bp_dup_1 & bp_dup_2)
+    bp_dup_1 = ArticleBlueprint(
+        id="bp-dup-1",
+        brand_id=brand.id,
+        category_id=sub_cat.id,
+        normalized_vendor_code="HWVG870777BLA",
+        article_name="Shopper GuessTest Nero",
+        description="Shopper capiente",
+        extended_description="Shopper in ecopelle",
+        materials=["ecopelle"],
+        tags=["shopper"],
+    )
+    bp_dup_2 = ArticleBlueprint(
+        id="bp-dup-2",
+        brand_id=brand.id,
+        category_id=sub_cat.id,
+        normalized_vendor_code="HWVG870777WHI",
+        article_name="Shopper GuessTest Bianco",
+        description="Shopper capiente",
+        extended_description="Shopper in pelle",
+        materials=["pelle"],
+        tags=["elegante"],
+    )
+    # 4. Blueprint needing normalized_vendor_code alignment
+    bp_aligned = ArticleBlueprint(
+        id="bp-aligned-1",
+        brand_id=brand.id,
+        category_id=sub_cat.id,
+        normalized_vendor_code="OLD_NORM_888",
+        article_name="Bauletto GuessTest",
+        description="Bauletto classico",
+        extended_description="Bauletto con manici",
+        materials=["ecopelle"],
+        tags=["bauletto"],
+    )
+    db_session.add_all([bp_merged, bp_extra_split, bp_dup_1, bp_dup_2, bp_aligned])
+    db_session.flush()
+
+    # Photos on bp_merged and bp_dup_1 / bp_dup_2
+    p_merged_nero = ArticlePhoto(
+        id="photo-merged-nero",
+        article_blueprint_id=bp_merged.id,
+        canonical_color_name="nero",
+        photo_data=b"fake_nero_bytes",
+    )
+    p_merged_rosso = ArticlePhoto(
+        id="photo-merged-rosso",
+        article_blueprint_id=bp_merged.id,
+        canonical_color_name="rosso",
+        photo_data=b"fake_rosso_bytes",
+    )
+    p_dup_nero = ArticlePhoto(
+        id="photo-dup-nero",
+        article_blueprint_id=bp_dup_1.id,
+        canonical_color_name="nero",
+        photo_data=b"fake_dup_nero",
+    )
+    p_dup_bianco = ArticlePhoto(
+        id="photo-dup-bianco",
+        article_blueprint_id=bp_dup_2.id,
+        canonical_color_name="bianco",
+        photo_data=b"fake_dup_bianco",
+    )
+    # Also add a conflicting 'nero' photo on bp_dup_2 to verify deduplication on merge
+    p_dup_2_conflict_nero = ArticlePhoto(
+        id="photo-dup-2-conflict-nero",
+        article_blueprint_id=bp_dup_2.id,
+        canonical_color_name="nero",
+        photo_data=b"fake_dup_conflict",
+    )
+    db_session.add_all([p_merged_nero, p_merged_rosso, p_dup_nero, p_dup_bianco, p_dup_2_conflict_nero])
+
+    # Physical Articles for bp_merged
+    a1 = Article(
+        id="art-123-bla-1",
+        article_blueprint_id=bp_merged.id,
+        batch_id=batch.id,
+        supplier_code="HWVG870123BLA",
+        ean="8000000001231",
+        colors=["nero"],
+        status=ArticleStatus.AVAILABLE,
+    )
+    a2 = Article(
+        id="art-123-bla-2",
+        article_blueprint_id=bp_merged.id,
+        batch_id=batch.id,
+        supplier_code="HWVG870123BLA",
+        ean="8000000001231",
+        colors=["nero"],
+        status=ArticleStatus.AVAILABLE,
+    )
+    a3 = Article(
+        id="art-123-red-1",
+        article_blueprint_id=bp_merged.id,
+        batch_id=batch.id,
+        supplier_code="HWVG870123RED",
+        ean="8000000001232",
+        colors=["rosso"],
+        status=ArticleStatus.AVAILABLE,
+    )
+    a4 = Article(
+        id="art-999-bla-1",
+        article_blueprint_id=bp_merged.id,
+        batch_id=batch.id,
+        supplier_code="HWVG870999BLA",
+        ean="8000000009991",
+        colors=["nero"],
+        status=ArticleStatus.AVAILABLE,
+    )
+
+    # Physical Articles for bp_extra_split
+    a_extra_1 = Article(
+        id="art-555-bla",
+        article_blueprint_id=bp_extra_split.id,
+        batch_id=batch.id,
+        supplier_code="HWVG870555BLA",
+        colors=["nero"],
+        status=ArticleStatus.AVAILABLE,
+    )
+    a_extra_2 = Article(
+        id="art-666-bla",
+        article_blueprint_id=bp_extra_split.id,
+        batch_id=batch.id,
+        supplier_code="HWVG870666BLA",
+        colors=["nero"],
+        status=ArticleStatus.AVAILABLE,
+    )
+
+    # Physical Articles for bp_dup_1 & bp_dup_2
+    a_dup_1 = Article(
+        id="art-777-bla",
+        article_blueprint_id=bp_dup_1.id,
+        batch_id=batch.id,
+        supplier_code="HWVG870777BLA",
+        colors=["nero"],
+        status=ArticleStatus.AVAILABLE,
+    )
+    a_dup_2 = Article(
+        id="art-777-whi",
+        article_blueprint_id=bp_dup_2.id,
+        batch_id=batch.id,
+        supplier_code="HWVG870777WHI",
+        colors=["bianco"],
+        status=ArticleStatus.AVAILABLE,
+    )
+
+    # Physical Article for bp_aligned
+    a_aligned = Article(
+        id="art-888-grn",
+        article_blueprint_id=bp_aligned.id,
+        batch_id=batch.id,
+        supplier_code="HWVG870888GRN",
+        colors=["verde"],
+        status=ArticleStatus.AVAILABLE,
+    )
+
+    db_session.add_all([a1, a2, a3, a4, a_extra_1, a_extra_2, a_dup_1, a_dup_2, a_aligned])
+    db_session.commit()
+
+
+class TestContrastiveSandboxValidation:
+    """Unit tests for deterministic Must-Split and Must-Merge validation in validation_node."""
+
+    def test_contrastive_validation_rejects_must_split_collision(self):
+        # Over-greedy regex masks both model digits and color suffix into the same root
+        norm_map = {
+            "HWVG870123BLA": "HWVG87#",
+            "HWVG870123RED": "HWVG87#",
+            "HWVG870999BLA": "HWVG87#",
+        }
+        must_split = [["HWVG870123BLA", "HWVG870123RED"], ["HWVG870999BLA"]]
+        must_merge = [["HWVG870123BLA", "HWVG870123RED"]]
+
+        errors = _check_contrastive_constraints(norm_map, must_split, must_merge)
+        assert len(errors) >= 1
+        assert "Vincolo Must-Split violato" in errors[0]
+
+    def test_contrastive_validation_rejects_must_merge_divergence(self):
+        # Regex only masks the last 1 char instead of 3-char color code
+        norm_map = {
+            "HWVG870123BLA": "HWVG870123BL#",
+            "HWVG870123RED": "HWVG870123RE#",
+            "HWVG870999BLA": "HWVG870999BL#",
+        }
+        must_split = [["HWVG870123BLA", "HWVG870123RED"], ["HWVG870999BLA"]]
+        must_merge = [["HWVG870123BLA", "HWVG870123RED"]]
+
+        errors = _check_contrastive_constraints(norm_map, must_split, must_merge)
+        assert any("Vincolo Must-Merge violato" in e for e in errors)
+
+    def test_contrastive_validation_passes_valid_regex(self):
+        norm_map = {
+            "HWVG870123BLA": "HWVG870123#",
+            "HWVG870123RED": "HWVG870123#",
+            "HWVG870999BLA": "HWVG870999#",
+        }
+        must_split = [["HWVG870123BLA", "HWVG870123RED"], ["HWVG870999BLA"]]
+        must_merge = [["HWVG870123BLA", "HWVG870123RED"]]
+
+        errors = _check_contrastive_constraints(norm_map, must_split, must_merge)
+        assert errors == []
+
+
+class TestBrandHeuristicRepoExtensions:
+    """Tests for update_heuristic and find_matching_heuristic on BrandHeuristicRepository."""
+
+    def test_find_and_update_heuristic(self, db_session):
+        _seed_brand_and_warehouse(db_session)
+        repo = BrandHeuristicRepository()
+
+        matched = repo.find_matching_heuristic(db_session, "brand-guess-1", ["HWVG870123BLA"])
+        assert matched is not None
+        assert matched.id == "heur-guess-1"
+
+        updated = repo.update_heuristic(
+            db_session,
+            heuristic_id=matched.id,
+            pattern=r"^[A-Z0-9]{10}(?P<color_code>[A-Z]{3})$",
+            explanation="I primi 10 caratteri identificano il modello, gli ultimi 3 il colore.",
+        )
+        assert updated.pattern == r"^[A-Z0-9]{10}(?P<color_code>[A-Z]{3})$"
+        assert "primi 10 caratteri" in updated.explanation
+
+
+class TestBlueprintRevisionEndToEnd:
+    """Integration tests for the full Blueprint Revision & Retroactive Reconciliation pipeline."""
+
+    def test_get_blueprint_revision_context_groups_distinct_models_same_color(self, db_session):
+        _seed_brand_and_warehouse(db_session)
+
+        res = client.get("/api/v1/brands/blueprint-revision/bp-merged-1/context")
+        assert res.status_code == 200
+        data = res.json()
+
+        assert data["blueprint_id"] == "bp-merged-1"
+        assert data["brand_name"] == "GuessTest"
+        # 3 distinct (supplier_code, colors, ean) groups:
+        # HWVG870123BLA (qty 2, nero), HWVG870123RED (qty 1, rosso), HWVG870999BLA (qty 1, nero)
+        groups = {g["supplier_code"]: g for g in data["article_groups"]}
+        assert len(groups) == 3
+        assert groups["HWVG870123BLA"]["quantity"] == 2
+        assert groups["HWVG870123BLA"]["photo_id"] == "photo-merged-nero"
+        assert groups["HWVG870999BLA"]["quantity"] == 1
+        assert groups["HWVG870999BLA"]["colors"] == ["nero"]
+
+    def test_full_deduce_correct_stage_edit_and_atomic_commit_flow(self, db_session):
+        _seed_brand_and_warehouse(db_session)
+
+        mock_deduction_first = {
+            "regex": r"^[A-Z0-9]{10}(?P<color_code>[A-Z]{3})$",
+            "explanation": "I primi 10 caratteri indicano il modello della borsa, mentre le ultime 3 lettere indicano il colore.",
+            "examples": [
+                {"raw": "HWVG870123BLA", "normalized": "HWVG870123#"},
+                {"raw": "HWVG870999BLA", "normalized": "HWVG870999#"},
+            ],
+        }
+        mock_deduction_corrected = {
+            "regex": r"^HWVG87[0-9]{4}(?P<color_code>[A-Z]{3})$",
+            "explanation": "Il prefisso HWVG87 seguito da 4 cifre identifica il modello; le ultime 3 lettere identificano la variante colore.",
+            "examples": [
+                {"raw": "HWVG870123BLA", "normalized": "HWVG870123#"},
+                {"raw": "HWVG870999BLA", "normalized": "HWVG870999#"},
+            ],
+        }
+
+        partitions_payload = [
+            {
+                "group_id": "group_original",
+                "label": "Borsa GuessTest Grande",
+                "is_original": True,
+                "article_ids": ["art-123-bla-1", "art-123-bla-2", "art-123-red-1"],
+                "supplier_codes": ["HWVG870123BLA", "HWVG870123RED"],
+                "user_hint": "Borsa Grande",
+            },
+            {
+                "group_id": "group_new_1",
+                "label": "Portafoglio GuessTest Piccolo",
+                "is_original": False,
+                "article_ids": ["art-999-bla-1"],
+                "supplier_codes": ["HWVG870999BLA"],
+                "user_hint": "Portafoglio Piccolo",
+            },
+        ]
+
+        with patch(
+            "src.services.blueprint_revision_service.CodesDeductionAgent.aexecute",
+            new_callable=AsyncMock,
+            side_effect=[mock_deduction_first, mock_deduction_corrected],
+        ) as mock_agent_run:
+            # 1. Initial Rule Deduction from Visual Partitions
+            res1 = client.post(
+                "/api/v1/brands/blueprint-revision/deduce-rule",
+                json={
+                    "blueprint_id": "bp-merged-1",
+                    "partitions": partitions_payload,
+                },
+            )
+            assert res1.status_code == 200
+            d1 = res1.json()
+            job_id = d1["job_id"]
+            assert "primi 10 caratteri" in d1["textual_explanation"]
+            # Must never expose raw regex in response
+            assert "regex" not in d1
+            assert "?P<color_code>" not in str(d1)
+            # Impact counts: 1 (target split) + 1 (bp_extra_split) = 2 splits; 1 merge (bp_dup_1 + bp_dup_2); 1 aligned (bp_aligned)
+            assert d1["estimated_splits_count"] == 2
+            assert d1["estimated_merges_count"] == 1
+            assert d1["aligned_blueprints_count"] == 1
+
+            # 2. User Correction Loop (recalculates regex and explanation)
+            res2 = client.post(
+                "/api/v1/brands/blueprint-revision/deduce-rule",
+                json={
+                    "blueprint_id": "bp-merged-1",
+                    "job_id": job_id,
+                    "partitions": partitions_payload,
+                    "user_correction": "Specifica che il prefisso è HWVG87 più 4 cifre per il modello.",
+                },
+            )
+            assert res2.status_code == 200
+            d2 = res2.json()
+            assert d2["job_id"] == job_id
+            assert "prefisso HWVG87 seguito da 4 cifre" in d2["textual_explanation"]
+            assert mock_agent_run.call_count == 2
+
+        # 3. Prepare "Before & After" Staging Plan (with AI synthesis mocked)
+        with patch(
+            "src.services.blueprint_revision_service.ArticleBlueprintsAgent.aexecute",
+            new_callable=AsyncMock,
+            return_value={"blueprints": []},
+        ), patch(
+            "src.services.blueprint_revision_service.LLMClient.generate_embedding_sync",
+            return_value=[0.1, 0.2, 0.3],
+        ):
+            res_stage = client.post(f"/api/v1/brands/blueprint-revision/{job_id}/prepare-staging")
+            assert res_stage.status_code == 200
+            stage_job = res_stage.json()
+
+            # Verify regex is strictly stripped from sanitized staging job payload
+            hs = stage_job["data"]["heuristic_state"]
+            assert "new_regex" not in hs
+            assert "old_regex" not in hs
+
+            plan = stage_job["data"]["reconciliation_plan"]
+            assert len(plan["target_split"]["after"]) == 2
+            assert len(plan["warehouse_splits"]) == 1
+            assert len(plan["warehouse_merges"]) == 1
+            assert len(plan["aligned_blueprints"]) == 1
+
+            # 4. Inline Edit in Staging Area before commit
+            new_split_proposal_id = plan["target_split"]["after"][1]["id"]
+            res_edit = client.put(
+                f"/api/v1/brands/blueprint-revision/{job_id}/plan",
+                json={
+                    "target_blueprint_id": new_split_proposal_id,
+                    "article_name": "Portafoglio GuessTest Mini Editato",
+                    "tags": ["portafoglio", "mini"],
+                },
+            )
+            assert res_edit.status_code == 200
+            updated_after = res_edit.json()["data"]["reconciliation_plan"]["target_split"]["after"][1]
+            assert updated_after["article_name"] == "Portafoglio GuessTest Mini Editato"
+            assert updated_after["tags"] == ["portafoglio", "mini"]
+
+            # 5. Execute Atomic 5-Step Commit
+            res_commit = client.post(f"/api/v1/brands/blueprint-revision/{job_id}/commit")
+            assert res_commit.status_code == 200
+            commit_data = res_commit.json()
+            assert commit_data["status"] == "success"
+            assert commit_data["splits_created"] == 2
+            assert commit_data["merges_executed"] == 1
+
+        # Verify Database State after Atomic Commit:
+        # A) Original bp-merged-1 keeps the 3 HWVG870123* articles and has normalized code HWVG870123#
+        bp_orig = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-merged-1").first()
+        assert bp_orig is not None
+        assert bp_orig.normalized_vendor_code == "HWVG870123#"
+        orig_arts = db_session.query(Article).filter(Article.article_blueprint_id == "bp-merged-1").all()
+        assert len(orig_arts) == 3
+
+        # B) Newly split blueprint exists with normalized code HWVG870999#, edited name, reassigned article, and cloned nero photo
+        bp_new = (
+            db_session.query(ArticleBlueprint)
+            .filter(
+                ArticleBlueprint.brand_id == "brand-guess-1",
+                ArticleBlueprint.normalized_vendor_code == "HWVG870999#",
+            )
+            .first()
+        )
+        assert bp_new is not None
+        assert bp_new.article_name == "Portafoglio GuessTest Mini Editato"
+        new_arts = db_session.query(Article).filter(Article.article_blueprint_id == bp_new.id).all()
+        assert len(new_arts) == 1
+        assert new_arts[0].id == "art-999-bla-1"
+        new_photos = db_session.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp_new.id).all()
+        assert len(new_photos) == 1
+        assert new_photos[0].canonical_color_name == "nero"
+
+        # C) Duplicate blueprints (bp-dup-1 & bp-dup-2) merged into bp-dup-1 with normalized code HWVG870777#
+        bp_survivor = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-dup-1").first()
+        bp_absorbed = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-dup-2").first()
+        assert bp_survivor is not None
+        assert bp_absorbed is None
+        assert bp_survivor.normalized_vendor_code == "HWVG870777#"
+        merged_arts = db_session.query(Article).filter(Article.article_blueprint_id == "bp-dup-1").all()
+        assert len(merged_arts) == 2
+        survivor_photos = (
+            db_session.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == "bp-dup-1").all()
+        )
+        # Must have preserved both 'nero' and 'bianco' photos without UniqueConstraint error
+        assert {p.canonical_color_name for p in survivor_photos} == {"nero", "bianco"}
+
+        # D) Aligned blueprint (bp-aligned-1) updated its normalized_vendor_code to HWVG870888#
+        bp_al = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-aligned-1").first()
+        assert bp_al is not None
+        assert bp_al.normalized_vendor_code == "HWVG870888#"
+
+        # E) BrandHeuristic record updated in brand_heuristics
+        heur = db_session.query(BrandHeuristic).filter(BrandHeuristic.id == "heur-guess-1").first()
+        assert heur is not None
+        assert heur.pattern == r"^HWVG87[0-9]{4}(?P<color_code>[A-Z]{3})$"
+        assert "prefisso HWVG87" in heur.explanation

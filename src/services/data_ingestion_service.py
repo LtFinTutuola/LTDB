@@ -461,9 +461,6 @@ async def confirm_and_persist_staging(
         logger.log_execution("data_ingestion_service", "heuristic_break_detected", "warn", job_id=job_id, breaks_count=len(heuristic_breaks))
         brand = db.query(Brand).filter(Brand.id == brand_id).first()
         if brand:
-            brand.heuristic_confirmed = False
-            db.commit()
-            
             # Extract breaking codes
             breaking_codes = []
             for w in heuristic_breaks:

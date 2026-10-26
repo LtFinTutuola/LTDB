@@ -299,3 +299,48 @@ export async function updateSettings(payload) {
     return _handleResponse(res);
 }
 
+// --- Blueprint Revision & Heuristic Reconciliation ---
+
+export async function getBlueprintRevisionContext(blueprintId) {
+    const res = await fetch(`${API_BASE}/brands/blueprint-revision/${encodeURIComponent(blueprintId)}/context`);
+    return _handleResponse(res);
+}
+
+export async function deduceBlueprintRule(payload) {
+    const res = await fetch(`${API_BASE}/brands/blueprint-revision/deduce-rule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    return _handleResponse(res);
+}
+
+export async function prepareBlueprintStagingPlan(jobId) {
+    const res = await fetch(`${API_BASE}/brands/blueprint-revision/${encodeURIComponent(jobId)}/prepare-staging`, {
+        method: 'POST',
+    });
+    return _handleResponse(res);
+}
+
+export async function getBlueprintRevisionJob(jobId) {
+    const res = await fetch(`${API_BASE}/brands/blueprint-revision/${encodeURIComponent(jobId)}`);
+    return _handleResponse(res);
+}
+
+export async function updateBlueprintReconciliationPlan(jobId, payload) {
+    const res = await fetch(`${API_BASE}/brands/blueprint-revision/${encodeURIComponent(jobId)}/plan`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    return _handleResponse(res);
+}
+
+export async function commitBlueprintReconciliationPlan(jobId) {
+    const res = await fetch(`${API_BASE}/brands/blueprint-revision/${encodeURIComponent(jobId)}/commit`, {
+        method: 'POST',
+    });
+    return _handleResponse(res);
+}
+
+

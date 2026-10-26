@@ -55,6 +55,9 @@ class CodesDeductionAgent(BaseAgent):
                 vendor_codes=input_data.get("vendor_codes", []),
                 brand_name=input_data.get("brand_name", ""),
                 previous_explanation=input_data.get("previous_explanation"),
+                must_split_groups=input_data.get("must_split_groups", []),
+                must_merge_groups=input_data.get("must_merge_groups", []),
+                user_feedback=input_data.get("user_feedback"),
                 max_iterations=input_data.get("max_iterations", 3),
             )
         except Exception as exc:

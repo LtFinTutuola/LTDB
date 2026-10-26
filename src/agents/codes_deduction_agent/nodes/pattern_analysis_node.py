@@ -77,7 +77,51 @@ async def pattern_analysis_node(state: CodesDeductionGraphState) -> dict:
         prompt += (
             f"**NOTA:** Questo è un ricalcolo. La regola precedente era:\n"
             f"'{state.previous_explanation}'\n"
-            f"La regola deve essere aggiornata per coprire anche i nuovi codici.\n\n"
+            f"La regola deve essere aggiornata per coprire anche i nuovi codici e i vincoli indicati dall'utente.\n\n"
+        )
+
+    # Add contrastive Must-Split constraints
+    if state.must_split_groups and len(state.must_split_groups) >= 2:
+        groups_desc = []
+        for idx, grp in enumerate(state.must_split_groups, 1):
+            groups_desc.append(f"  - Modello/Gruppo {idx}: {', '.join(grp)}")
+        prompt += (
+            "**VINCOLO TASSATIVO DI SEPARAZIONE (MUST-SPLIT):**\n"
+            "L'operatore ha segnalato che i seguenti gruppi di codici appartengono a MODELLI FISICAMENTE DIVERSI "
+            "(es. taglie, dimensioni o modelli differenti) e NON devono MAI generare lo stesso codice normalizzato:\n"
+            + "\n".join(groups_desc) + "\n"
+            "I caratteri che differenziano questi gruppi fanno parte del codice modello/taglia e NON devono essere inclusi nel codice colore!\n\n"
+        )
+
+    # Add contrastive Must-Merge constraints
+    if state.must_merge_groups:
+        merge_desc = []
+        for idx, grp in enumerate(state.must_merge_groups, 1):
+            if len(grp) >= 2:
+                merge_desc.append(f"  - Varianti dello stesso modello {idx}: {', '.join(grp)}")
+        if merge_desc:
+            prompt += (
+                "**VINCOLO TASSATIVO DI UNIONE (MUST-MERGE):**\n"
+                "I seguenti codici sono varianti colore dello STESSO identico modello e DEVONO produrre lo stesso codice normalizzato:\n"
+                + "\n".join(merge_desc) + "\n\n"
+            )
+
+    # Add explicit user feedback / correction
+    if state.user_feedback:
+        prompt += (
+            f"**CORREZIONE ESPLICita DELL'UTENTE (PRIORITÀ MASSIMA):**\n"
+            f"L'utente ha corretto la deduzione precedente con questa indicazione:\n"
+            f"\"{state.user_feedback}\"\n"
+            f"Rispetta rigorosamente questa indicazione nella tua analisi strutturale.\n\n"
+        )
+
+    # Add contrastive errors from previous sandbox attempt
+    if state.contrastive_errors:
+        c_errors_text = "\n".join(f"- {err}" for err in state.contrastive_errors)
+        prompt += (
+            f"**ERRORE DI VALIDAZIONE CONTRASTIVA NEL TENTATIVO PRECEDENTE:**\n"
+            f"{c_errors_text}\n"
+            f"Correggi l'analisi affinché la parte catturata come colore non causi più questo errore.\n\n"
         )
 
     # Add failure context on retries

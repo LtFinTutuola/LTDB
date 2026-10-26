@@ -1,6 +1,7 @@
-import * as api from './api.js?v=20261022_6';
+import * as api from './api.js?v=20261026_2';
 import { setupBarcodeScanner } from './barcode_scanner.js?v=20261022_6';
 import { requestPhotoUpload } from './photo_upload_helper.js?v=20261022_6';
+import { openBlueprintRevision } from './blueprint_revision.js?v=20261026_2';
 
 let _controlsBound = false;
 let _editingItem = null;
@@ -217,6 +218,9 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
             </td>
             <td class="warehouse-desktop-only" style="text-align: right;">
                 <div class="action-buttons" style="justify-content: flex-end;">
+                    <button type="button" class="action-btn btn-split-blueprint" title="Separa Articoli / Correggi Regola Blueprint">
+                        <span class="material-symbols-rounded" style="font-size: 18px;">call_split</span>
+                    </button>
                     <button type="button" class="action-btn btn-edit-article" title="Modifica Articolo">
                         <span class="material-symbols-rounded" style="font-size: 18px;">edit</span>
                     </button>
@@ -235,6 +239,15 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
                     e.stopPropagation();
                     showImageFullscreen(photoUrl, item.article_name);
                 }
+            });
+        }
+
+        // Split/Revise Blueprint button click (Desktop only)
+        const splitBtn = tr.querySelector('.btn-split-blueprint');
+        if (splitBtn) {
+            splitBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openBlueprintRevision(item.blueprint_id, _refreshWarehouseView);
             });
         }
 

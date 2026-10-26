@@ -18,6 +18,18 @@ class CodesDeductionGraphState(BaseModel):
         default=None,
         description="Existing heuristic explanation for recalculation context."
     )
+    must_split_groups: List[List[str]] = Field(
+        default_factory=list,
+        description="Partitions of vendor codes that MUST yield distinct normalized_vendor_code values across groups."
+    )
+    must_merge_groups: List[List[str]] = Field(
+        default_factory=list,
+        description="Groups of vendor codes that MUST yield the exact same normalized_vendor_code within each group."
+    )
+    user_feedback: Optional[str] = Field(
+        default=None,
+        description="Explicit natural language correction provided by the user."
+    )
 
     # Internal state (populated by nodes)
     analysis_result: str = Field(
@@ -31,6 +43,10 @@ class CodesDeductionGraphState(BaseModel):
     validation_failures: List[str] = Field(
         default_factory=list,
         description="Vendor codes that failed regex validation (used for retry context)."
+    )
+    contrastive_errors: List[str] = Field(
+        default_factory=list,
+        description="Specific contrastive constraint violations (Must-Split / Must-Merge) from the sandbox."
     )
     iteration: int = Field(
         default=0,
