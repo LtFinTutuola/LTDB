@@ -270,3 +270,11 @@ class ReconciliationPlanUpdateRequest(BaseModel):
     dimensions: Optional[str] = None
     excluded: Optional[bool] = None
 
+
+class BlueprintRevisionPhotoRetryRequest(BaseModel):
+    """Request body for photo URL set or AI retry in the blueprint revision Before/After staging area."""
+    target_blueprint_id: str = Field(..., description="Target blueprint ID in the After column")
+    color: Optional[str] = Field(default=None, description="Optional color variant for the photo")
+    user_feedback: Optional[str] = Field(default=None, description="Optional user feedback to guide AI retry")
+    new_url: Optional[str] = Field(default=None, description="Direct external image URL provided by user")
+

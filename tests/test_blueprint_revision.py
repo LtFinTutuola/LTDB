@@ -10,7 +10,9 @@ and Vendor Code Heuristic Revision System:
 - Warehouse-wide retroactive diffing & "Before/After" Staging plan preparation + inline editing
 - 5-step ordered atomic DB commit (splits, merges, ArticlePhoto preservation, global normalized_vendor_code alignment, brand_heuristics update)
 """
+import re
 from unittest.mock import AsyncMock, patch
+import pytest
 from fastapi.testclient import TestClient
 
 from src.main import app
@@ -18,6 +20,11 @@ from src.models.pim import Brand, BrandHeuristic, BrandCategory, Category, Artic
 from src.models.wms import Supplier, Batch, Article, ArticleStatus
 from src.repositories.pim_repo import BrandHeuristicRepository
 from src.agents.codes_deduction_agent.nodes.validation_node import _check_contrastive_constraints
+from src.services.blueprint_revision_service import (
+    _build_grounded_code_breakdowns,
+    _generate_deterministic_grounded_explanation,
+    _generate_user_friendly_rule_explanation,
+)
 
 
 client = TestClient(app)
@@ -376,7 +383,14 @@ class TestBlueprintRevisionEndToEnd:
             "src.services.blueprint_revision_service.CodesDeductionAgent.aexecute",
             new_callable=AsyncMock,
             side_effect=[mock_deduction_first, mock_deduction_corrected],
-        ) as mock_agent_run:
+        ) as mock_agent_run, patch(
+            "src.services.blueprint_revision_service.LLMClient.call",
+            new_callable=AsyncMock,
+            side_effect=[
+                "Nel codice HWVG870123BLA i primi 10 caratteri indicano la linea (HWVG870123) e gli ultimi 3 il colore (BLA).",
+                "Nel codice HWVG870123BLA il prefisso HWVG87 seguito da 4 cifre identifica il modello e le ultime 3 lettere la variante colore.",
+            ],
+        ):
             # 1. Initial Rule Deduction from Visual Partitions
             res1 = client.post(
                 "/api/v1/brands/blueprint-revision/deduce-rule",
@@ -510,3 +524,213 @@ class TestBlueprintRevisionEndToEnd:
         assert heur is not None
         assert heur.pattern == r"^HWVG87[0-9]{4}(?P<color_code>[A-Z]{3})$"
         assert "prefisso HWVG87" in heur.explanation
+
+
+class TestGroundedRuleExplanation:
+    """Unit tests for grounded, user-friendly rule explanation generation."""
+
+    def test_build_grounded_code_breakdowns_positions(self):
+        compiled_regex = re.compile(r"^HWVG87[0-9]{4}(?P<color_code>[A-Z]{3})$")
+        partitions = [
+            {
+                "group_id": "group_orig",
+                "label": "Borsa Grande",
+                "is_original": True,
+                "supplier_codes": ["HWVG870123BLA"],
+            },
+            {
+                "group_id": "group_new",
+                "label": "Portafoglio Piccolo",
+                "is_original": False,
+                "supplier_codes": ["HWVG870999RED"],
+            },
+        ]
+        breakdowns = _build_grounded_code_breakdowns(compiled_regex, partitions, [])
+        assert len(breakdowns) == 2
+        b1 = breakdowns[0]
+        assert b1["code"] == "HWVG870123BLA"
+        assert b1["model_root"] == "HWVG870123"
+        assert b1["color_variant"] == "BLA"
+        assert "ultimi 3 caratteri" in b1["position_info"]
+        assert b1["partition_label"] == "Borsa Grande"
+
+        b2 = breakdowns[1]
+        assert b2["code"] == "HWVG870999RED"
+        assert b2["model_root"] == "HWVG870999"
+        assert b2["color_variant"] == "RED"
+
+    def test_deterministic_grounded_explanation_content(self):
+        breakdowns = [
+            {
+                "code": "HWVG870123BLA",
+                "model_root": "HWVG870123",
+                "color_variant": "BLA",
+                "position_info": "gli ultimi 3 caratteri",
+                "partition_label": "Borsa Grande",
+                "is_original": True,
+                "colors": ["nero"],
+            },
+            {
+                "code": "HWVG870999BLA",
+                "model_root": "HWVG870999",
+                "color_variant": "BLA",
+                "position_info": "gli ultimi 3 caratteri",
+                "partition_label": "Portafoglio Piccolo",
+                "is_original": False,
+                "colors": ["nero"],
+            },
+        ]
+        text = _generate_deterministic_grounded_explanation("Guess", breakdowns)
+        assert "HWVG870123BLA" in text
+        assert "HWVG870999BLA" in text
+        assert "gli ultimi 3 caratteri" in text
+        assert "regex" not in text.lower()
+        assert "?p<color_code>" not in text.lower()
+
+    @pytest.mark.asyncio
+    async def test_user_friendly_rule_explanation_llm_invocation(self):
+        breakdowns = [
+            {
+                "code": "HWVG870123BLA",
+                "model_root": "HWVG870123",
+                "color_variant": "BLA",
+                "position_info": "gli ultimi 3 caratteri",
+                "partition_label": "Borsa Grande",
+                "is_original": True,
+                "colors": ["nero"],
+            }
+        ]
+        with patch("src.services.blueprint_revision_service.LLMClient.call", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = "Nel codice HWVG870123BLA i primi 10 caratteri indicano la linea e gli ultimi 3 il colore nero."
+            result = await _generate_user_friendly_rule_explanation(
+                brand_name="Guess",
+                code_breakdowns=breakdowns,
+                base_explanation="",
+                user_correction="I primi caratteri sono il modello",
+            )
+            assert result == "Nel codice HWVG870123BLA i primi 10 caratteri indicano la linea e gli ultimi 3 il colore nero."
+            mock_llm.assert_called_once()
+            call_kwargs = mock_llm.call_args[1]
+            assert "commesso/operatore" in call_kwargs["system_prompt"]
+            assert "NIENTE GERGO TECNICO" in call_kwargs["system_prompt"]
+            assert "HWVG870123BLA" in call_kwargs["prompt"]
+            assert "I primi caratteri sono il modello" in call_kwargs["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_user_friendly_rule_explanation_fallback_on_error(self):
+        breakdowns = [
+            {
+                "code": "HWVG870123BLA",
+                "model_root": "HWVG870123",
+                "color_variant": "BLA",
+                "position_info": "gli ultimi 3 caratteri",
+                "partition_label": "Borsa Grande",
+                "is_original": True,
+                "colors": ["nero"],
+            }
+        ]
+        with patch("src.services.blueprint_revision_service.LLMClient.call", new_callable=AsyncMock, side_effect=RuntimeError("LLM API error")):
+            result = await _generate_user_friendly_rule_explanation(
+                brand_name="Guess",
+                code_breakdowns=breakdowns,
+                base_explanation="",
+            )
+            assert "HWVG870123BLA" in result
+            assert "HWVG870123" in result
+
+
+class TestBlueprintRevisionPhotoStagingAndPersistence:
+    """Tests for photo upload, photo retry and photo persistence in the Blueprint Revision Staging workflow."""
+
+    def test_photo_upload_and_persistence_on_commit(self, db_session):
+        _seed_brand_and_warehouse(db_session)
+
+        mock_deduction = {
+            "regex": r"^[A-Z0-9]{10}(?P<color_code>[A-Z]{3})$",
+            "explanation": "I primi 10 caratteri indicano il modello, gli ultimi 3 il colore.",
+            "examples": [{"raw": "HWVG870123BLA", "normalized": "HWVG870123#"}],
+        }
+        partitions_payload = [
+            {
+                "group_id": "group_original",
+                "label": "Borsa Grande",
+                "is_original": True,
+                "article_ids": ["art-123-bla-1", "art-123-bla-2", "art-123-red-1"],
+                "supplier_codes": ["HWVG870123BLA", "HWVG870123RED"],
+            },
+            {
+                "group_id": "group_new_1",
+                "label": "Portafoglio Piccolo",
+                "is_original": False,
+                "article_ids": ["art-999-bla-1"],
+                "supplier_codes": ["HWVG870999BLA"],
+            },
+        ]
+
+        with patch("src.services.blueprint_revision_service.CodesDeductionAgent.aexecute", new_callable=AsyncMock, return_value=mock_deduction):
+            res_deduce = client.post(
+                "/api/v1/brands/blueprint-revision/deduce-rule",
+                json={"blueprint_id": "bp-merged-1", "partitions": partitions_payload},
+            )
+            assert res_deduce.status_code == 200
+            job_id = res_deduce.json()["job_id"]
+
+        with patch("src.services.blueprint_revision_service.ArticleBlueprintsAgent.aexecute", new_callable=AsyncMock, return_value={"blueprints": []}), \
+             patch("src.services.blueprint_revision_service.LLMClient.generate_embedding_sync", return_value=[0.1, 0.2, 0.3]):
+            res_prep = client.post(f"/api/v1/brands/blueprint-revision/{job_id}/prepare-staging")
+            assert res_prep.status_code == 200
+            plan = res_prep.json()["data"]["reconciliation_plan"]
+
+        new_split_bp_id = plan["target_split"]["after"][1]["id"]
+        dummy_image_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00\xff\xdb"
+
+        # 1. Test POST /photo-upload on new split blueprint
+        res_upload = client.post(
+            f"/api/v1/brands/blueprint-revision/{job_id}/photo-upload?target_blueprint_id={new_split_bp_id}&color=nero",
+            content=dummy_image_bytes,
+            headers={"Content-Type": "image/jpeg"},
+        )
+        assert res_upload.status_code == 200
+        upload_data = res_upload.json()
+        assert upload_data["status"] == "success"
+        assert upload_data["target_blueprint_id"] == new_split_bp_id
+        assert upload_data["photo_url"].startswith("data:image/jpeg;base64,")
+
+        # Verify job data was updated in staging
+        res_job = client.get(f"/api/v1/brands/blueprint-revision/{job_id}")
+        assert res_job.status_code == 200
+        card_after = res_job.json()["data"]["reconciliation_plan"]["target_split"]["after"][1]
+        assert "staged_photos_by_color" in card_after
+        assert card_after["staged_photos_by_color"]["nero"].startswith("data:image/jpeg;base64,")
+
+        # 2. Test POST /photo-retry on original blueprint card with manual new_url
+        with patch("httpx.AsyncClient.stream") as mock_stream:
+            mock_res = AsyncMock()
+            mock_res.status_code = 200
+            mock_res.headers = {"content-type": "image/png"}
+            mock_stream.return_value.__aenter__.return_value = mock_res
+
+            orig_bp_id = plan["target_split"]["after"][0]["id"]
+            res_retry = client.post(
+                f"/api/v1/brands/blueprint-revision/{job_id}/photo-retry",
+                json={
+                    "target_blueprint_id": orig_bp_id,
+                    "color": "rosso",
+                    "new_url": "https://example.com/test_bag_red.png",
+                },
+            )
+            assert res_retry.status_code == 200
+            retry_data = res_retry.json()
+            assert retry_data["status"] == "success"
+            assert retry_data["photo_url"] == "https://example.com/test_bag_red.png"
+
+        # 3. Commit plan and verify photo persistence
+        with patch("src.services.blueprint_revision_service.photo_service.download_and_save_photo") as mock_dl_save, \
+             patch("src.services.blueprint_revision_service.LLMClient.generate_embedding_sync", return_value=[0.1, 0.2, 0.3]):
+            res_commit = client.post(f"/api/v1/brands/blueprint-revision/{job_id}/commit")
+            assert res_commit.status_code == 200
+
+            called_urls = [call[1]["photo_url"] for call in mock_dl_save.call_args_list]
+            assert any(u.startswith("data:image/jpeg;base64,") for u in called_urls)
+            assert "https://example.com/test_bag_red.png" in called_urls
+

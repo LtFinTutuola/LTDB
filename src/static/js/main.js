@@ -38,6 +38,18 @@ export function addMessage(text, type = 'system') {
     return toast;
 }
 
+export function ensureDetailPanelResizer() {
+    const panel = document.getElementById('detail-panel');
+    if (!panel) return;
+    if (!document.getElementById('detail-panel-resizer')) {
+        const resizer = document.createElement('div');
+        resizer.className = 'detail-panel__resizer';
+        resizer.id = 'detail-panel-resizer';
+        resizer.title = 'Trascina il bordo per ridimensionare il pannello';
+        panel.prepend(resizer);
+    }
+}
+
 export function enterSplitScreen() {
     const canvas = document.getElementById('canvas');
     if (canvas) {
@@ -46,9 +58,11 @@ export function enterSplitScreen() {
             canvas.style.gridTemplateColumns = '0px 1fr';
         } else {
             canvas.classList.remove('mobile-staging-open');
-            canvas.style.gridTemplateColumns = '550px 1fr';
+            const savedWidth = canvas.style.getPropertyValue('--staging-panel-width') || 'calc(100% - 550px)';
+            canvas.style.gridTemplateColumns = `minmax(280px, 1fr) var(--staging-panel-width, ${savedWidth})`;
         }
     }
+    ensureDetailPanelResizer();
 }
 
 export function exitSplitScreen() {
@@ -57,6 +71,56 @@ export function exitSplitScreen() {
         canvas.classList.remove('mobile-staging-open');
         canvas.style.gridTemplateColumns = '1fr 0px';
     }
+}
+
+export function initDetailPanelResizer() {
+    const canvas = document.getElementById('canvas');
+    const panel = document.getElementById('detail-panel');
+    if (!canvas || !panel) return;
+
+    ensureDetailPanelResizer();
+
+    const observer = new MutationObserver(() => {
+        if (!document.getElementById('detail-panel-resizer')) {
+            ensureDetailPanelResizer();
+        }
+    });
+    observer.observe(panel, { childList: true });
+
+    const MIN_PANEL_WIDTH = 340;
+    const MAX_PANEL_RATIO = 0.85;
+    let isResizing = false;
+
+    const onMouseMove = (e) => {
+        if (!isResizing) return;
+        const canvasRect = canvas.getBoundingClientRect();
+        const maxPanelWidth = Math.floor(canvasRect.width * MAX_PANEL_RATIO);
+        const desiredWidth = canvasRect.right - e.clientX;
+        const clampedWidth = Math.min(Math.max(MIN_PANEL_WIDTH, desiredWidth), maxPanelWidth);
+        canvas.style.setProperty('--staging-panel-width', `${clampedWidth}px`);
+    };
+
+    const onMouseUp = () => {
+        if (!isResizing) return;
+        isResizing = false;
+        const resizer = document.getElementById('detail-panel-resizer');
+        if (resizer) resizer.classList.remove('is-resizing');
+        canvas.classList.remove('is-resizing-panel');
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    panel.addEventListener('mousedown', (e) => {
+        if (e.target.closest('#detail-panel-resizer')) {
+            e.preventDefault();
+            isResizing = true;
+            const resizer = document.getElementById('detail-panel-resizer');
+            if (resizer) resizer.classList.add('is-resizing');
+            canvas.classList.add('is-resizing-panel');
+            window.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('mouseup', onMouseUp);
+        }
+    });
 }
 
 export function getDetailPanel() {
@@ -117,6 +181,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initTabs();
     initWarehouse();
     renderForms();
+    initDetailPanelResizer();
     
     // Check if there is an action button for staging that requires main.js hook
     document.addEventListener('click', async (e) => {

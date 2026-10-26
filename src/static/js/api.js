@@ -343,4 +343,23 @@ export async function commitBlueprintReconciliationPlan(jobId) {
     return _handleResponse(res);
 }
 
+export async function uploadBlueprintRevisionPhoto(jobId, targetBpId, color, file) {
+    const colorParam = color ? `&color=${encodeURIComponent(color)}` : '';
+    const res = await fetch(`${API_BASE}/brands/blueprint-revision/${encodeURIComponent(jobId)}/photo-upload?target_blueprint_id=${encodeURIComponent(targetBpId)}${colorParam}`, {
+        method: 'POST',
+        headers: { 'Content-Type': file.type || 'image/jpeg' },
+        body: file,
+    });
+    return _handleResponse(res);
+}
+
+export async function retryBlueprintRevisionPhoto(jobId, payload) {
+    const res = await fetch(`${API_BASE}/brands/blueprint-revision/${encodeURIComponent(jobId)}/photo-retry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    return _handleResponse(res);
+}
+
 

@@ -15,6 +15,7 @@ import {
     addMessage,
     _esc,
 } from './main.js?v=20261026_2';
+import { requestPhotoUpload } from './photo_upload_helper.js?v=20261026_2';
 
 let _currentContext = null;
 let _buckets = []; // [{ group_id, label, is_original, user_hint, groupKeys: Set }]
@@ -23,6 +24,30 @@ let _currentJobId = null;
 let _currentRuleResponse = null;
 let _currentStagingJob = null;
 let _onCompleteCallback = null;
+let _activeAfterPhotoIndices = {};
+
+function _openImageModal(url) {
+    if (!url) return;
+    let overlay = document.getElementById('image-zoom-modal');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'image-zoom-modal';
+        overlay.className = 'image-modal-overlay';
+        overlay.innerHTML = `
+            <div class="image-modal-content" style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:pointer;">
+                <img id="image-zoom-img" src="" style="max-width:90vw;max-height:90vh;border-radius:8px;object-fit:contain;">
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        overlay.onclick = () => {
+            overlay.style.display = 'none';
+        };
+    }
+    const img = overlay.querySelector('#image-zoom-img');
+    if (img) img.src = url;
+    overlay.style.display = 'block';
+}
+window._openImageModal = _openImageModal;
 
 function _groupKey(g) {
     return g.group_key || `${g.supplier_code}__${(g.colors || []).join('|')}__${g.ean || ''}`;
@@ -753,6 +778,9 @@ function _renderStep3BeforeAfterStaging() {
         });
     });
 
+    // Bind Photo Controls & Carousel
+    _bindPhotoColEvents(panel);
+
     // Bind Final Atomic Commit
     document.getElementById('btn-bp-staging-commit')?.addEventListener('click', async (e) => {
         const btn = e.currentTarget;
@@ -777,6 +805,58 @@ function _renderStep3BeforeAfterStaging() {
     });
 }
 
+function _renderPhotoColHtml(targetId, articleGroups = [], articleName = '') {
+    if (!articleGroups || articleGroups.length === 0) {
+        return `
+            <div class="blueprint-card__photo-col" data-target-id="${_esc(targetId)}" style="width:140px;display:flex;flex-direction:column;flex-shrink:0;">
+                <div class="photo-placeholder" style="width:140px;height:140px;border-radius:var(--radius-sm);background:var(--bg-elevated);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:36px;">🖼</div>
+            </div>
+        `;
+    }
+
+    let currentIndex = _activeAfterPhotoIndices[targetId] || 0;
+    if (currentIndex >= articleGroups.length || currentIndex < 0) {
+        currentIndex = 0;
+        _activeAfterPhotoIndices[targetId] = 0;
+    }
+
+    const currentGroup = articleGroups[currentIndex] || articleGroups[0];
+    const photoUrl = currentGroup.photo_url || '';
+    const colorLabel = (currentGroup.colors || []).join(', ') || 'N/D';
+    const brandName = _currentStagingJob?.brand_name || '';
+    const searchQuery = `${brandName} ${articleName || ''} ${currentGroup.supplier_code || ''} ${colorLabel}`.trim();
+
+    const imgHtml = photoUrl
+        ? `<img class="bp-photo-preview-img" src="${_esc(photoUrl)}" alt="foto" style="width:140px;height:140px;border-radius:var(--radius-sm);object-fit:cover;cursor:pointer;" onclick="window._openImageModal && window._openImageModal(this.src)" onerror="this.style.display='none'">`
+        : `<div class="photo-placeholder" style="width:140px;height:140px;border-radius:var(--radius-sm);background:var(--bg-elevated);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:36px;cursor:pointer;">🖼</div>`;
+
+    let navHtml = '';
+    if (articleGroups.length > 1) {
+        navHtml = `
+            <div class="photo-carousel-nav" style="display:flex;justify-content:space-between;align-items:center;margin:6px 0;width:100%;">
+                <button type="button" class="btn-prev-after-photo" data-target-id="${_esc(targetId)}" style="background:var(--bg-elevated);border:1px solid var(--border-color);border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--text-primary);font-size:12px;">◀</button>
+                <span style="font-size:11px;font-weight:600;color:var(--text-secondary);text-align:center;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px;" title="${_esc(colorLabel)}">
+                    ${_esc(colorLabel)}<br><span style="font-weight:normal;font-size:10px;">(${currentIndex + 1}/${articleGroups.length})</span>
+                </span>
+                <button type="button" class="btn-next-after-photo" data-target-id="${_esc(targetId)}" style="background:var(--bg-elevated);border:1px solid var(--border-color);border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--text-primary);font-size:12px;">▶</button>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="blueprint-card__photo-col" data-target-id="${_esc(targetId)}" style="width:140px;display:flex;flex-direction:column;flex-shrink:0;">
+            <div style="width:140px;height:140px;display:flex;align-items:center;justify-content:center;background:var(--bg-elevated);border-radius:var(--radius-sm);overflow:hidden;">
+                ${imgHtml}
+            </div>
+            ${navHtml}
+            <button type="button" class="btn-search-photo btn-secondary" data-target-id="${_esc(targetId)}" data-search-query="${_esc(searchQuery)}" style="margin-top:${articleGroups.length > 1 ? '4px' : '8px'};padding:4px 8px;font-size:11px;width:100%;" title="Cerca su Google">🔍 Cerca</button>
+            <button type="button" class="btn-upload-photo btn-secondary" data-target-id="${_esc(targetId)}" data-color="${_esc(colorLabel)}" style="margin-top:4px;padding:4px 8px;font-size:11px;width:100%;" title="Carica foto dal dispositivo">📁 Carica Foto</button>
+            <button type="button" class="btn-manual-photo btn-secondary" data-target-id="${_esc(targetId)}" data-color="${_esc(colorLabel)}" style="margin-top:4px;padding:4px 8px;font-size:11px;width:100%;">🔗 Inserisci URL</button>
+            <button type="button" class="btn-retry-photo btn-secondary" data-target-id="${_esc(targetId)}" data-color="${_esc(colorLabel)}" style="margin-top:4px;padding:4px 8px;font-size:11px;width:100%;">🔄 Riprova</button>
+        </div>
+    `;
+}
+
 function _renderSplitBeforeAfterCardHtml(splitOp, badgeTitle, isPrimary) {
     const before = splitOp.before || {};
     const afterList = splitOp.after || [];
@@ -793,14 +873,25 @@ function _renderSplitBeforeAfterCardHtml(splitOp, badgeTitle, isPrimary) {
         )
         .join('');
 
+    const beforePhotosHtml = beforeGroups.length > 0 ? `
+        <div class="bp-before-photos-strip" style="display:flex;gap:6px;margin:8px 0 10px 0;overflow-x:auto;padding-bottom:4px;">
+            ${beforeGroups.map(g => `
+                <div class="bp-mini-photo-card" style="width:60px;height:60px;border-radius:4px;background:var(--bg-elevated);overflow:hidden;flex-shrink:0;cursor:pointer;position:relative;" onclick="window._openImageModal && window._openImageModal('${_esc(g.photo_url || '')}')" title="${_esc(g.supplier_code)} (${_esc((g.colors || []).join(', '))})">
+                    ${g.photo_url ? `<img src="${_esc(g.photo_url)}" style="width:100%;height:100%;object-fit:cover;" alt="foto">` : `<span style="display:flex;align-items:center;justify-content:center;height:100%;font-size:22px;color:var(--text-muted);">🖼</span>`}
+                    <span style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.65);color:#fff;font-size:8.5px;text-align:center;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc((g.colors || [])[0] || g.supplier_code)}</span>
+                </div>
+            `).join('')}
+        </div>
+    ` : '';
+
     const afterCardsHtml = afterList
         .map((abp) => {
             const catText = abp.category?.description || '';
             const subCatText = abp.sub_category?.description || '';
             const fullCatDisplay = subCatText ? `${catText} ↳ ${subCatText}` : catText;
             return `
-            <div class="bp-after-editable-card" data-target-id="${_esc(abp.id)}">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <div class="bp-after-editable-card" data-target-id="${_esc(abp.id)}" style="background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-card);padding:14px;box-shadow:var(--shadow-sm);">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
                     <span class="bp-rev-badge ${!abp.is_new ? 'bp-rev-badge--orig' : 'bp-rev-badge--new'}">
                         ${!abp.is_new ? 'Scheda Originale Aggiornata' : "Nuova Scheda Creata dall'AI"}
                     </span>
@@ -809,48 +900,54 @@ function _renderSplitBeforeAfterCardHtml(splitOp, badgeTitle, isPrimary) {
                     </span>
                 </div>
 
-                <div class="bp-inline-form-grid">
-                    <div>
-                        <label>Nome Articolo</label>
-                        <input type="text" class="form-control bp-inline-input" data-field="article_name" value="${_esc(abp.article_name || '')}">
-                    </div>
-                    <div>
-                        <label>Categoria / Sotto-categoria</label>
-                        <input type="text" class="form-control" value="${_esc(fullCatDisplay)}" disabled>
-                    </div>
-                </div>
+                <div class="bp-after-card-body" style="display:flex;gap:16px;align-items:flex-start;">
+                    ${_renderPhotoColHtml(abp.id, abp.article_groups, abp.article_name)}
 
-                <div style="margin-top:8px;">
-                    <label style="font-size:11px;color:var(--text-muted);">Descrizione Breve</label>
-                    <textarea class="form-control bp-inline-input" data-field="description" rows="2" style="font-size:12.5px;">${_esc(abp.description || '')}</textarea>
-                </div>
+                    <div style="flex:1;min-width:0;">
+                        <div class="bp-inline-form-grid">
+                            <div>
+                                <label>Nome Articolo</label>
+                                <input type="text" class="form-control bp-inline-input" data-field="article_name" value="${_esc(abp.article_name || '')}">
+                            </div>
+                            <div>
+                                <label>Categoria / Sotto-categoria</label>
+                                <input type="text" class="form-control" value="${_esc(fullCatDisplay)}" disabled>
+                            </div>
+                        </div>
 
-                <div class="bp-inline-form-grid" style="margin-top:8px;">
-                    <div>
-                        <label>Tags (separati da virgola)</label>
-                        <input type="text" class="form-control bp-inline-input" data-field="tags" value="${_esc((abp.tags || []).join(', '))}">
-                    </div>
-                    <div>
-                        <label>Materiali (separati da virgola)</label>
-                        <input type="text" class="form-control bp-inline-input" data-field="materials" value="${_esc((abp.materials || []).join(', '))}">
-                    </div>
-                </div>
+                        <div style="margin-top:8px;">
+                            <label style="font-size:11px;color:var(--text-muted);">Descrizione Breve</label>
+                            <textarea class="form-control bp-inline-input" data-field="description" rows="2" style="font-size:12.5px;">${_esc(abp.description || '')}</textarea>
+                        </div>
 
-                <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-                    <div style="display:flex;flex-wrap:wrap;gap:4px;">
-                        ${(abp.article_groups || [])
-                            .map(
-                                (g) => `
-                                <span class="bp-mini-art-chip bp-mini-art-chip--after">
-                                    <strong>${_esc(g.supplier_code)}</strong> (${_esc((g.colors || []).join(', ') || 'N/D')} • x${g.quantity || 1})
-                                </span>
-                            `
-                            )
-                            .join('')}
+                        <div class="bp-inline-form-grid" style="margin-top:8px;">
+                            <div>
+                                <label>Tags (separati da virgola)</label>
+                                <input type="text" class="form-control bp-inline-input" data-field="tags" value="${_esc((abp.tags || []).join(', '))}">
+                            </div>
+                            <div>
+                                <label>Materiali (separati da virgola)</label>
+                                <input type="text" class="form-control bp-inline-input" data-field="materials" value="${_esc((abp.materials || []).join(', '))}">
+                            </div>
+                        </div>
+
+                        <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                            <div style="display:flex;flex-wrap:wrap;gap:4px;">
+                                ${(abp.article_groups || [])
+                                    .map(
+                                        (g) => `
+                                        <span class="bp-mini-art-chip bp-mini-art-chip--after">
+                                            <strong>${_esc(g.supplier_code)}</strong> (${_esc((g.colors || []).join(', ') || 'N/D')} • x${g.quantity || 1})
+                                        </span>
+                                    `
+                                    )
+                                    .join('')}
+                            </div>
+                            <button type="button" class="btn-secondary btn-bp-save-inline-card" style="padding:4px 10px;font-size:11.5px;">
+                                Aggiorna Scheda
+                            </button>
+                        </div>
                     </div>
-                    <button type="button" class="btn-secondary btn-bp-save-inline-card" style="padding:4px 10px;font-size:11.5px;">
-                        Aggiorna Scheda
-                    </button>
                 </div>
             </div>
         `;
@@ -874,6 +971,7 @@ function _renderSplitBeforeAfterCardHtml(splitOp, badgeTitle, isPrimary) {
                         <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">
                             ${_esc(before.description || '')}
                         </div>
+                        ${beforePhotosHtml}
                         <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:6px;">
                             Articoli fisici accorpati (${totalBeforeUnits} unità):
                         </div>
@@ -886,7 +984,7 @@ function _renderSplitBeforeAfterCardHtml(splitOp, badgeTitle, isPrimary) {
                 <!-- DOPO -->
                 <div class="bp-ba-col bp-ba-col--after">
                     <div class="bp-ba-col__label">DOPO (${afterList.length} Schede Distinte)</div>
-                    <div style="display:flex;flex-direction:column;gap:10px;">
+                    <div style="display:flex;flex-direction:column;gap:12px;">
                         ${afterCardsHtml}
                     </div>
                 </div>
@@ -916,11 +1014,21 @@ function _renderMergeBeforeAfterCardHtml(mergeOp, idx) {
                             .map((b) => {
                                 const bGroups = b.article_groups || [];
                                 const bUnits = bGroups.reduce((s, g) => s + (g.quantity || 0), 0);
+                                const bPhotosHtml = bGroups.length > 0 ? `
+                                    <div class="bp-before-photos-strip" style="display:flex;gap:4px;margin:6px 0;overflow-x:auto;padding-bottom:2px;">
+                                        ${bGroups.map(g => `
+                                            <div class="bp-mini-photo-card" style="width:48px;height:48px;border-radius:4px;background:var(--bg-elevated);overflow:hidden;flex-shrink:0;cursor:pointer;position:relative;" onclick="window._openImageModal && window._openImageModal('${_esc(g.photo_url || '')}')" title="${_esc(g.supplier_code)}">
+                                                ${g.photo_url ? `<img src="${_esc(g.photo_url)}" style="width:100%;height:100%;object-fit:cover;" alt="foto">` : `<span style="display:flex;align-items:center;justify-content:center;height:100%;font-size:18px;color:var(--text-muted);">🖼</span>`}
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                ` : '';
                                 return `
                                 <div class="bp-before-summary-card">
                                     <div style="font-weight:600;font-size:13px;color:var(--text-primary);">
                                         ${_esc(b.article_name)}
                                     </div>
+                                    ${bPhotosHtml}
                                     <div style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">
                                         Codici: ${_esc(bGroups.map((g) => g.supplier_code).join(', '))} • Unità: ${bUnits}
                                     </div>
@@ -934,31 +1042,228 @@ function _renderMergeBeforeAfterCardHtml(mergeOp, idx) {
                 <!-- DOPO -->
                 <div class="bp-ba-col bp-ba-col--after">
                     <div class="bp-ba-col__label">DOPO (1 Scheda Unificata)</div>
-                    <div class="bp-after-editable-card" data-target-id="${_esc(afterBp.id || mergeOp.merge_id)}">
-                        <div class="bp-inline-form-grid">
-                            <div>
-                                <label>Nome Articolo Unificato</label>
-                                <input type="text" class="form-control bp-inline-input" data-field="article_name" value="${_esc(afterBp.article_name || '')}">
+                    <div class="bp-after-editable-card" data-target-id="${_esc(afterBp.id || mergeOp.merge_id)}" style="background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-card);padding:14px;box-shadow:var(--shadow-sm);">
+                        <div class="bp-after-card-body" style="display:flex;gap:16px;align-items:flex-start;">
+                            ${_renderPhotoColHtml(afterBp.id || mergeOp.merge_id, afterGroups, afterBp.article_name)}
+
+                            <div style="flex:1;min-width:0;">
+                                <div class="bp-inline-form-grid">
+                                    <div>
+                                        <label>Nome Articolo Unificato</label>
+                                        <input type="text" class="form-control bp-inline-input" data-field="article_name" value="${_esc(afterBp.article_name || '')}">
+                                    </div>
+                                    <div>
+                                        <label>Unità Totali Accorpate</label>
+                                        <input type="text" class="form-control" value="${totalAfterUnits} unità fisiche" disabled>
+                                    </div>
+                                </div>
+                                <div style="margin-top:8px;">
+                                    <label style="font-size:11px;color:var(--text-muted);">Descrizione</label>
+                                    <textarea class="form-control bp-inline-input" data-field="description" rows="2" style="font-size:12.5px;">${_esc(afterBp.description || '')}</textarea>
+                                </div>
+                                <div style="margin-top:8px;text-align:right;">
+                                    <button type="button" class="btn-secondary btn-bp-save-inline-card" style="padding:4px 10px;font-size:11.5px;">
+                                        Aggiorna Scheda
+                                    </button>
+                                </div>
                             </div>
-                            <div>
-                                <label>Unità Totali Accorpate</label>
-                                <input type="text" class="form-control" value="${totalAfterUnits} unità fisiche" disabled>
-                            </div>
-                        </div>
-                        <div style="margin-top:8px;">
-                            <label style="font-size:11px;color:var(--text-muted);">Descrizione</label>
-                            <textarea class="form-control bp-inline-input" data-field="description" rows="2" style="font-size:12.5px;">${_esc(afterBp.description || '')}</textarea>
-                        </div>
-                        <div style="margin-top:8px;text-align:right;">
-                            <button type="button" class="btn-secondary btn-bp-save-inline-card" style="padding:4px 10px;font-size:11.5px;">
-                                Aggiorna Scheda
-                            </button>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
     `;
+}
+
+function _bindPhotoColEvents(container) {
+    if (!container) return;
+
+    const findCard = (targetId) => {
+        const plan = _currentStagingJob?.reconciliation_plan || {};
+        for (const bp of plan.target_split?.after || []) {
+            if (bp.id === targetId) return bp;
+        }
+        for (const ws of plan.warehouse_splits || []) {
+            for (const bp of ws.after || []) {
+                if (bp.id === targetId) return bp;
+            }
+        }
+        for (const wm of plan.warehouse_merges || []) {
+            if (wm.after?.id === targetId || wm.merge_id === targetId) return wm.after;
+        }
+        return null;
+    };
+
+    // Carousel buttons
+    container.querySelectorAll('.btn-prev-after-photo').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const targetId = btn.dataset.targetId;
+            const card = findCard(targetId);
+            if (!card || !card.article_groups) return;
+            const len = card.article_groups.length;
+            let idx = _activeAfterPhotoIndices[targetId] || 0;
+            idx = (idx - 1 + len) % len;
+            _activeAfterPhotoIndices[targetId] = idx;
+            _refreshPhotoCol(targetId, card);
+        });
+    });
+
+    container.querySelectorAll('.btn-next-after-photo').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const targetId = btn.dataset.targetId;
+            const card = findCard(targetId);
+            if (!card || !card.article_groups) return;
+            const len = card.article_groups.length;
+            let idx = _activeAfterPhotoIndices[targetId] || 0;
+            idx = (idx + 1) % len;
+            _activeAfterPhotoIndices[targetId] = idx;
+            _refreshPhotoCol(targetId, card);
+        });
+    });
+
+    // 🔍 Cerca (Google Images)
+    container.querySelectorAll('.btn-search-photo').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const query = btn.dataset.searchQuery;
+            if (!query) {
+                addMessage('Nessuna informazione sufficiente per la ricerca.', 'error');
+                return;
+            }
+            const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
+            window.open(searchUrl, '_blank', 'noopener,noreferrer');
+        });
+    });
+
+    // 📁 Carica Foto
+    container.querySelectorAll('.btn-upload-photo').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const targetId = btn.dataset.targetId;
+            const color = btn.dataset.color || '';
+            const card = findCard(targetId);
+            if (!card || !_currentJobId) return;
+
+            requestPhotoUpload({
+                onSuccess: async (compressedBlob) => {
+                    addMessage('Caricamento foto in corso...', 'system');
+                    btn.disabled = true;
+                    try {
+                        const res = await api.uploadBlueprintRevisionPhoto(_currentJobId, targetId, color, compressedBlob);
+                        if (res && res.photo_url) {
+                            _applyPhotoUpdateToCard(card, targetId, color, res.photo_url);
+                            _refreshPhotoCol(targetId, card);
+                            addMessage('Foto caricata con successo!', 'system');
+                        }
+                    } catch (err) {
+                        addMessage(`Upload foto fallito: ${err.message}`, 'error');
+                    } finally {
+                        btn.disabled = false;
+                    }
+                },
+                onError: (err) => {
+                    addMessage(`Errore selezione foto: ${err.message || err}`, 'error');
+                },
+            });
+        });
+    });
+
+    // 🔗 Inserisci URL
+    container.querySelectorAll('.btn-manual-photo').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const targetId = btn.dataset.targetId;
+            const color = btn.dataset.color || '';
+            const card = findCard(targetId);
+            if (!card || !_currentJobId) return;
+
+            const url = prompt("Inserisci l'URL diretto dell'immagine:");
+            if (!url || !url.trim()) return;
+
+            btn.disabled = true;
+            btn.textContent = '...';
+            try {
+                const res = await api.retryBlueprintRevisionPhoto(_currentJobId, {
+                    target_blueprint_id: targetId,
+                    color: color,
+                    new_url: url.trim(),
+                });
+                if (res && res.photo_url) {
+                    _applyPhotoUpdateToCard(card, targetId, color, res.photo_url);
+                    _refreshPhotoCol(targetId, card);
+                    addMessage("Foto aggiornata dall'URL fornito!", 'system');
+                }
+            } catch (err) {
+                addMessage(`Errore nell'impostazione dell'URL: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔗 Inserisci URL';
+            }
+        });
+    });
+
+    // 🔄 Riprova (AI Grounded Search)
+    container.querySelectorAll('.btn-retry-photo').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const targetId = btn.dataset.targetId;
+            const color = btn.dataset.color || '';
+            const card = findCard(targetId);
+            if (!card || !_currentJobId) return;
+
+            const feedback = prompt('Cosa non va nella foto attuale? (opzionale, aiuta la ricerca AI):');
+
+            btn.disabled = true;
+            btn.textContent = '...';
+            addMessage('Ricerca foto su Google con AI in corso...', 'system');
+            try {
+                const res = await api.retryBlueprintRevisionPhoto(_currentJobId, {
+                    target_blueprint_id: targetId,
+                    color: color,
+                    user_feedback: feedback ? feedback.trim() : null,
+                });
+                if (res && res.photo_url) {
+                    _applyPhotoUpdateToCard(card, targetId, color, res.photo_url);
+                    _refreshPhotoCol(targetId, card);
+                    addMessage("Nuova foto trovata con successo dall'AI!", 'system');
+                }
+            } catch (err) {
+                addMessage(`Ricerca AI non riuscita: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔄 Riprova';
+            }
+        });
+    });
+}
+
+function _applyPhotoUpdateToCard(card, targetId, color, newPhotoUrl) {
+    const normColor = (color || '').trim().toLowerCase();
+    const artGroups = card.article_groups || [];
+    let curIdx = _activeAfterPhotoIndices[targetId] || 0;
+    if (artGroups[curIdx]) {
+        artGroups[curIdx].photo_url = newPhotoUrl;
+    }
+    for (const g of artGroups) {
+        const cList = (g.colors || []).map((c) => String(c).trim().toLowerCase());
+        if (!normColor || cList.includes(normColor) || artGroups.length === 1) {
+            g.photo_url = newPhotoUrl;
+        }
+    }
+}
+
+function _refreshPhotoCol(targetId, card) {
+    const panel = getDetailPanel();
+    if (!panel) return;
+    const oldCol = panel.querySelector(`.blueprint-card__photo-col[data-target-id="${targetId}"]`);
+    if (!oldCol) return;
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = _renderPhotoColHtml(targetId, card.article_groups, card.article_name);
+    const newCol = tempDiv.firstElementChild;
+    oldCol.replaceWith(newCol);
+    _bindPhotoColEvents(newCol);
 }
 
 function _collectCardUpdates(cardEl) {

@@ -26,8 +26,14 @@
     min-width: 0;
 }
 
+.canvas.is-resizing-panel {
+    user-select: none;
+    cursor: col-resize;
+    transition: none !important;
+}
+
 .canvas--split {
-    grid-template-columns: 1fr 2fr;
+    grid-template-columns: minmax(280px, 1fr) var(--staging-panel-width, calc(100% - 550px));
 }
 
 /* ============================================================

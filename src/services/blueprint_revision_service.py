@@ -11,17 +11,25 @@ Service layer orchestrating the Visual Blueprint Split/Merge & Vendor Code Heuri
 """
 from __future__ import annotations
 
+import base64
 import copy
 import re
 import uuid
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.agents.article_blueprints_agent import ArticleBlueprintsAgent
+from src.agents.article_blueprints_agent.nodes.color_photo_search_node import (
+    _extract_best_url,
+    _validate_photo_url,
+    _SYSTEM_PROMPT_QUERY_GEN,
+    _SYSTEM_PROMPT_SEARCH,
+)
 from src.agents.base import AgentException
 from src.agents.codes_deduction_agent import CodesDeductionAgent
 from src.agents.llm_client import LLMClient
@@ -34,12 +42,14 @@ from src.repositories.pim_repo import category_repo, heuristic_repo, pim_repo
 from src.schemas.data_ingestion import (
     BlueprintArticleGroupSchema,
     BlueprintRevisionContextResponse,
+    BlueprintRevisionPhotoRetryRequest,
     HeuristicExampleSchema,
     PartitionGroupInput,
     ReconciliationPlanUpdateRequest,
     RuleDeductionRequest,
     RuleDeductionResponse,
 )
+from src.services import photo_service
 from src.services.pim_service import build_blueprint_embedding_text
 from src.services.search_service import invalidate_search_cache
 
@@ -191,6 +201,159 @@ def get_blueprint_revision_context(db: Session, blueprint_id: str) -> BlueprintR
 # ---------------------------------------------------------------------------
 # Phase 2: Contrastive Rule Deduction & Fast Warehouse Diffing
 # ---------------------------------------------------------------------------
+
+def _build_grounded_code_breakdowns(
+    compiled_regex: Optional[re.Pattern],
+    partitions: List[dict],
+    bp_articles: List[Article],
+) -> List[dict]:
+    """
+    Deterministically breaks down each distinct supplier code from the selected Blueprint's partitions
+    into model root vs color variant substring, along with the article's color and assigned partition label.
+    """
+    breakdowns = []
+    seen_codes = set()
+    art_map = {str(a.id): a for a in bp_articles}
+
+    for part in partitions:
+        label = part.get("label") or "Modello"
+
+        part_codes: List[Tuple[str, List[str]]] = []
+        for aid in part.get("article_ids", []):
+            art = art_map.get(aid)
+            if art and art.supplier_code:
+                c = art.supplier_code.strip().upper()
+                if c and not any(x[0] == c for x in part_codes):
+                    part_codes.append((c, list(art.colors or [])))
+        for sc in part.get("supplier_codes", []):
+            c = (sc or "").strip().upper()
+            if c and not any(x[0] == c for x in part_codes):
+                part_codes.append((c, []))
+
+        for code, colors in part_codes:
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+
+            model_root = code
+            color_variant = ""
+            position_info = ""
+            if compiled_regex:
+                match = compiled_regex.search(code)
+                if match and "color_code" in match.groupdict() and match.group("color_code"):
+                    c_start = match.start("color_code")
+                    c_end = match.end("color_code")
+                    color_variant = code[c_start:c_end]
+
+                    if c_start == 0:
+                        position_info = f"i primi {c_end} caratteri"
+                        model_root = code[c_end:].lstrip("-_/ ")
+                    elif c_end == len(code):
+                        prefix_len = len(code) - c_start
+                        position_info = f"gli ultimi {prefix_len} caratteri"
+                        model_root = code[:c_start].rstrip("-_/ ")
+                    else:
+                        position_info = f"i caratteri centrali ({c_start + 1}-{c_end})"
+                        model_root = (code[:c_start] + code[c_end:]).strip("-_/ ")
+
+            breakdowns.append({
+                "code": code,
+                "model_root": model_root or code,
+                "color_variant": color_variant,
+                "position_info": position_info,
+                "partition_label": label,
+                "is_original": bool(part.get("is_original")),
+                "colors": colors,
+            })
+
+    return breakdowns
+
+
+def _generate_deterministic_grounded_explanation(brand_name: str, code_breakdowns: List[dict]) -> str:
+    """Deterministic, non-technical explanation with concrete examples from the blueprint."""
+    if not code_breakdowns:
+        return f"Per il brand {brand_name}, i codici fornitore vengono interpretati isolando la radice del modello dalle varianti colore."
+
+    primary = code_breakdowns[0]
+    others = [b for b in code_breakdowns[1:] if b["model_root"] != primary["model_root"]]
+
+    ex_text = f"Nel codice {primary['code']}"
+    if primary["position_info"] and primary["color_variant"]:
+        ex_text += f", {primary['position_info']} ({primary['color_variant']}) indicano la variante colore, mentre i restanti caratteri ({primary['model_root']}) identificano la linea del modello."
+    else:
+        ex_text += f", la parte principale ({primary['model_root']}) identifica il modello."
+
+    if others:
+        other_ex = others[0]
+        ex_text += f" Di conseguenza, il codice {other_ex['code']} (modello {other_ex['model_root']}) viene separato su una scheda distinta, trattandosi di un modello differente."
+    else:
+        ex_text += " In questo modo, gli articoli che condividono la stessa radice modello vengono raggruppati come varianti colore della medesima scheda."
+
+    return f"Per i prodotti del brand {brand_name}, la regola scompone il codice distinguendo la linea del modello dalla variante colore. {ex_text}"
+
+
+async def _generate_user_friendly_rule_explanation(
+    brand_name: str,
+    code_breakdowns: List[dict],
+    base_explanation: str,
+    user_correction: Optional[str] = None,
+) -> str:
+    """
+    Generates a natural, non-technical explanation of the brand heuristic grounded in
+    concrete examples from the selected Blueprint being split.
+    Uses LLMClient with a dedicated non-technical prompt, falling back deterministically if unavailable.
+    """
+    if not code_breakdowns:
+        return base_explanation or f"I codici del brand {brand_name} vengono normalizzati per identificare la linea di prodotto."
+
+    examples_bullets = []
+    for b in code_breakdowns:
+        col_str = f" (variante colore: '{b['color_variant']}' - {', '.join(b['colors']) or 'colore'})" if b["color_variant"] else ""
+        pos_str = f" [{b['position_info']}]" if b["position_info"] else ""
+        examples_bullets.append(
+            f"- Codice '{b['code']}': radice linea/modello = '{b['model_root']}'{col_str}{pos_str} -> assegnato alla scheda '{b['partition_label']}'"
+        )
+    examples_ctx = "\n".join(examples_bullets)
+
+    system_prompt = (
+        "Sei un assistente per la gestione di magazzino in un negozio al dettaglio. "
+        "Devi spiegare a un commesso/operatore (utente NON TECNICO) come il sistema riconosce e divide i codici di questo brand.\n\n"
+        "REGOLE ASSOLUTE:\n"
+        "1. TONO: Semplice, discorsivo, rassicurante e chiaro per un operatore di negozio.\n"
+        "2. NIENTE GERGO TECNICO: È VIETATO usare termini come 'regex', 'espressione regolare', 'pattern', "
+        "'gruppo di cattura', 'alphanumeric', 'token', 'match', 'backslash'. Parla solo di 'codice', 'caratteri', "
+        "'parte iniziale/finale', 'trattino', 'linea/modello' e 'colore'.\n"
+        "3. ESEMPI CONCRETI OBBLIGATORI: Devi citare esplicitamente i codici fornitore degli esempi reali forniti "
+        "(es. 'Nel codice ABCDE-123 i primi 5 caratteri indicano la linea (ABCDE) e gli ultimi 3 indicano il colore (123)').\n"
+        "4. Mostra chiaramente perché i codici con radice diversa formano schede distinte e quelli con la stessa radice formano varianti dello stesso modello.\n"
+        "5. Lunghezza: Massimo 3-4 frasi chiare ed esaustive."
+    )
+
+    user_prompt = (
+        f"Brand: {brand_name}\n"
+        f"Esempi reali della scheda che l'utente sta dividendo:\n{examples_ctx}\n\n"
+    )
+    if user_correction:
+        user_prompt += f"L'utente ha precedentemente fornito questo chiarimento/correzione:\n\"{user_correction}\"\n\n"
+    user_prompt += "Genera la spiegazione in italiano spiegando la regola con gli esempi pratici citati."
+
+    try:
+        client = LLMClient()
+        resp = await client.call(
+            model_name="gemini-3.1-flash-lite",
+            system_prompt=system_prompt,
+            prompt=user_prompt,
+            pipeline_stage="Blueprint Revision - Grounded User Explanation",
+            temperature=0.2,
+        )
+        cleaned = resp.strip() if resp else ""
+        if cleaned:
+            return cleaned
+    except Exception as exc:
+        logger.log_execution("blueprint_revision_service", "grounded_explanation_llm_failed", "warn", exc=str(exc))
+
+    return _generate_deterministic_grounded_explanation(brand_name, code_breakdowns)
+
 
 async def deduce_and_preview_rule(
     db: Session,
@@ -377,6 +540,21 @@ async def deduce_and_preview_rule(
     # Double-check contrastive constraints deterministically in service layer
     compiled_new = re.compile(new_regex) if new_regex else None
     norm_by_code = {c: _normalize_vendor_code(c, compiled_new)[0] for c in corpus}
+
+    # Generate user-friendly rule explanation grounded in concrete examples from the selected Blueprint
+    code_breakdowns = _build_grounded_code_breakdowns(
+        compiled_regex=compiled_new,
+        partitions=normalized_partitions_data,
+        bp_articles=bp_articles,
+    )
+    grounded_explanation = await _generate_user_friendly_rule_explanation(
+        brand_name=brand.name,
+        code_breakdowns=code_breakdowns,
+        base_explanation=textual_explanation,
+        user_correction=request.user_correction,
+    )
+    if grounded_explanation:
+        textual_explanation = grounded_explanation
 
     # Build prioritize examples starting with the partitioned codes
     examples_list: List[HeuristicExampleSchema] = []
@@ -1018,6 +1196,207 @@ def update_reconciliation_plan(
     return get_sanitized_revision_job(db, job_id)
 
 
+def _find_card_in_plan(plan: dict, target_id: str) -> Optional[dict]:
+    """Helper to locate a target blueprint card in the 'After' section of a reconciliation plan."""
+    target_split = plan.get("target_split") or {}
+    for bp_card in target_split.get("after", []):
+        if bp_card.get("id") == target_id:
+            return bp_card
+
+    for ws in plan.get("warehouse_splits", []):
+        for bp_card in ws.get("after", []):
+            if bp_card.get("id") == target_id:
+                return bp_card
+
+    for wm in plan.get("warehouse_merges", []):
+        after_c = wm.get("after") or {}
+        if after_c.get("id") == target_id or wm.get("merge_id") == target_id:
+            return after_c
+
+    return None
+
+
+def upload_staged_blueprint_photo(
+    db: Session,
+    job_id: str,
+    target_blueprint_id: str,
+    color: Optional[str],
+    content: bytes,
+    content_type: str = "image/jpeg",
+) -> dict:
+    """
+    Upload an image for a specific Blueprint card and color variant in the revision Before/After staging plan.
+    Saves the data URL in staged_photos_by_color and updates the matching article groups in job data.
+    """
+    job = staging_repo.get_job(db, job_id)
+    if not job or not job.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job non trovato.")
+
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nessun contenuto immagine inviato.")
+
+    b64 = base64.b64encode(content).decode("ascii")
+    data_url = f"data:{content_type};base64,{b64}"
+
+    data = copy.deepcopy(job.data)
+    plan = data.get("reconciliation_plan")
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Piano di riconciliazione non trovato.")
+
+    card = _find_card_in_plan(plan, target_blueprint_id)
+    if not card:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Scheda '{target_blueprint_id}' non trovata nel piano.")
+
+    norm_color = (color or "").strip().lower()
+    if not norm_color:
+        art_groups = card.get("article_groups") or []
+        for g in art_groups:
+            c_list = g.get("colors") or []
+            if c_list:
+                norm_color = str(c_list[0]).strip().lower()
+                break
+
+    if "staged_photos_by_color" not in card or not isinstance(card["staged_photos_by_color"], dict):
+        card["staged_photos_by_color"] = {}
+    card["staged_photos_by_color"][norm_color] = data_url
+
+    art_groups = card.get("article_groups") or []
+    for g in art_groups:
+        c_list = [str(c).strip().lower() for c in (g.get("colors") or [])]
+        if not norm_color or norm_color in c_list or len(art_groups) == 1:
+            g["photo_url"] = data_url
+
+    staging_repo.update_job_data(db, job_id=job_id, data=data)
+
+    return {
+        "status": "success",
+        "target_blueprint_id": target_blueprint_id,
+        "color": norm_color,
+        "photo_url": data_url,
+    }
+
+
+async def retry_or_set_staged_blueprint_photo(
+    db: Session,
+    job_id: str,
+    request: BlueprintRevisionPhotoRetryRequest,
+) -> dict:
+    """
+    Set direct image URL or run Gemini Grounded Photo Search for a target blueprint card in the revision staging plan.
+    """
+    job = staging_repo.get_job(db, job_id)
+    if not job or not job.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job non trovato.")
+
+    data = copy.deepcopy(job.data)
+    plan = data.get("reconciliation_plan")
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Piano di riconciliazione non trovato.")
+
+    target_id = request.target_blueprint_id
+    card = _find_card_in_plan(plan, target_id)
+    if not card:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Scheda '{target_id}' non trovata nel piano.")
+
+    norm_color = (request.color or "").strip().lower()
+    if not norm_color:
+        art_groups = card.get("article_groups") or []
+        for g in art_groups:
+            c_list = g.get("colors") or []
+            if c_list:
+                norm_color = str(c_list[0]).strip().lower()
+                break
+
+    target_photo_url = None
+
+    if request.new_url:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        try:
+            async with httpx.AsyncClient(headers=headers, timeout=6.0, follow_redirects=True) as client:
+                async with client.stream("GET", request.new_url) as res:
+                    if res.status_code >= 400:
+                        raise HTTPException(status_code=422, detail="URL immagine non raggiungibile (status >= 400).")
+                    ct = res.headers.get("content-type", "")
+                    if not ct.startswith("image/"):
+                        raise HTTPException(status_code=422, detail="L'URL fornito non punta a un'immagine valida.")
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=422, detail=f"Impossibile raggiungere l'URL indicato: {exc}")
+
+        target_photo_url = request.new_url
+    else:
+        brand_name = data.get("brand_name", "")
+        article_name = card.get("article_name", "")
+        vendor_code = ""
+        art_groups = card.get("article_groups") or []
+        if art_groups:
+            vendor_code = art_groups[0].get("supplier_code", "")
+
+        bp_info = (
+            f"Brand: {brand_name}\n"
+            f"Article Name: {article_name}\n"
+            f"Vendor Code: {vendor_code}\n"
+            f"Color: {norm_color}\n"
+            f"Description: {card.get('description', '')}"
+        )
+
+        if request.user_feedback:
+            prompt_content = f"L'utente ha fornito questo feedback:\n'{request.user_feedback}'\n\nUsa queste informazioni sull'articolo per generare una query di ricerca:\n{bp_info}"
+        else:
+            prompt_content = f"Genera una query di ricerca Google mirata per trovare l'immagine del prodotto:\n{bp_info}"
+
+        client = LLMClient()
+        generated_query = await client.call(
+            model_name="gemini-3.1-flash-lite",
+            system_prompt=_SYSTEM_PROMPT_QUERY_GEN,
+            prompt=prompt_content,
+            pipeline_stage="Blueprint Revision - Photo Search Query Gen",
+            temperature=0.3,
+        )
+        generated_query = (generated_query or "").strip()
+
+        search_prompt = f"Esegui una ricerca su internet e trova una foto reale del prodotto usando questa query:\n{generated_query}"
+        raw_res, extracted_urls = await client.call_with_grounding(
+            model_name="gemini-3.1-flash-lite",
+            system_prompt=_SYSTEM_PROMPT_SEARCH,
+            prompt=search_prompt,
+            pipeline_stage="Blueprint Revision - Photo Search Grounded",
+            temperature=0.2,
+        )
+
+        raw_res_stripped = (raw_res or "").strip()
+        candidate_url = None if raw_res_stripped.upper() == "NULL" else _extract_best_url(extracted_urls, raw_res_stripped)
+        if candidate_url:
+            is_valid = await _validate_photo_url(candidate_url)
+            if not is_valid:
+                candidate_url = None
+
+        if not candidate_url:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Nessuna foto valida trovata sul web per questo articolo. Prova a inserire un URL o a caricare una foto manualmente."
+            )
+        target_photo_url = candidate_url
+
+    if "staged_photos_by_color" not in card or not isinstance(card["staged_photos_by_color"], dict):
+        card["staged_photos_by_color"] = {}
+    card["staged_photos_by_color"][norm_color] = target_photo_url
+
+    art_groups = card.get("article_groups") or []
+    for g in art_groups:
+        c_list = [str(c).strip().lower() for c in (g.get("colors") or [])]
+        if not norm_color or norm_color in c_list or len(art_groups) == 1:
+            g["photo_url"] = target_photo_url
+
+    staging_repo.update_job_data(db, job_id=job_id, data=data)
+
+    return {
+        "status": "success",
+        "target_blueprint_id": target_id,
+        "color": norm_color,
+        "photo_url": target_photo_url,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Phase 5: 5-Step Ordered Atomic Database Commit
 # ---------------------------------------------------------------------------
@@ -1074,6 +1453,19 @@ def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
 
             # Update surviving blueprint metadata if edited
             _apply_card_metadata_to_blueprint(db, surviving_bp, after_card)
+
+            # Apply any staged photo overrides for surviving blueprint
+            staged_photos = after_card.get("staged_photos_by_color") or {}
+            for c_name, photo_data_or_url in staged_photos.items():
+                if photo_data_or_url:
+                    photo_service.download_and_save_photo(
+                        db,
+                        blueprint_id=str(surviving_bp.id),
+                        color_name=c_name,
+                        photo_url=photo_data_or_url,
+                        commit_changes=False,
+                        force_update=True,
+                    )
 
             # Existing photo colors on surviving blueprint
             surviving_photos = db.query(ArticlePhoto).filter(
@@ -1196,6 +1588,17 @@ def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
             orig_card = next((c for c in sp_op.get("after", []) if not c.get("is_new")), None)
             if orig_card:
                 _apply_card_metadata_to_blueprint(db, source_bp, orig_card)
+                staged_orig_photos = orig_card.get("staged_photos_by_color") or {}
+                for c_name, photo_data_or_url in staged_orig_photos.items():
+                    if photo_data_or_url:
+                        photo_service.download_and_save_photo(
+                            db,
+                            blueprint_id=str(source_bp.id),
+                            color_name=c_name,
+                            photo_url=photo_data_or_url,
+                            commit_changes=False,
+                            force_update=True,
+                        )
 
             orig_art_ids = set(orig_card.get("article_ids", [])) if orig_card else set()
             orig_articles = db.query(Article).filter(Article.id.in_(list(orig_art_ids))).all() if orig_art_ids else []
@@ -1274,6 +1677,19 @@ def commit_reconciliation_plan(db: Session, job_id: str) -> dict:
                             # Only the new blueprint uses this color: move photo directly
                             src_photo.article_blueprint_id = new_bp.id
                             photos_by_color.pop(mc, None)
+
+                # Apply any staged photo overrides for this new split blueprint
+                staged_new_photos = after_c.get("staged_photos_by_color") or {}
+                for c_name, photo_data_or_url in staged_new_photos.items():
+                    if photo_data_or_url:
+                        photo_service.download_and_save_photo(
+                            db,
+                            blueprint_id=str(new_bp.id),
+                            color_name=c_name,
+                            photo_url=photo_data_or_url,
+                            commit_changes=False,
+                            force_update=True,
+                        )
 
                 splits_created += 1
                 db.flush()

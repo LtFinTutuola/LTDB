@@ -9,12 +9,14 @@ Endpoints:
     GET    /api/v1/brands/heuristic/{job_id}              - Poll job status
     POST   /api/v1/brands/heuristic/{job_id}/confirm      - Confirm heuristic
 """
-from fastapi import APIRouter, BackgroundTasks, Depends
+from typing import Optional
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from src.core.database import get_db
 from src.services import heuristic_service, blueprint_revision_service
 from src.schemas.data_ingestion import (
+    BlueprintRevisionPhotoRetryRequest,
     HeuristicDeductionRequest,
     HeuristicJobStatusResponse,
     BlueprintRevisionContextResponse,
@@ -127,4 +129,39 @@ def commit_blueprint_revision_plan(
 ):
     """Atomically execute the 5-step database reconciliation and update brand_heuristics."""
     return blueprint_revision_service.commit_reconciliation_plan(db, job_id)
+
+
+@router.post("/blueprint-revision/{job_id}/photo-upload")
+async def upload_blueprint_revision_photo(
+    job_id: str,
+    request: Request,
+    target_blueprint_id: str = Query(..., description="Target blueprint ID in the After column"),
+    color: Optional[str] = Query(None, description="Target color variant for the photo"),
+    db: Session = Depends(get_db),
+):
+    """Upload an image for a specific Blueprint card and color variant in the revision staging plan."""
+    content = await request.body()
+    content_type = request.headers.get("content-type") or "image/jpeg"
+    return blueprint_revision_service.upload_staged_blueprint_photo(
+        db=db,
+        job_id=job_id,
+        target_blueprint_id=target_blueprint_id,
+        color=color,
+        content=content,
+        content_type=content_type,
+    )
+
+
+@router.post("/blueprint-revision/{job_id}/photo-retry")
+async def retry_blueprint_revision_photo(
+    job_id: str,
+    request: BlueprintRevisionPhotoRetryRequest,
+    db: Session = Depends(get_db),
+):
+    """Set external image URL or run Gemini Grounded Photo Search for a target blueprint card in the revision staging plan."""
+    return await blueprint_revision_service.retry_or_set_staged_blueprint_photo(
+        db=db,
+        job_id=job_id,
+        request=request,
+    )
 
