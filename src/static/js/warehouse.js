@@ -5,7 +5,9 @@ import {
     openBlueprintRevision,
     refreshWarehouseAnomaliesBadge,
     openWarehouseAnomaliesModal,
-} from './blueprint_revision.js?v=20261026_4';
+    getWarehouseAnomaliesCount,
+    ANOMALY_BLOCKED_MESSAGE,
+} from './blueprint_revision.js?v=20261026_6';
 
 let _controlsBound = false;
 let _editingItem = null;
@@ -256,7 +258,19 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
         // Split/Revise Blueprint button click (Desktop only)
         const splitBtn = tr.querySelector('.btn-split-blueprint');
         if (splitBtn) {
+            if (getWarehouseAnomaliesCount() > 0) {
+                splitBtn.classList.add('disabled');
+                splitBtn.setAttribute('aria-disabled', 'true');
+                splitBtn.setAttribute('data-blocked-by-anomalies', 'true');
+                splitBtn.setAttribute('data-blocked-msg', ANOMALY_BLOCKED_MESSAGE);
+                splitBtn.setAttribute('title', ANOMALY_BLOCKED_MESSAGE);
+            }
             splitBtn.addEventListener('click', (e) => {
+                if (splitBtn.classList.contains('disabled') || splitBtn.getAttribute('aria-disabled') === 'true') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
                 e.stopPropagation();
                 openBlueprintRevision(item.blueprint_id, _refreshWarehouseView);
             });

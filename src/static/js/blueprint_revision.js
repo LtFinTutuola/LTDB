@@ -27,6 +27,7 @@ let _onCompleteCallback = null;
 let _activeAfterPhotoIndices = {};
 let _skipRuleDeduction = false;
 let _relatedBlueprintIds = [];
+let _categoryHierarchy = null;
 
 function _openImageModal(url) {
     if (!url) return;
@@ -55,6 +56,150 @@ function _groupKey(g) {
     return g.group_key || `${g.supplier_code}__${(g.colors || []).join('|')}__${g.ean || ''}`;
 }
 
+let _cachedWarehouseAnomaliesCount = 0;
+let _tooltipEl = null;
+
+export const ANOMALY_BLOCKED_MESSAGE = "Non puoi procedere finché non completi la revisione manuale delle anomalie a magazzino.";
+
+export function getWarehouseAnomaliesCount() {
+    return _cachedWarehouseAnomaliesCount;
+}
+
+/**
+ * Updates the UI lock state when warehouse anomalies are present:
+ * - Disables "Importa Articolo" and "Importa DDT" tabs.
+ * - Disables row-level revision buttons (.btn-split-blueprint) in the warehouse table.
+ * - Restores them when anomalies count is 0.
+ */
+export function updateWarehouseAnomaliesLock(count) {
+    _cachedWarehouseAnomaliesCount = Number(count) || 0;
+    const hasAnomalies = _cachedWarehouseAnomaliesCount > 0;
+
+    // 1. Update tabs: Importa Articolo & Importa DDT
+    const tabsToBlock = [
+        document.querySelector('#magazzino-tabs .tab[data-tab="import-article"]'),
+        document.querySelector('#magazzino-tabs .tab[data-tab="import-ddt"]'),
+    ];
+
+    tabsToBlock.forEach(tab => {
+        if (!tab) return;
+        if (hasAnomalies) {
+            tab.classList.add('disabled');
+            tab.setAttribute('aria-disabled', 'true');
+            tab.setAttribute('data-blocked-by-anomalies', 'true');
+            tab.setAttribute('data-blocked-msg', ANOMALY_BLOCKED_MESSAGE);
+            tab.setAttribute('title', ANOMALY_BLOCKED_MESSAGE);
+        } else {
+            tab.classList.remove('disabled');
+            tab.removeAttribute('aria-disabled');
+            tab.removeAttribute('data-blocked-by-anomalies');
+            tab.removeAttribute('data-blocked-msg');
+            const defaultTitle = tab.getAttribute('data-tab') === 'import-article' ? 'Importa Articolo' : 'Importa DDT';
+            tab.setAttribute('title', defaultTitle);
+        }
+    });
+
+    // If currently on a blocked tab and anomalies exist, switch back to catalog
+    if (hasAnomalies) {
+        const activeTab = document.querySelector('#magazzino-tabs .tab.active');
+        if (activeTab && (activeTab.getAttribute('data-tab') === 'import-article' || activeTab.getAttribute('data-tab') === 'import-ddt')) {
+            const catalogTab = document.querySelector('#magazzino-tabs .tab[data-tab="catalog"]');
+            if (catalogTab) catalogTab.click();
+        }
+    }
+
+    // 2. Update split buttons on warehouse rows
+    const splitBtns = document.querySelectorAll('.btn-split-blueprint');
+    splitBtns.forEach(btn => {
+        if (hasAnomalies) {
+            btn.classList.add('disabled');
+            btn.setAttribute('aria-disabled', 'true');
+            btn.setAttribute('data-blocked-by-anomalies', 'true');
+            btn.setAttribute('data-blocked-msg', ANOMALY_BLOCKED_MESSAGE);
+            btn.setAttribute('title', ANOMALY_BLOCKED_MESSAGE);
+        } else {
+            btn.classList.remove('disabled');
+            btn.removeAttribute('aria-disabled');
+            btn.removeAttribute('data-blocked-by-anomalies');
+            btn.removeAttribute('data-blocked-msg');
+            btn.setAttribute('title', 'Separa Articoli / Correggi Regola Blueprint');
+        }
+    });
+
+    if (!hasAnomalies && _tooltipEl) {
+        _tooltipEl.style.display = 'none';
+    }
+}
+
+function _getAnomalyTooltip() {
+    if (!_tooltipEl) {
+        _tooltipEl = document.createElement('div');
+        _tooltipEl.className = 'anomaly-blocked-tooltip';
+        _tooltipEl.id = 'anomaly-blocked-tooltip';
+        document.body.appendChild(_tooltipEl);
+    }
+    return _tooltipEl;
+}
+
+function _positionTooltip(e, tooltip) {
+    const offset = 14;
+    let left = e.clientX + offset;
+    let top = e.clientY + offset;
+    const tooltipWidth = tooltip.offsetWidth || 260;
+    const tooltipHeight = tooltip.offsetHeight || 40;
+
+    if (left + tooltipWidth > window.innerWidth - 12) {
+        left = e.clientX - tooltipWidth - offset;
+    }
+    if (top + tooltipHeight > window.innerHeight - 12) {
+        top = e.clientY - tooltipHeight - offset;
+    }
+    tooltip.style.left = `${Math.max(10, left)}px`;
+    tooltip.style.top = `${Math.max(10, top)}px`;
+}
+
+/**
+ * Initializes global mouseover/mousemove/mouseout listeners for elements blocked by warehouse anomalies.
+ */
+export function initAnomalyBlockedTooltip() {
+    const tooltip = _getAnomalyTooltip();
+
+    document.addEventListener('mouseover', (e) => {
+        const target = e.target.closest('[data-blocked-by-anomalies="true"], .tab.disabled, .btn-split-blueprint.disabled');
+        if (target && target.matches('[data-blocked-by-anomalies="true"], .tab.disabled, .btn-split-blueprint.disabled')) {
+            const msg = target.getAttribute('data-blocked-msg') || ANOMALY_BLOCKED_MESSAGE;
+            tooltip.textContent = msg;
+            tooltip.style.display = 'block';
+            _positionTooltip(e, tooltip);
+        }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (tooltip.style.display === 'block') {
+            _positionTooltip(e, tooltip);
+        }
+    });
+
+    document.addEventListener('mouseout', (e) => {
+        const target = e.target.closest('[data-blocked-by-anomalies="true"], .tab.disabled, .btn-split-blueprint.disabled');
+        if (target) {
+            if (e.relatedTarget && target.contains(e.relatedTarget)) {
+                return;
+            }
+            tooltip.style.display = 'none';
+        }
+    });
+
+    // Capturing phase listener to prevent clicks on blocked tabs or buttons
+    document.addEventListener('click', (e) => {
+        const blocked = e.target.closest('[data-blocked-by-anomalies="true"], .tab.disabled, .btn-split-blueprint.disabled');
+        if (blocked) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    }, true);
+}
+
 /**
  * Refresh the "Anomalie Magazzino" header button badge count.
  */
@@ -72,6 +217,7 @@ export async function refreshWarehouseAnomaliesBadge() {
         } else {
             btn.style.display = 'none';
         }
+        updateWarehouseAnomaliesLock(count);
         return res;
     } catch (err) {
         console.warn('Impossibile aggiornare il contatore anomalie magazzino:', err);
@@ -290,6 +436,7 @@ export async function openBlueprintRevision(blueprintId, onComplete = null, opti
     _currentJobId = null;
     _currentRuleResponse = null;
     _currentStagingJob = null;
+    _categoryHierarchy = null;
     _relatedBlueprintIds = Array.isArray(options.relatedBlueprintIds) ? options.relatedBlueprintIds : [];
 
 
@@ -745,7 +892,7 @@ async function _handlePrepareManualSplit() {
         _currentJobId = res.job_id;
         _currentStagingJob = res.data;
         document.getElementById('modal-blueprint-revision')?.classList.remove('active', 'open');
-        _renderStep3BeforeAfterStaging();
+        await _renderStep3BeforeAfterStaging();
     } catch (err) {
         addMessage(`Errore nella preparazione della Staging Area: ${err.message}`, 'error');
         _renderStep1BucketSelector();
@@ -965,7 +1112,7 @@ async function _handlePrepareStagingPlan() {
         _currentStagingJob = jobRes.data;
         // Close the modal and open the Split-Screen Staging Area Before/After view
         document.getElementById('modal-blueprint-revision')?.classList.remove('active', 'open');
-        _renderStep3BeforeAfterStaging();
+        await _renderStep3BeforeAfterStaging();
     } catch (err) {
         addMessage(`Errore nella preparazione della Staging Area: ${err.message}`, 'error');
         _renderStep2RuleReview();
@@ -976,10 +1123,23 @@ async function _handlePrepareStagingPlan() {
 // STEP 3: Split-Screen Staging Area "Prima e Dopo" (Single Blueprint Scope)
 // ===========================================================================
 
-function _renderStep3BeforeAfterStaging() {
+async function _renderStep3BeforeAfterStaging() {
     enterSplitScreen();
     const panel = getDetailPanel();
     if (!panel || !_currentStagingJob) return;
+
+    const brandId = _currentStagingJob.brand_id || _currentContext?.brand_id;
+    if (brandId && !_categoryHierarchy) {
+        try {
+            const res = await api.getBrandCategories(brandId);
+            _categoryHierarchy = res.data || res || {};
+        } catch (e) {
+            console.error("Impossibile caricare le categorie del brand per la staging area:", e);
+            _categoryHierarchy = {};
+        }
+    } else if (!_categoryHierarchy) {
+        _categoryHierarchy = {};
+    }
 
     const plan = _currentStagingJob.reconciliation_plan || {};
     const targetSplit = plan.target_split;
@@ -1069,6 +1229,35 @@ function _renderStep3BeforeAfterStaging() {
         });
     });
 
+    // Bind Category change to dynamically update Subcategory options
+    panel.querySelectorAll('.bp-select-category').forEach((catSelect) => {
+        catSelect.addEventListener('change', (e) => {
+            const cardEl = e.currentTarget.closest('.bp-after-editable-card');
+            if (!cardEl) return;
+            const subSelect = cardEl.querySelector('.bp-select-subcategory');
+            if (!subSelect) return;
+
+            const selCat = e.currentTarget.value.trim();
+            let subOpts = '<option value="">-- Nessuna Sotto Categoria --</option>';
+            if (_categoryHierarchy && selCat) {
+                const matchedKey = Object.keys(_categoryHierarchy).find(
+                    (k) => k.toLowerCase() === selCat.toLowerCase()
+                );
+                const subCats = (matchedKey && _categoryHierarchy[matchedKey])
+                    ? (_categoryHierarchy[matchedKey].sub_categories || {})
+                    : {};
+                const subKeys = Object.keys(subCats).sort((a, b) =>
+                    a.localeCompare(b, 'it', { sensitivity: 'base' })
+                );
+                subOpts += subKeys
+                    .map((sc) => `<option value="${_esc(sc)}">${_esc(sc)}</option>`)
+                    .join('');
+            }
+            subSelect.innerHTML = subOpts;
+            subSelect.value = '';
+        });
+    });
+
     // Bind Photo Controls & Carousel
     _bindPhotoColEvents(panel);
 
@@ -1153,6 +1342,56 @@ function _renderPhotoColHtml(targetId, articleGroups = [], articleName = '') {
     `;
 }
 
+function _renderCategoryDropdownsHtml(targetId, currentCat, currentSubCat) {
+    const hasHierarchy = _categoryHierarchy && Object.keys(_categoryHierarchy).length > 0;
+    const catName = typeof currentCat === 'object' ? (currentCat?.description || currentCat?.name || '') : (currentCat || '');
+    const subCatName = typeof currentSubCat === 'object' ? (currentSubCat?.description || currentSubCat?.name || '') : (currentSubCat || '');
+
+    let catOpts = '<option value="">-- Seleziona Categoria --</option>';
+    let subCatOpts = '<option value="">-- Nessuna Sotto Categoria --</option>';
+
+    if (hasHierarchy) {
+        catOpts += Object.keys(_categoryHierarchy)
+            .sort((a, b) => a.localeCompare(b, 'it', { sensitivity: 'base' }))
+            .map((c) => `<option value="${_esc(c)}" ${c.toLowerCase() === catName.toLowerCase() ? 'selected' : ''}>${_esc(c)}</option>`)
+            .join('');
+
+        const matchedKey = Object.keys(_categoryHierarchy).find((k) => k.toLowerCase() === catName.toLowerCase());
+        const subCats = (matchedKey && _categoryHierarchy[matchedKey])
+            ? (_categoryHierarchy[matchedKey].sub_categories || {})
+            : {};
+        const subKeys = Object.keys(subCats).sort((a, b) => a.localeCompare(b, 'it', { sensitivity: 'base' }));
+
+        subCatOpts += subKeys
+            .map((sc) => `<option value="${_esc(sc)}" ${sc.toLowerCase() === subCatName.toLowerCase() ? 'selected' : ''}>${_esc(sc)}</option>`)
+            .join('');
+    } else {
+        if (catName) {
+            catOpts += `<option value="${_esc(catName)}" selected>${_esc(catName)}</option>`;
+        }
+        if (subCatName) {
+            subCatOpts += `<option value="${_esc(subCatName)}" selected>${_esc(subCatName)}</option>`;
+        }
+    }
+
+    return `
+        <div class="bp-inline-form-grid" style="margin-bottom:8px;">
+            <div>
+                <label>Categoria</label>
+                <select class="form-control bp-inline-select bp-select-category" data-target-id="${_esc(targetId)}" data-field="category">
+                    ${catOpts}
+                </select>
+            </div>
+            <div>
+                <label>Sotto Categoria</label>
+                <select class="form-control bp-inline-select bp-select-subcategory" data-target-id="${_esc(targetId)}" data-field="sub_category">
+                    ${subCatOpts}
+                </select>
+            </div>
+        </div>
+    `;
+}
+
 function _renderSplitBeforeAfterCardHtml(splitOp, badgeTitle, isPrimary) {
     const before = splitOp.before || {};
     const afterList = splitOp.after || [];
@@ -1189,9 +1428,6 @@ function _renderSplitBeforeAfterCardHtml(splitOp, badgeTitle, isPrimary) {
 
     const afterCardsHtml = afterList
         .map((abp, idx) => {
-            const catText = abp.category?.description || '';
-            const subCatText = abp.sub_category?.description || '';
-            const fullCatDisplay = subCatText ? `${catText} ↳ ${subCatText}` : catText;
             return `
             <div class="bp-after-editable-card" data-target-id="${_esc(abp.id)}" style="background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-card);padding:14px;box-shadow:var(--shadow-sm);">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
@@ -1207,16 +1443,12 @@ function _renderSplitBeforeAfterCardHtml(splitOp, badgeTitle, isPrimary) {
                     ${_renderPhotoColHtml(abp.id, abp.article_groups, abp.article_name)}
 
                     <div style="flex:1;min-width:0;">
-                        <div class="bp-inline-form-grid">
-                            <div>
-                                <label>Nome Articolo</label>
-                                <input type="text" class="form-control bp-inline-input" data-field="article_name" value="${_esc(abp.article_name || '')}">
-                            </div>
-                            <div>
-                                <label>Categoria / Sotto-categoria</label>
-                                <input type="text" class="form-control" value="${_esc(fullCatDisplay)}" disabled>
-                            </div>
+                        <div style="margin-bottom:8px;">
+                            <label style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:3px;">Nome Articolo</label>
+                            <input type="text" class="form-control bp-inline-input" data-field="article_name" value="${_esc(abp.article_name || '')}" style="width:100%;">
                         </div>
+
+                        ${_renderCategoryDropdownsHtml(abp.id, abp.category, abp.sub_category)}
 
                         <div style="margin-top:8px;">
                             <label style="font-size:11px;color:var(--text-muted);">Descrizione Breve</label>
@@ -1496,13 +1728,25 @@ function _collectCardUpdates(cardEl) {
                   .filter(Boolean)
             : undefined;
 
-    return {
+    const catSelect = cardEl.querySelector('.bp-select-category');
+    const subCatSelect = cardEl.querySelector('.bp-select-subcategory');
+    const catVal = catSelect ? catSelect.value.trim() : '';
+    const subCatVal = subCatSelect ? subCatSelect.value.trim() : '';
+
+    const payload = {
         target_blueprint_id: targetId,
         article_name: getVal('article_name'),
         description: getVal('description'),
         tags: splitCsv(getVal('tags')),
         materials: splitCsv(getVal('materials')),
     };
+
+    if (catSelect) {
+        payload.category = catVal ? { description: catVal } : null;
+        payload.sub_category = subCatVal ? { description: subCatVal } : null;
+    }
+
+    return payload;
 }
 
 async function _handleSaveInlineCardEdit(cardEl) {

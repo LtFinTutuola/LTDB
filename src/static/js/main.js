@@ -1,6 +1,7 @@
-import { initWarehouse } from './warehouse.js?v=20261026_4';
+import { initWarehouse } from './warehouse.js?v=20261026_6';
 import { renderForms } from './imports.js?v=20261026_2';
 import * as staging from './staging.js?v=20261026_2';
+import { initAnomalyBlockedTooltip } from './blueprint_revision.js?v=20261026_6';
 
 export function _esc(str) {
     if (typeof str !== 'string') return '';
@@ -155,7 +156,12 @@ export const appState = {
 function initTabs() {
     const tabs = document.querySelectorAll('#magazzino-tabs .tab');
     tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
+        tab.addEventListener('click', (e) => {
+            if (tab.classList.contains('disabled') || tab.getAttribute('aria-disabled') === 'true' || tab.dataset.blockedByAnomalies === 'true') {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
             tabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
             
@@ -182,6 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initWarehouse();
     renderForms();
     initDetailPanelResizer();
+    initAnomalyBlockedTooltip();
     
     // Check if there is an action button for staging that requires main.js hook
     document.addEventListener('click', async (e) => {

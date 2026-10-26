@@ -1279,5 +1279,139 @@ class TestAnomaliesGuardsAndManualClosure:
         assert res_after.status_code == 200
         assert res_after.json()["total_count"] == 0
 
+    def test_warehouse_anomalies_lock_frontend_assets(self, db_session):
+        """
+        Verify that /magazzino and the associated static modules include the
+        anomaly lock styles, blocked tabs/buttons handling, and floating mouseover tooltip.
+        """
+        client = TestClient(app)
+
+        # 1. /magazzino template contains CSS rules for blocked state & tooltip
+        res_page = client.get("/magazzino")
+        assert res_page.status_code == 200
+        html = res_page.text
+        assert ".tab.disabled" in html
+        assert ".tab[aria-disabled=\"true\"]" in html
+        assert ".action-btn.btn-split-blueprint.disabled" in html
+        assert ".anomaly-blocked-tooltip" in html
+        assert 'data-tab="import-article"' in html
+        assert 'data-tab="import-ddt"' in html
+
+        # 2. blueprint_revision.js exports locking & tooltip functions
+        res_bp_js = client.get("/static/js/blueprint_revision.js")
+        assert res_bp_js.status_code == 200
+        bp_js = res_bp_js.text
+        assert "updateWarehouseAnomaliesLock" in bp_js
+        assert "initAnomalyBlockedTooltip" in bp_js
+        assert "ANOMALY_BLOCKED_MESSAGE" in bp_js
+        assert "data-blocked-by-anomalies" in bp_js
+
+        # 3. warehouse.js checks anomalies count for row buttons
+        res_wh_js = client.get("/static/js/warehouse.js")
+        assert res_wh_js.status_code == 200
+        wh_js = res_wh_js.text
+        assert "getWarehouseAnomaliesCount" in wh_js
+        assert "btn-split-blueprint" in wh_js
+        assert "data-blocked-by-anomalies" in wh_js
+
+        # 4. main.js initializes the tooltip and guards tab clicks
+        res_main_js = client.get("/static/js/main.js")
+        assert res_main_js.status_code == 200
+        main_js = res_main_js.text
+        assert "initAnomalyBlockedTooltip" in main_js
+        assert "tab.classList.contains('disabled')" in main_js
+
+    def test_staging_new_blueprints_category_dropdowns(self, db_session):
+        """
+        Verify that in the staging area for newly created blueprints:
+        1. Frontend assets include the full-width article_name and side-by-side category/subcategory dropdowns.
+        2. Backend PUT /blueprint-revision/{job_id}/plan correctly updates category and sub_category (including leaving sub_category as None).
+        """
+        from datetime import date
+        from src.models.staging import StagingArea, JobStatus, JobType
+        from src.models.pim import Category
+
+        client = TestClient(app)
+
+        # 1. Frontend template & JS checks
+        res_page = client.get("/magazzino")
+        assert res_page.status_code == 200
+        assert ".bp-inline-select" in res_page.text
+
+        res_bp_js = client.get("/static/js/blueprint_revision.js")
+        assert res_bp_js.status_code == 200
+        bp_js = res_bp_js.text
+        assert "_renderCategoryDropdownsHtml" in bp_js
+        assert "bp-select-category" in bp_js
+        assert "bp-select-subcategory" in bp_js
+        assert 'data-field="article_name"' in bp_js
+        assert 'style="width:100%;"' in bp_js
+
+        # 2. Backend plan update with category & sub_category
+        cat_borse = Category(id="cat-borse-test", name="Borse", description="Borse e Zaini")
+        sub_zaino = Category(id="sub-zaino-test", parent_id=cat_borse.id, name="Zaino", description="Zaini")
+        db_session.add_all([cat_borse, sub_zaino])
+        db_session.flush()
+
+        job_id = "job-test-cat-dropdowns"
+        target_bp_id = "new_bp_split_001"
+        job = StagingArea(
+            id=job_id,
+            status=JobStatus.COMPLETED.value,
+            job_type=JobType.HEURISTIC_REVISION.value,
+            data={
+                "brand_id": "b-test-cat",
+                "brand_name": "TestBrand",
+                "reconciliation_plan": {
+                    "target_split": {
+                        "before": {"id": "orig_bp", "article_name": "Orig"},
+                        "after": [
+                            {
+                                "id": target_bp_id,
+                                "article_name": "New Backpack",
+                                "description": "Original description",
+                                "category": {"id": str(cat_borse.id), "description": "Borse"},
+                                "sub_category": None,
+                                "tags": ["tag1"],
+                                "materials": ["nylon"],
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+        db_session.add(job)
+        db_session.commit()
+
+        # Update with category + subcategory
+        res_update = client.put(
+            f"/api/v1/brands/blueprint-revision/{job_id}/plan",
+            json={
+                "target_blueprint_id": target_bp_id,
+                "article_name": "New Backpack Full Width",
+                "category": {"description": "Borse"},
+                "sub_category": {"description": "Zaino"},
+            },
+        )
+        assert res_update.status_code == 200
+        card_after = res_update.json()["data"]["reconciliation_plan"]["target_split"]["after"][0]
+        assert card_after["article_name"] == "New Backpack Full Width"
+        assert card_after["category"]["description"] == "Borse"
+        assert card_after["sub_category"]["description"] == "Zaino"
+
+        # Update leaving sub_category as None (unselected)
+        res_update_nosub = client.put(
+            f"/api/v1/brands/blueprint-revision/{job_id}/plan",
+            json={
+                "target_blueprint_id": target_bp_id,
+                "sub_category": None,
+            },
+        )
+        assert res_update_nosub.status_code == 200
+        card_after_nosub = res_update_nosub.json()["data"]["reconciliation_plan"]["target_split"]["after"][0]
+        assert card_after_nosub["category"]["description"] == "Borse"
+        assert card_after_nosub["sub_category"] is None
+
+
 
 

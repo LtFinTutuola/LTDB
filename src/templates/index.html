@@ -1440,6 +1440,15 @@
     color: var(--text-muted);
     margin-bottom: 3px;
   }
+  .bp-inline-select {
+    width: 100%;
+    font-size: 12.5px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+  }
   .bp-mini-art-chip {
     display: inline-block;
     font-size: 11px;
@@ -1529,6 +1538,49 @@
   }
   .warehouse-anomaly-card:hover {
     border-color: rgba(246, 173, 85, 0.5);
+  }
+
+  /* Disabled state when warehouse anomalies are active */
+  .tab.disabled,
+  .tab[aria-disabled="true"] {
+    opacity: 0.45 !important;
+    cursor: not-allowed !important;
+  }
+  .tab.disabled:hover,
+  .tab[aria-disabled="true"]:hover {
+    color: var(--text-secondary) !important;
+    background: transparent !important;
+  }
+
+  .action-btn.btn-split-blueprint.disabled,
+  .action-btn.btn-split-blueprint[aria-disabled="true"] {
+    opacity: 0.35 !important;
+    cursor: not-allowed !important;
+  }
+  .action-btn.btn-split-blueprint.disabled:hover,
+  .action-btn.btn-split-blueprint[aria-disabled="true"]:hover {
+    background: transparent !important;
+    color: var(--text-secondary) !important;
+  }
+
+  /* Floating mouseover tooltip for blocked operations */
+  .anomaly-blocked-tooltip {
+    position: fixed;
+    z-index: 100000;
+    pointer-events: none;
+    background: rgba(18, 19, 22, 0.96);
+    color: var(--text-primary, #ffffff);
+    border: 1px solid rgba(246, 173, 85, 0.6);
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+    white-space: normal;
+    max-width: 320px;
+    line-height: 1.4;
+    display: none;
+    transition: opacity 0.1s ease;
   }
 </style>
 {% endblock %}
@@ -1888,6 +1940,6 @@
 <script>
     window.__LTDB_BRANDS__ = {{ brands_json | safe }};
 </script>
-<script type="module" src="/static/js/main.js?v=20261026_4"></script>
+<script type="module" src="/static/js/main.js?v=20261026_6"></script>
 {% endblock %}
 

@@ -1540,8 +1540,10 @@ def update_reconciliation_plan(
         cat_id = request.category.get("id")
         cat_obj = db.query(Category).filter(Category.id == cat_id).first() if cat_id else None
         if not cat_obj and request.category.get("description"):
+            cat_desc = request.category["description"].strip().lower()
             cat_obj = db.query(Category).filter(
-                func.lower(Category.name) == request.category["description"].strip().lower()
+                (func.lower(Category.name) == cat_desc)
+                | (func.lower(Category.description) == cat_desc)
             ).first()
         if not cat_obj:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Categoria non trovata nel database.")
@@ -1554,8 +1556,10 @@ def update_reconciliation_plan(
             sub_id = request.sub_category.get("id")
             sub_obj = db.query(Category).filter(Category.id == sub_id).first() if sub_id else None
             if not sub_obj and request.sub_category.get("description"):
+                sub_desc = request.sub_category["description"].strip().lower()
                 sub_obj = db.query(Category).filter(
-                    func.lower(Category.name) == request.sub_category["description"].strip().lower()
+                    (func.lower(Category.name) == sub_desc)
+                    | (func.lower(Category.description) == sub_desc)
                 ).first()
             if not sub_obj:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Sottocategoria non trovata.")
