@@ -1305,3 +1305,216 @@
         justify-content: center;
     }
 }
+
+/* ============================================================
+   HITL RECONCILIATION COMPARISON BOX (Yellow Border & 2 Columns)
+   ============================================================ */
+
+.hitl-reconciliations-container {
+    margin: var(--space-md) var(--space-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.hitl-reconciliation-box {
+    border: 2px solid var(--warning, #d97706);
+    border-radius: var(--radius-lg, 12px);
+    background: rgba(245, 158, 11, 0.05);
+    padding: var(--space-lg);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.hitl-box-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    margin-bottom: var(--space-xs);
+}
+
+.hitl-box-header__icon {
+    color: var(--warning, #d97706);
+    font-size: 22px;
+}
+
+.hitl-box-header__title {
+    margin: 0;
+    font-size: var(--font-size-base, 15px);
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.hitl-box-subheader {
+    margin: 0 0 var(--space-md) 0;
+    font-size: var(--font-size-sm, 13px);
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.hitl-columns-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-md);
+    margin-bottom: var(--space-md);
+}
+
+.hitl-card {
+    background: var(--bg-surface, #fff);
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: var(--radius-md, 8px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.hitl-card-header {
+    padding: var(--space-sm) var(--space-md) var(--space-xs);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.hitl-card-badge {
+    align-self: flex-start;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(59, 130, 246, 0.1);
+    color: var(--accent, #3b82f6);
+}
+
+.hitl-card-badge--incoming {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--warning, #d97706);
+}
+
+.hitl-card-title {
+    font-size: var(--font-size-sm, 14px);
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+
+.hitl-card-subheader {
+    padding: 0 var(--space-md) var(--space-xs);
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    gap: 6px;
+}
+
+.hitl-card-label {
+    font-weight: 500;
+}
+
+.hitl-card-code {
+    font-family: var(--font-mono, monospace);
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.hitl-card-body {
+    flex: 1;
+    min-height: 160px;
+    max-height: 220px;
+    background: var(--bg-app, #f9fafb);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-sm);
+    overflow: hidden;
+}
+
+.hitl-card-img {
+    max-height: 100%;
+    max-width: 100%;
+    object-fit: contain;
+    border-radius: var(--radius-xs, 4px);
+    cursor: zoom-in;
+    transition: transform var(--transition-fast, 0.15s ease);
+}
+
+.hitl-card-img:hover {
+    transform: scale(1.02);
+}
+
+.hitl-photo-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: var(--text-muted);
+}
+
+.hitl-photo-placeholder__icon {
+    font-size: 32px;
+    opacity: 0.6;
+}
+
+.hitl-photo-placeholder__text {
+    font-size: 12px;
+}
+
+.hitl-box-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-md);
+    padding-top: var(--space-xs);
+    border-top: 1px dashed rgba(245, 158, 11, 0.3);
+}
+
+.btn-hitl-reject {
+    padding: 9px 18px;
+    border-radius: var(--radius-pill, 20px);
+    border: 1px solid var(--danger, #dc2626);
+    background: transparent;
+    color: var(--danger, #dc2626);
+    font-size: var(--font-size-sm, 13px);
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast, 0.15s ease);
+}
+
+.btn-hitl-reject:hover {
+    background: rgba(220, 38, 38, 0.08);
+}
+
+.btn-hitl-confirm {
+    padding: 9px 18px;
+    border-radius: var(--radius-pill, 20px);
+    border: none;
+    background: var(--success, #16a34a);
+    color: #fff;
+    font-size: var(--font-size-sm, 13px);
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    transition: all var(--transition-fast, 0.15s ease);
+}
+
+.btn-hitl-confirm:hover {
+    background: #15803d;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+@media (max-width: 640px) {
+    .hitl-columns-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .hitl-box-footer {
+        flex-direction: column-reverse;
+        gap: var(--space-sm);
+    }
+
+    .btn-hitl-reject,
+    .btn-hitl-confirm {
+        width: 100%;
+        text-align: center;
+    }
+}

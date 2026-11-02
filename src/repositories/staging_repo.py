@@ -35,8 +35,12 @@ def update_job(db: Session, job_id: str, status: int, data: dict) -> Optional[St
     if db_obj:
         db_obj.status = status
         db_obj.data = data
-        db.commit()
-        db.refresh(db_obj)
+        try:
+            db.commit()
+            db.refresh(db_obj)
+        except Exception:
+            db.rollback()
+            raise
     return db_obj
 
 
@@ -54,8 +58,12 @@ def update_job_data(db: Session, job_id: str, data: dict) -> Optional[StagingAre
         # unchanged and skips the UPDATE even after commit().
         flag_modified(db_obj, "data")
         db_obj.revision_count = (db_obj.revision_count or 0) + 1
-        db.commit()
-        db.refresh(db_obj)
+        try:
+            db.commit()
+            db.refresh(db_obj)
+        except Exception:
+            db.rollback()
+            raise
     return db_obj
 
 

@@ -5,3 +5,46 @@ db_similarity_threshold: 0.92
 hallucination_recognition_threshold: 0.92
 candidate_tolerance: 0.04
 codes_deduction_agent_model: gemini-3.1-flash-lite
+
+oracle_equivalence:
+  model_name: "gemini-3.1-flash-lite"
+  temperature: 0.0
+  max_concurrency: 5
+  base_score: 50
+  high_threshold: 75
+  low_threshold: 35
+  negative_constraint_threshold: 20
+  dimensions:
+    TYPOLOGY:
+      MATCH: 15
+      UNKNOWN: 0
+      CONFLICT: -45
+    LINE:
+      MATCH: 20
+      UNKNOWN: 0
+      CONFLICT: -40
+    SIZE:
+      MATCH: 10
+      UNKNOWN: 0
+      CONFLICT: -50
+    MATERIAL:
+      MATCH: 3
+      UNKNOWN: 0
+      CONFLICT: -30
+    CONSTRUCTION:
+      MATCH: 10
+      UNKNOWN: 0
+      CONFLICT: -35
+  code_weights:
+    IDENTICAL: 6
+    VERY_HIGH: 6
+    HIGH: 4
+    NEUTRAL: 0
+    CONFLICT: -10
+  morphology:
+    max_variable_residue_very_high: 4
+    max_variable_residue_high: 6
+    min_prefix_ratio_high: 0.60
+    min_prefix_ratio_very_high: 0.72
+    min_prefix_len: 4
+

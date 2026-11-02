@@ -110,7 +110,7 @@ def _resolve_items_with_photos(db: Session, brand_id: str, extracted_items: list
 
         # --- Fast-Path L0: exact supplier_code match ---
         existing_article = None
-        if raw_code and active_mode != HeuristicMode.UNRELIABLE_SKU:
+        if raw_code:
             existing_article = wms_repo.get_article_by_supplier_code_and_brand(db, brand_id, raw_code)
             if existing_article:
                 known_colors = {str(c).strip().lower() for c in (existing_article.colors or []) if c}
@@ -201,14 +201,21 @@ def _enrich_reconciliations_with_photos(db: Session, reconciliations: list[dict]
         return []
     from src.repositories.photo_repo import photo_repo
     for rec in reconciliations:
-        for bp in rec.get("matched_db_blueprints") or []:
+        bps_to_check = list(rec.get("matched_db_blueprints") or []) + list(rec.get("affected_db_blueprints") or [])
+        for bp in bps_to_check:
             bp_id = bp.get("id")
+            if bp_id:
+                photos = photo_repo.get_all_photos_by_blueprint(db, str(bp_id))
+                if photos:
+                    bp["photo_url"] = f"/api/v1/ingestion/photos/{photos[0].id}"
             for v in bp.get("variants") or []:
                 cols = v.get("colors") or []
                 if bp_id and cols:
                     ph = photo_repo.get_photo_by_blueprint_and_color(db, str(bp_id), str(cols[0]))
                     if ph:
                         v["photo_url"] = f"/api/v1/ingestion/photos/{ph.id}"
+                        if not bp.get("photo_url"):
+                            bp["photo_url"] = v["photo_url"]
     return reconciliations
 
 
@@ -359,6 +366,18 @@ async def _stage_extracted_items(
             })
     all_photo_proposals = photo_proposals_db + agent_photo_proposals
 
+    # Enrich incoming items in heuristic reconciliations with photo proposals
+    photo_prop_map = {
+        p.get("item_id"): p.get("photo_url") or p.get("url")
+        for p in all_photo_proposals
+        if p.get("item_id") and (p.get("photo_url") or p.get("url"))
+    }
+    for rec in heuristic_reconciliations:
+        for it in rec.get("incoming_items", []) or []:
+            it_id = it.get("item_id")
+            if it_id in photo_prop_map and not it.get("photo_url"):
+                it["photo_url"] = photo_prop_map[it_id]
+
     # Fail-fast category validation and resolution for new blueprints
     from sqlalchemy import func
     from src.models.pim import Category
@@ -440,11 +459,22 @@ async def process_and_stage_pdf(job_id: str, file_path: str, brand_id: str) -> N
 
         except AgentException as exc:
             logger.log_execution("data_ingestion_service", "agent_exception", "err", job_id=job_id, exc=exc, output=exc.output)
+            db.rollback()
             staging_repo.update_job(
                 db,
                 job_id=job_id,
                 status=JobStatus.ERROR.value,
                 data={"error": str(exc), "output": exc.output},
+            )
+            raise
+        except Exception as exc:
+            logger.log_execution("data_ingestion_service", "process_and_stage_failure", "err", exc=exc, job_id=job_id)
+            db.rollback()
+            staging_repo.update_job(
+                db,
+                job_id=job_id,
+                status=JobStatus.ERROR.value,
+                data={"error": str(exc), "stage": "agent_execution"},
             )
             raise
 
@@ -868,10 +898,21 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
 
         except AgentException as exc:
             logger.log_execution("data_ingestion_service", "process_and_stage_single_item_exception", "err", job_id=job_id, exc=exc, output=exc.output)
+            db.rollback()
             staging_repo.update_job(
                 db,
                 job_id=job_id,
                 status=JobStatus.ERROR.value,
                 data={"error": str(exc), "output": exc.output},
+            )
+            raise
+        except Exception as exc:
+            logger.log_execution("data_ingestion_service", "process_and_stage_single_item_failure", "err", exc=exc, job_id=job_id)
+            db.rollback()
+            staging_repo.update_job(
+                db,
+                job_id=job_id,
+                status=JobStatus.ERROR.value,
+                data={"error": str(exc), "stage": "agent_execution"},
             )
             raise

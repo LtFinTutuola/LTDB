@@ -18,13 +18,15 @@ from src.services.data_ingestion_service import (
 from src.services.staging_revision_service import revise_staging_data
 from src.utils import vendor_code_normalizer as vcn
 from src.agents.article_blueprints_agent.nodes.model_equivalence_oracle import (
-    CanonicalProductEntity,
     OracleVerdictOutput,
+    OracleEvaluationResult,
     SAME_MODEL,
     DIFFERENT_MODEL,
-    INSUFFICIENT_DATA,
-    deterministic_veto,
+    AMBIGUOUS,
     evaluate_pair,
+    is_generic_article,
+    build_article_comparison_context,
+    DimensionEvaluationResult,
 )
 from src.agents.article_blueprints_agent.nodes.oracle_and_induction_node import oracle_and_induction_node
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
@@ -95,49 +97,34 @@ class TestVendorCodeNormalizer:
 # ===========================================================================
 
 class TestModelEquivalenceOracle:
-    def test_stage_2_1_anti_genericity_veto(self):
-        generic = CanonicalProductEntity(name="Borsa", description="Borsa")
-        rich = CanonicalProductEntity(
-            name="Borsa Shopping Meridian",
-            description="Borsa shopping doppio manico con zip",
-            width_cm=32, height_cm=25, depth_cm=14,
-        )
-        assert deterministic_veto(generic, rich) == INSUFFICIENT_DATA
+    def test_stage_2_1_anti_genericity_guard(self):
+        generic = {"article_name": "Borsa", "description": "Borsa"}
+        rich = {
+            "article_name": "Borsa Shopping Meridian",
+            "description": "Borsa shopping doppio manico con zip",
+            "dimensions": {"width_cm": 32, "height_cm": 25, "depth_cm": 14},
+        }
+        assert is_generic_article(generic) is True
+        assert is_generic_article(rich) is False
 
-    def test_stage_2_2_dimensional_tolerance_veto_and_null_permissive(self):
-        small = CanonicalProductEntity(
-            name="Trolley Cabina", description="Trolley rigido 4 ruote bagaglio a mano",
-            width_cm=40, height_cm=55, depth_cm=20,
-        )
-        large = CanonicalProductEntity(
-            name="Trolley Grande", description="Trolley rigido 4 ruote da stiva",
-            width_cm=50, height_cm=75, depth_cm=30,
-        )
-        assert deterministic_veto(small, large) == DIFFERENT_MODEL
-
-        # Differenza entro tolleranza (1 cm) -> nessun veto
-        within = CanonicalProductEntity(
-            name="Trolley Cabina", description="Trolley rigido 4 ruote bagaglio a mano",
-            width_cm=40, height_cm=56, depth_cm=20,
-        )
-        assert deterministic_veto(small, within) is None
-
-        # Dimensioni assenti su uno dei due -> null-permissive (nessun veto)
-        no_dims = CanonicalProductEntity(
-            name="Trolley Cabina", description="Trolley rigido 4 ruote bagaglio a mano",
-        )
-        assert deterministic_veto(small, no_dims) is None
-
-    def test_stage_2_3_taxonomy_and_material_family_veto(self):
-        leather_bag = CanonicalProductEntity(
-            name="Borsa Secchiello", description="Borsa secchiello con coulisse",
-            category="borse", materials=["pelle"],
-        )
-        nylon_bag = CanonicalProductEntity(
-            name="Borsa Secchiello", description="Borsa secchiello con coulisse",
-            category="borse", materials=["nylon"],
-        )
-        assert deterministic_veto(leather_bag, nylon_bag) == DIFFERENT_MODEL
+    def test_stage_2_2_selective_blindness_context(self):
+        item = {
+            "vendor_code": "HWVG8416060",
+            "supplier_code": "SUPP_CODE_123",
+            "category": "borse",
+            "sub_category": "borse_shopping",
+            "raw_description": "RIGA FATTURA GREZZA",
+            "article_name": "Borsa Shopping",
+            "description": "Borsa in ecopelle con tracolla",
+            "materials": ["ecopelle"],
+        }
+        ctx = build_article_comparison_context(item)
+        assert "HWVG8416060" not in ctx
+        assert "SUPP_CODE_123" not in ctx
+        assert "borse_shopping" not in ctx
+        assert "RIGA FATTURA GREZZA" not in ctx
+        assert "Borsa Shopping" in ctx
+        assert "ecopelle" in ctx
 
     def test_stage_3_llm_judge_never_receives_vendor_codes(self):
         captured_prompts = []
@@ -145,26 +132,35 @@ class TestModelEquivalenceOracle:
         class DummyClient:
             async def call(self, **kwargs):
                 captured_prompts.append(kwargs.get("prompt", ""))
-                return OracleVerdictOutput(
-                    verdict="SAME_MODEL",
-                    color_relation="DIFFERENT_COLOR",
+                dim = kwargs.get("pipeline_stage", "").replace("Oracle:", "")
+                return DimensionEvaluationResult(
+                    dimension=dim,
+                    extracted_value_x="nero",
+                    extracted_value_y="rosso",
+                    verdict="MATCH",
                     reasoning="Stessa borsa, colori diversi",
                 ).model_dump_json()
 
-        a = CanonicalProductEntity(
-            name="Borsa Tracolla Meridian",
-            description="Borsa a tracolla con catena e chiusura magnetica",
-            category="borse", materials=["pelle"], colors=["nero"],
-        )
-        b = CanonicalProductEntity(
-            name="Borsa Tracolla Meridian",
-            description="Borsa a tracolla con catena e chiusura magnetica",
-            category="borse", materials=["pelle"], colors=["rosso"],
-        )
-        verdict = asyncio.run(evaluate_pair(DummyClient(), a, b))
-        assert verdict.verdict == SAME_MODEL
-        assert len(captured_prompts) == 1
-        assert "HWVG" not in captured_prompts[0]
+        a = {
+            "vendor_code": "HWVG8416060_NERO",
+            "article_name": "Borsa Tracolla Meridian",
+            "description": "Borsa a tracolla con catena e chiusura magnetica",
+            "extended_description": "Borsa a tracolla con catena e chiusura magnetica in pelle",
+            "materials": ["pelle"],
+            "colors": ["nero"],
+        }
+        b = {
+            "vendor_code": "HWVG8416060_ROSSO",
+            "article_name": "Borsa Tracolla Meridian",
+            "description": "Borsa a tracolla con catena e chiusura magnetica",
+            "extended_description": "Borsa a tracolla con catena e chiusura magnetica in pelle",
+            "materials": ["pelle"],
+            "colors": ["rosso"],
+        }
+        res = asyncio.run(evaluate_pair(DummyClient(), a, b))
+        assert res.verdict == SAME_MODEL
+        assert len(captured_prompts) == 5
+        assert all("HWVG" not in p for p in captured_prompts)
 
 
 # ===========================================================================
@@ -632,7 +628,7 @@ class TestHeuristicInductionAndHITL:
         assert recs[0]["requires_confirmation"] is False
         assert recs[0]["status"] == "NOT_REQUIRED"
 
-    def test_q2_color_agnostic_and_q4_unreliable_sku(self, monkeypatch):
+    def test_q2_color_agnostic_and_q4_identical_code_disambiguation(self, monkeypatch):
         cohort = [{
             "id": "bp-existing-1",
             "normalized_vendor_code": "AGNOSTIC01",
@@ -649,8 +645,9 @@ class TestHeuristicInductionAndHITL:
         # Caso Q2: stesso codice fornitore, stesso modello, colore diverso -> COLOR_AGNOSTIC + attach
         monkeypatch.setattr(
             "src.agents.article_blueprints_agent.nodes.oracle_and_induction_node.evaluate_pair",
-            lambda client, a, b: asyncio.sleep(0, result=OracleVerdictOutput(
-                verdict=SAME_MODEL, color_relation="DIFFERENT_COLOR", reasoning="Stesso modello"
+            lambda client, a, b: asyncio.sleep(0, result=OracleEvaluationResult(
+                verdict=SAME_MODEL, raw_score=90, final_score=90, color_relation="DIFFERENT",
+                reasoning="Stesso modello", code_verdict="IDENTICAL"
             )),
         )
         monkeypatch.setattr(
@@ -670,11 +667,13 @@ class TestHeuristicInductionAndHITL:
         assert len(out_q2["new_blueprints"]) == 0
         assert out_q2["heuristic_reconciliations"][0]["mode_update"] == HeuristicMode.COLOR_AGNOSTIC
 
-        # Caso Q4: stesso codice fornitore ma modelli DIVERSI -> UNRELIABLE_SKU + disambiguazione codice
+        # Caso Q4: stesso codice fornitore ma descrizioni divergenti -> DISAMBIGUATION (R6: niente UNRELIABLE_SKU automatico)
         monkeypatch.setattr(
             "src.agents.article_blueprints_agent.nodes.oracle_and_induction_node.evaluate_pair",
-            lambda client, a, b: asyncio.sleep(0, result=OracleVerdictOutput(
-                verdict=DIFFERENT_MODEL, color_relation="UNKNOWN", reasoning="Articoli diversi"
+            lambda client, a, b: asyncio.sleep(0, result=OracleEvaluationResult(
+                verdict=AMBIGUOUS, raw_score=20, final_score=36, color_relation="DIFFERENT",
+                ambiguity_reason="IDENTICAL_CODE_NOT_SAME", reasoning="Codici identici ma descrizioni divergenti",
+                code_verdict="IDENTICAL"
             )),
         )
         state_q4 = BlueprintsGraphState(
@@ -688,5 +687,209 @@ class TestHeuristicInductionAndHITL:
         )
         out_q4 = asyncio.run(oracle_and_induction_node(state_q4))
         assert len(out_q4["new_blueprints"]) == 1
-        assert out_q4["new_blueprints"][0]["cluster_items"][0]["normalized_vendor_code"].startswith("AGNOSTIC01~")
-        assert out_q4["heuristic_reconciliations"][0]["mode_update"] == HeuristicMode.UNRELIABLE_SKU
+        rec_q4 = out_q4["heuristic_reconciliations"][0]
+        assert rec_q4["kind"] == "DISAMBIGUATION"
+        assert rec_q4["status"] == "PENDING_USER_CONFIRMATION"
+        assert rec_q4["requires_confirmation"] is True
+        assert rec_q4["oracle"]["ambiguity_reason"] == "IDENTICAL_CODE_NOT_SAME"
+
+    def test_resolve_blueprint_ref_populates_full_metadata(self, db_session):
+        brand, cat, batch = self._setup_catalog(db_session, "BrandMetaResolve")
+        sub_cat = Category(name="SubBorse", description="Borse a Spalla", parent_id=cat.id)
+        db_session.add(sub_cat)
+        db_session.commit()
+
+        bp_db = ArticleBlueprint(
+            brand_id=brand.id,
+            category_id=sub_cat.id,
+            normalized_vendor_code="MD20_SHOULDER",
+            article_name="Mandarina Duck MD20 Shoulder",
+            description="Borsa a tracolla classica",
+            extended_description="Borsa a tracolla classica in jacquard resistente",
+            tags=["tracolla", "md20"],
+            materials=["poliestere", "metallo"],
+        )
+        db_session.add(bp_db)
+        db_session.commit()
+
+        staging_data = {"blueprints": [], "items": []}
+        from src.services.staging_revision_service import _resolve_blueprint_ref
+        resolved_id = _resolve_blueprint_ref(str(bp_db.id), {}, staging_data, db_session, 0, "test")
+
+        assert resolved_id == str(bp_db.id)
+        assert len(staging_data["blueprints"]) == 1
+        staged_bp = staging_data["blueprints"][0]
+        assert staged_bp["id"] == str(bp_db.id)
+        assert staged_bp["is_new"] is False
+        assert staged_bp["article_name"] == "Mandarina Duck MD20 Shoulder"
+        assert staged_bp["category"] == {"id": str(cat.id), "description": cat.description}
+        assert staged_bp["sub_category"] == {"id": str(sub_cat.id), "description": sub_cat.description}
+        assert staged_bp["tags"] == ["tracolla", "md20"]
+        assert staged_bp["materials"] == ["poliestere", "metallo"]
+        assert staged_bp["extended_description"] == "Borsa a tracolla classica in jacquard resistente"
+        assert staged_bp["normalized_vendor_code"] == "MD20_SHOULDER"
+
+    def test_enrich_reconciliations_with_photos_populates_db_and_incoming_photos(self, db_session):
+        brand, cat, batch = self._setup_catalog(db_session, "BrandPhotoEnrich")
+        bp_db = ArticleBlueprint(
+            brand_id=brand.id,
+            category_id=cat.id,
+            normalized_vendor_code="MD20_PHOTO",
+            article_name="Mandarina Duck MD20 Photo",
+            description="Desc",
+            extended_description="ExtDesc",
+            tags=[],
+        )
+        db_session.add(bp_db)
+        db_session.commit()
+
+        from src.repositories.photo_repo import photo_repo
+        photo = photo_repo.create_photo(db_session, str(bp_db.id), "nero", b"fake-jpeg-data")
+        assert photo is not None
+
+        from src.services.data_ingestion_service import _enrich_reconciliations_with_photos
+        reconciliations = [
+            {
+                "reconciliation_id": "rec-photo-test",
+                "matched_db_blueprints": [
+                    {
+                        "id": str(bp_db.id),
+                        "article_name": "Mandarina Duck MD20 Photo",
+                        "variants": [{"supplier_code": "MD20_PHOTO", "colors": ["nero"]}],
+                    }
+                ],
+                "incoming_items": [{"item_id": "item-1", "vendor_code": "MD20_PHOTO_RED"}],
+            }
+        ]
+
+        enriched = _enrich_reconciliations_with_photos(db_session, reconciliations)
+        matched_bp = enriched[0]["matched_db_blueprints"][0]
+        assert matched_bp["photo_url"] == f"/api/v1/ingestion/photos/{photo.id}"
+        assert matched_bp["variants"][0]["photo_url"] == f"/api/v1/ingestion/photos/{photo.id}"
+
+
+class TestOracleV3ScenariosAndHITL:
+    def test_disambiguation_confirm_chains_mask_update_when_retroactive(self, db_session):
+        staging_data = {
+            "job_id": "job-hitl-1",
+            "brand_id": "brand-1",
+            "items": [
+                {
+                    "item_id": "item-new-1",
+                    "vendor_code": "P10QMT71803",
+                    "normalized_vendor_code": "P10QMT71803",
+                    "article_blueprint_id": "cl-temp-1",
+                    "colors": ["sin"],
+                }
+            ],
+            "blueprints": [
+                {
+                    "id": "cl-temp-1",
+                    "is_new": True,
+                    "article_name": "Zaino MD20",
+                },
+                {
+                    "id": "bp-db-target",
+                    "is_new": False,
+                    "article_name": "Mandarina Duck MD20 Zaino",
+                    "normalized_vendor_code": "P10QMT7109K",
+                    "variants": [{"supplier_code": "P10QMT7109K", "colors": ["taupe"]}],
+                }
+            ],
+            "heuristic_reconciliations": [
+                {
+                    "reconciliation_id": "rec-disam-1",
+                    "kind": "DISAMBIGUATION",
+                    "status": "PENDING_USER_CONFIRMATION",
+                    "requires_confirmation": True,
+                    "staging_blueprint_ids": ["cl-temp-1"],
+                    "incoming_items": [{"item_id": "item-new-1", "vendor_code": "P10QMT71803"}],
+                    "matched_db_blueprints": [{"id": "bp-db-target", "article_name": "Mandarina Duck MD20 Zaino"}],
+                    "affected_db_blueprints": [{"id": "bp-db-target", "new_normalized_vendor_code": "P10QMT71###"}],
+                    "merge_target_blueprint_id": "bp-db-target",
+                    "rule_update": {"type": "FIXED", "length": 11, "start": 8, "end": 11, "signature": "AAAAAAAA999"},
+                    "proposed_heuristic_update": {"new_mask_preview": "P10QMT71###"},
+                }
+            ],
+        }
+
+        job_id = "job-hitl-1"
+        staging_repo.create_job(db_session, job_id=job_id, job_type=JobType.SINGLE_ITEM_IMPORT.value)
+        staging_repo.update_job(db_session, job_id=job_id, status=JobStatus.COMPLETED.value, data=staging_data)
+
+        # Step 1: Utente conferma la DISAMBIGUATION ("Sì, stesso modello")
+        op1 = RevisionOperation(op="confirm_heuristic_reconciliation", reconciliation_id="rec-disam-1")
+        updated_1 = revise_staging_data(db_session, job_id, [op1])
+
+        # L'articolo è stato unito al blueprint target DB
+        assert updated_1["items"][0]["article_blueprint_id"] == "bp-db-target"
+        # Il record DISAMBIGUATION originale è ACCEPTED
+        assert updated_1["heuristic_reconciliations"][0]["status"] == "ACCEPTED"
+        # È stato creato il secondo record di MASK_UPDATE con origin="DISAMBIGUATION" in attesa (seconda conferma HITL)
+        assert len(updated_1["heuristic_reconciliations"]) == 2
+        chained = updated_1["heuristic_reconciliations"][1]
+        assert chained["kind"] == "MASK_UPDATE"
+        assert chained["origin"] == "DISAMBIGUATION"
+        assert chained["status"] == "PENDING_USER_CONFIRMATION"
+        assert chained["requires_confirmation"] is True
+
+        # Step 2 (S11): Utente rifiuta l'allargamento retroattivo della maschera
+        chained_id = chained["reconciliation_id"]
+        op2 = RevisionOperation(op="reject_heuristic_reconciliation", reconciliation_id=chained_id)
+        updated_2 = revise_staging_data(db_session, job_id, [op2])
+
+        # Principio S11: l'unione resta valida!
+        assert updated_2["items"][0]["article_blueprint_id"] == "bp-db-target"
+        assert updated_2["heuristic_reconciliations"][1]["status"] == "REJECTED"
+        assert updated_2["heuristic_reconciliations"][1]["rule_update"] is None
+        assert updated_2["heuristic_reconciliations"][1]["negative_pairs"] == []
+
+    def test_disambiguation_rejected_stores_negative_constraints(self, db_session):
+        staging_data = {
+            "job_id": "job-hitl-2",
+            "brand_id": "brand-1",
+            "items": [
+                {
+                    "item_id": "item-new-1",
+                    "vendor_code": "P10QMT71803",
+                    "normalized_vendor_code": "P10QMT71803",
+                    "article_blueprint_id": "cl-temp-1",
+                }
+            ],
+            "blueprints": [
+                {"id": "cl-temp-1", "is_new": True, "article_name": "Zaino MD20"},
+                {"id": "bp-db-target", "is_new": False, "article_name": "Mandarina Duck MD20 Zaino"}
+            ],
+            "heuristic_reconciliations": [
+                {
+                    "reconciliation_id": "rec-disam-2",
+                    "kind": "DISAMBIGUATION",
+                    "status": "PENDING_USER_CONFIRMATION",
+                    "requires_confirmation": True,
+                    "staging_blueprint_ids": ["cl-temp-1"],
+                    "incoming_items": [{"item_id": "item-new-1", "vendor_code": "P10QMT71803"}],
+                    "matched_db_blueprints": [{
+                        "id": "bp-db-target",
+                        "article_name": "Mandarina Duck MD20 Zaino",
+                        "variants": [{"supplier_code": "P10QMT7109K"}],
+                    }],
+                    "merge_target_blueprint_id": "bp-db-target",
+                }
+            ],
+        }
+
+        job_id = "job-hitl-2"
+        staging_repo.create_job(db_session, job_id=job_id, job_type=JobType.SINGLE_ITEM_IMPORT.value)
+        staging_repo.update_job(db_session, job_id=job_id, status=JobStatus.COMPLETED.value, data=staging_data)
+
+        # Utente rifiuta la DISAMBIGUATION ("No, sono modelli diversi")
+        op = RevisionOperation(op="reject_heuristic_reconciliation", reconciliation_id="rec-disam-2")
+        updated = revise_staging_data(db_session, job_id, [op])
+
+        rec = updated["heuristic_reconciliations"][0]
+        assert rec["status"] == "REJECTED"
+        # I modelli restano separati
+        assert updated["items"][0]["article_blueprint_id"] == "cl-temp-1"
+        # Viene registrato il vincolo negativo (decisione umana)
+        assert ["P10QMT7109K", "P10QMT71803"] in rec["negative_pairs"]
+

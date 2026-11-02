@@ -487,6 +487,10 @@ def _apply_confirm_heuristic_reconciliation(
     rec["status"] = "ACCEPTED"
 
     from src.utils import vendor_code_normalizer as vcn
+    import uuid
+
+    kind = rec.get("kind")
+    origin = rec.get("origin")
     rule = rec.get("rule_update")
     target_bp_id = rec.get("merge_target_blueprint_id")
     staging_bp_ids = set(rec.get("staging_blueprint_ids") or [])
@@ -496,26 +500,79 @@ def _apply_confirm_heuristic_reconciliation(
         # Ensure target DB blueprint is present in staging_data["blueprints"] with is_new=False
         _resolve_blueprint_ref(target_bp_id, generated_ids, staging_data, db, op_index, "confirm_heuristic_reconciliation")
 
-    for item in staging_data.get("items", []):
-        if item.get("article_blueprint_id") in staging_bp_ids or item.get("item_id") in incoming_item_ids:
-            raw_code = item.get("vendor_code") or ""
-            if rule:
-                masked = vcn.apply_rule(raw_code, rule)
-                if masked:
-                    item["normalized_vendor_code"] = masked
-            if target_bp_id:
-                item["article_blueprint_id"] = target_bp_id
+    # Caso 1: Conferma di DISAMBIGUATION
+    if kind == "DISAMBIGUATION":
+        # Trova il blueprint target a DB per recuperare il suo normalized_vendor_code attuale
+        target_bp_norm = None
+        for bp in staging_data.get("blueprints", []):
+            if str(bp.get("id")) == str(target_bp_id):
+                target_bp_norm = bp.get("normalized_vendor_code")
+                break
 
-    for old_bp_id in staging_bp_ids:
-        if target_bp_id and old_bp_id != target_bp_id:
-            _orphan_cleanup(staging_data, old_bp_id)
+        # Unisci gli articoli al blueprint target
+        for item in staging_data.get("items", []):
+            if item.get("article_blueprint_id") in staging_bp_ids or item.get("item_id") in incoming_item_ids:
+                if target_bp_id:
+                    item["article_blueprint_id"] = target_bp_id
+                if target_bp_norm:
+                    item["normalized_vendor_code"] = target_bp_norm
+
+        # Pulizia blueprint rimasti orfani
+        for old_bp_id in staging_bp_ids:
+            if target_bp_id and old_bp_id != target_bp_id:
+                _orphan_cleanup(staging_data, old_bp_id)
+
+        # Se esiste una regola di mascheramento proposta
+        if rule:
+            affected_bps = rec.get("affected_db_blueprints") or []
+            if affected_bps:
+                # Modifica retroattiva su DB esistente: catena la SECONDA richiesta esplicita (HITL)
+                chained_mask_rec = {
+                    "reconciliation_id": str(uuid.uuid4()),
+                    "status": "PENDING_USER_CONFIRMATION",
+                    "requires_confirmation": True,
+                    "kind": "MASK_UPDATE",
+                    "origin": "DISAMBIGUATION",
+                    "staging_blueprint_ids": [target_bp_id] if target_bp_id else list(staging_bp_ids),
+                    "incoming_items": rec.get("incoming_items", []),
+                    "matched_db_blueprints": affected_bps,
+                    "proposed_heuristic_update": rec.get("proposed_heuristic_update"),
+                    "rule_update": rule,
+                    "merge_target_blueprint_id": target_bp_id,
+                }
+                staging_data.setdefault("heuristic_reconciliations", []).append(chained_mask_rec)
+            else:
+                # Nessun impatto retroattivo su altri blueprint: applica subito la maschera
+                for item in staging_data.get("items", []):
+                    if item.get("article_blueprint_id") == target_bp_id or item.get("item_id") in incoming_item_ids:
+                        raw_code = item.get("vendor_code") or ""
+                        masked = vcn.apply_rule(raw_code, rule)
+                        if masked:
+                            item["normalized_vendor_code"] = masked
+                rec["mode_update"] = "COLOR_MASKED"
+
+    # Caso 2: Conferma di MASK_UPDATE (diretto oppure origin == "DISAMBIGUATION")
+    else:
+        for item in staging_data.get("items", []):
+            if item.get("article_blueprint_id") in staging_bp_ids or item.get("item_id") in incoming_item_ids:
+                raw_code = item.get("vendor_code") or ""
+                if rule:
+                    masked = vcn.apply_rule(raw_code, rule)
+                    if masked:
+                        item["normalized_vendor_code"] = masked
+                if target_bp_id:
+                    item["article_blueprint_id"] = target_bp_id
+
+        for old_bp_id in staging_bp_ids:
+            if target_bp_id and old_bp_id != target_bp_id:
+                _orphan_cleanup(staging_data, old_bp_id)
 
 
 def _apply_reject_heuristic_reconciliation(
     db: Session, staging_data: dict, op: RevisionOperation,
     op_index: int, generated_ids: Dict[int, str],
 ) -> None:
-    """Reject a pending heuristic reconciliation proposal (HITL rejection: keep separate blueprint & record negative constraint)."""
+    """Reject a pending heuristic reconciliation proposal."""
     if not op.reconciliation_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -525,10 +582,22 @@ def _apply_reject_heuristic_reconciliation(
     rec["status"] = "REJECTED"
 
     from src.utils import vendor_code_normalizer as vcn
+
+    kind = rec.get("kind")
+    origin = rec.get("origin")
     fallback_norm = rec.get("fallback_normalized_code")
     staging_bp_ids = set(rec.get("staging_blueprint_ids") or [])
     incoming_item_ids = {it.get("item_id") for it in (rec.get("incoming_items") or []) if it.get("item_id")}
 
+    # Caso Speciale: Rifiuto di MASK_UPDATE derivato da DISAMBIGUATION (origin == "DISAMBIGUATION")
+    # Principio concordato: l'unione resta valida, l'utente rifiuta solo l'allargamento della maschera retroattiva.
+    if origin == "DISAMBIGUATION":
+        rec["rule_update"] = None
+        rec["negative_pairs"] = []
+        return
+
+    # In tutti gli altri casi (Rifiuto DISAMBIGUATION o Rifiuto MASK_UPDATE diretto):
+    # L'utente dichiara che sono articoli/modelli diversi -> mantieni separati e registra negative_constraints.
     for item in staging_data.get("items", []):
         if item.get("article_blueprint_id") in staging_bp_ids or item.get("item_id") in incoming_item_ids:
             if fallback_norm:
@@ -536,7 +605,7 @@ def _apply_reject_heuristic_reconciliation(
             else:
                 item["normalized_vendor_code"] = vcn.clean_code(item.get("vendor_code")) or item.get("normalized_vendor_code")
 
-    # Build negative pairs (Q3 must-split constraint) between incoming codes and matched DB blueprint variant codes
+    # Build negative pairs (must-split constraint) between incoming codes and matched DB blueprint variant codes
     inc_codes = {
         vcn.clean_code(it.get("vendor_code"))
         for it in (rec.get("incoming_items") or [])
@@ -625,12 +694,31 @@ def _resolve_blueprint_ref(
     from src.repositories.pim_repo import pim_repo
     db_bp = pim_repo.get(db, ref)
     if db_bp:
-        # Auto-add to staging with is_new=False
+        cat_dict = None
+        sub_cat_dict = None
+        if db_bp.category:
+            parent_cat = db_bp.category.parent
+            if not parent_cat and db_bp.category.parent_id:
+                parent_cat = db.query(Category).filter(Category.id == db_bp.category.parent_id).first()
+
+            if parent_cat:
+                cat_dict = {"id": str(parent_cat.id), "description": parent_cat.description}
+                sub_cat_dict = {"id": str(db_bp.category.id), "description": db_bp.category.description}
+            else:
+                cat_dict = {"id": str(db_bp.category.id), "description": db_bp.category.description}
+
+        # Auto-add to staging with is_new=False and full attributes
         staging_data["blueprints"].append({
             "id": str(db_bp.id),
             "is_new": False,
             "article_name": db_bp.article_name,
             "description": db_bp.description,
+            "extended_description": db_bp.extended_description,
+            "category": cat_dict,
+            "sub_category": sub_cat_dict,
+            "tags": list(db_bp.tags or []),
+            "materials": list(db_bp.materials or []),
+            "normalized_vendor_code": db_bp.normalized_vendor_code,
         })
         return str(db_bp.id)
 

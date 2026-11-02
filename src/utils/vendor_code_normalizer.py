@@ -96,9 +96,6 @@ def normalize_code(raw: str, heuristic: Any = None) -> str:
     code = clean_code(raw)
     if not code or heuristic is None:
         return code
-    mode = getattr(heuristic, "heuristic_mode", None)
-    if mode == "UNRELIABLE_SKU":
-        return code
     metadata = getattr(heuristic, "heuristic_metadata", None) or {}
     out = apply_rules(code, metadata.get("rules", []))
     if out is not None:

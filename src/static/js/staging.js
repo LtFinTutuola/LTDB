@@ -89,6 +89,36 @@ function _render() {
     const photoProposals = _stagingData?.photo_proposals || {};
     const itemsCount = (_stagingData?.items || []).length;
 
+    // Filter pending reconciliations: hide incoming items and their blueprints while pending confirmation
+    const pendingReconciliations = (_stagingData?.heuristic_reconciliations || []).filter(
+        r => r && r.requires_confirmation && r.status === 'PENDING_USER_CONFIRMATION'
+    );
+    const pendingBpIds = new Set();
+    const pendingItemIds = new Set();
+    for (const rec of pendingReconciliations) {
+        for (const bpId of (rec.staging_blueprint_ids || [])) {
+            pendingBpIds.add(bpId);
+        }
+        for (const it of (rec.incoming_items || [])) {
+            if (it.item_id) pendingItemIds.add(it.item_id);
+        }
+    }
+
+    const visibleGrouped = new Map();
+    for (const [bpId, { blueprint, items }] of grouped) {
+        if (pendingBpIds.has(bpId)) {
+            continue;
+        }
+        const visibleItems = items.filter(it => !pendingItemIds.has(it.item_id));
+        if (visibleItems.length > 0) {
+            visibleGrouped.set(bpId, { blueprint, items: visibleItems });
+        }
+    }
+
+    const countLabel = (visibleGrouped.size === 0 && pendingReconciliations.length > 0)
+        ? 'In attesa di conferma'
+        : `${itemsCount} elementi`;
+
     let html = `
         <div class="detail-panel__header">
             <button class="btn-close-panel btn-close-panel--mobile" title="Torna">
@@ -96,7 +126,7 @@ function _render() {
             </button>
             <div class="detail-panel__header-title-box">
                 <h2 class="detail-panel__title">Revisione dati</h2>
-                <span class="detail-panel__count" style="font-size:12px;color:var(--text-muted)">${itemsCount} elementi</span>
+                <span class="detail-panel__count" style="font-size:12px;color:var(--text-muted)">${countLabel}</span>
             </div>
             <div class="detail-panel__header-actions">
                 <button class="btn-refresh-panel" title="Ricarica">
@@ -108,35 +138,35 @@ function _render() {
         <div class="detail-panel__content" id="staging-content" style="flex:1;overflow-y:auto;">
     `;
 
-    html += _buildHeuristicReconciliationsSection(_stagingData?.heuristic_reconciliations || []);
+    html += _buildHeuristicReconciliationsSection(pendingReconciliations, photoProposals);
 
-    if (grouped.size === 0) {
-        html += `<div class="empty-state"><span class="empty-state__icon">📋</span><p class="empty-state__text">Nessun elemento da rivedere</p></div>`;
+    if (visibleGrouped.size === 0) {
+        if (pendingReconciliations.length === 0) {
+            html += `<div class="empty-state"><span class="empty-state__icon">📋</span><p class="empty-state__text">Nessun elemento da rivedere</p></div>`;
+        }
     } else {
         // Desktop View: Blueprint Cards with Tables
         html += `<div class="staging-desktop-view">`;
-        for (const [bpId, { blueprint, items }] of grouped) {
+        for (const [bpId, { blueprint, items }] of visibleGrouped) {
             html += _buildBlueprintCard(blueprint, items, photoProposals);
         }
         html += `</div>`;
 
         // Mobile View: Flat continuous list of items
         html += `<div class="staging-mobile-view">`;
-        html += _buildMobileStagingList(grouped, photoProposals);
+        html += _buildMobileStagingList(visibleGrouped, photoProposals);
         html += `</div>`;
     }
 
     html += '</div>';
 
-    const pendingHitlCount = (_stagingData?.heuristic_reconciliations || []).filter(
-        r => r.requires_confirmation && r.status === 'PENDING_USER_CONFIRMATION'
-    ).length;
+    const pendingHitlCount = pendingReconciliations.length;
     const hasChanges = _operationsQueue.length > 0;
     const btnText = hasChanges
         ? 'Applica modifiche'
-        : (pendingHitlCount > 0 ? `⚠️ Conferma varianti (${pendingHitlCount} in attesa)` : '✅ Conferma e importa');
+        : (pendingHitlCount > 0 ? `⚠️ Decisione in attesa` : '✅ Conferma e importa');
     const btnClass = hasChanges ? 'btn-apply-changes' : 'btn-confirm-import';
-    const confirmDisabledAttr = (!hasChanges && pendingHitlCount > 0) ? 'disabled title="Conferma o rifiuta prima le proposte di revisione della maschera"' : '';
+    const confirmDisabledAttr = (!hasChanges && pendingHitlCount > 0) ? 'disabled title="Conferma o rifiuta prima la coincidenza rilevata"' : '';
 
     html += `
         <div class="detail-panel__footer" style="padding: var(--space-md) var(--space-lg); display: flex; justify-content: flex-end;">
@@ -1324,70 +1354,84 @@ async function _handleConfirm() {
     }
 }
 
-function _buildHeuristicReconciliationsSection(reconciliations) {
-    const actionable = (reconciliations || []).filter(r => r && r.requires_confirmation);
+function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) {
+    const actionable = (reconciliations || []).filter(
+        r => r && r.requires_confirmation && r.status === 'PENDING_USER_CONFIRMATION'
+    );
     if (actionable.length === 0) return '';
 
-    let html = `<div class="hitl-reconciliations-box" style="margin: 12px 16px; display: flex; flex-direction: column; gap: 12px;">`;
+    let html = `<div class="hitl-reconciliations-container">`;
     for (const rec of actionable) {
         const recId = _esc(rec.reconciliation_id || '');
-        const status = rec.status || 'PENDING_USER_CONFIRMATION';
-        const prop = rec.proposed_heuristic_update || {};
-        const incomingHtml = (rec.incoming_items || []).map(it => {
-            const cols = (it.colors || []).join(', ');
-            return `<li><strong>${_esc(it.vendor_code || '')}</strong> — ${_esc(it.article_name || '')} ${cols ? `(${_esc(cols)})` : ''}</li>`;
-        }).join('');
+        const dbBp = (rec.matched_db_blueprints || [])[0] || {};
+        const incoming = (rec.incoming_items || [])[0] || {};
 
-        const dbBpsHtml = (rec.matched_db_blueprints || []).map(bp => {
-            const vars = (bp.variants || []).map(v => {
-                const cStr = (v.colors || []).join(', ');
-                return `<span style="display:inline-block;margin-right:8px;padding:2px 6px;background:rgba(0,0,0,0.05);border-radius:4px;font-size:12px;">${_esc(v.supplier_code || '')}${cStr ? ` (${_esc(cStr)})` : ''}</span>`;
-            }).join('');
-            return `
-                <div style="padding:8px;border:1px solid var(--border-color, #ddd);border-radius:6px;margin-top:6px;">
-                    <div style="font-weight:600;">${_esc(bp.article_name || 'Modello a catalogo')}</div>
-                    <div style="font-size:12px;color:var(--text-muted);">Codice modello: <code>${_esc(bp.normalized_vendor_code || '')}</code> → <code>${_esc(bp.new_normalized_vendor_code || prop.new_mask_preview || '')}</code></div>
-                    <div style="margin-top:4px;">Varianti in DB: ${vars || 'nessuna'}</div>
-                </div>
-            `;
-        }).join('');
+        // Colonna A (Blueprint già salvato nel magazzino)
+        const dbName = dbBp.article_name || 'Articolo a magazzino';
+        const dbCode = dbBp.normalized_vendor_code || (dbBp.variants && dbBp.variants[0]?.supplier_code) || '';
+        const dbPhotoUrl = dbBp.photo_url || (dbBp.variants && dbBp.variants.find(v => v.photo_url)?.photo_url) || null;
+        const dbPhotoHtml = dbPhotoUrl
+            ? `<img src="${_esc(dbPhotoUrl)}" alt="${_esc(dbName)}" class="hitl-card-img" onclick="if(window._openImageModal) window._openImageModal(this.src)">`
+            : `<div class="hitl-photo-placeholder"><span class="material-symbols-rounded hitl-photo-placeholder__icon">image</span><span class="hitl-photo-placeholder__text">Nessuna foto a catalogo</span></div>`;
 
-        let statusBadge = '';
-        let actionsHtml = '';
-        if (status === 'PENDING_USER_CONFIRMATION') {
-            statusBadge = `<span style="background:var(--warning, #d97706);color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">In attesa di conferma</span>`;
-            actionsHtml = `
-                <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
-                    <button type="button" class="btn-hitl-confirm" data-rec-id="${recId}" style="padding:7px 14px;border-radius:6px;border:none;background:var(--success, #16a34a);color:#fff;font-weight:600;cursor:pointer;">
-                        ✅ Sì, sono varianti cromatiche (aggiorna maschera)
-                    </button>
-                    <button type="button" class="btn-hitl-reject" data-rec-id="${recId}" style="padding:7px 14px;border-radius:6px;border:1px solid var(--danger, #dc2626);background:transparent;color:var(--danger, #dc2626);font-weight:600;cursor:pointer;">
-                        ❌ No, sono articoli diversi (mantieni separati)
-                    </button>
-                </div>
-            `;
-        } else if (status === 'ACCEPTED') {
-            statusBadge = `<span style="background:var(--success, #16a34a);color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">Confermato (varianti cromatiche)</span>`;
-        } else if (status === 'REJECTED') {
-            statusBadge = `<span style="background:var(--danger, #dc2626);color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">Rifiutato (articoli separati)</span>`;
-        }
+        // Colonna B (Articolo in ingresso)
+        const stagingBp = (_stagingData?.blueprints || []).find(b => (rec.staging_blueprint_ids || []).includes(b.id));
+        const incomingName = incoming.article_name || stagingBp?.article_name || 'Articolo in ingresso';
+        const incomingCode = incoming.vendor_code || '';
+        const incomingProposal = _findProposal(photoProposals, incoming.item_id);
+        const incomingPhotoUrl = incoming.photo_url || incomingProposal?.url || incomingProposal?.photo_url || null;
+        const incomingPhotoHtml = incomingPhotoUrl
+            ? `<img src="${_esc(incomingPhotoUrl)}" alt="${_esc(incomingName)}" class="hitl-card-img" onclick="if(window._openImageModal) window._openImageModal(this.src)">`
+            : `<div class="hitl-photo-placeholder"><span class="material-symbols-rounded hitl-photo-placeholder__icon">image</span><span class="hitl-photo-placeholder__text">Nessuna foto disponibile</span></div>`;
 
         html += `
-            <div class="hitl-reconciliation-card" data-rec-id="${recId}" style="padding:14px;border:2px solid var(--warning, #d97706);border-radius:10px;background:rgba(245, 158, 11, 0.06);">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-                    <strong>Revisione retroattiva della maschera codice fornitore</strong>
-                    ${statusBadge}
+            <div class="hitl-reconciliation-box" data-rec-id="${recId}">
+                <div class="hitl-box-header">
+                    <span class="material-symbols-rounded hitl-box-header__icon">warning</span>
+                    <h3 class="hitl-box-header__title">Rilevata una possibile coincidenza nel database</h3>
                 </div>
-                <p style="margin:8px 0;font-size:13px;">
-                    Gli articoli individuati nel database sono effettivamente <strong>varianti cromatiche</strong> dell'articolo in ingresso e non articoli completamente diversi?
+                <p class="hitl-box-subheader">
+                    L’articolo in ingresso sembra essere una variante cromatica diversa di un articolo già presente nel database. Confermi il match, oppure si tratta di due articoli diversi?
                 </p>
-                <div style="font-size:13px;">
-                    <div><strong>Articolo/i in ingresso:</strong></div>
-                    <ul style="margin:4px 0 8px 18px;padding:0;">${incomingHtml}</ul>
-                    <div><strong>Articoli individuati nel database:</strong></div>
-                    ${dbBpsHtml}
+                <div class="hitl-columns-grid">
+                    <!-- Colonna A (Sinistra: Blueprint a magazzino) -->
+                    <div class="hitl-card hitl-card--db">
+                        <div class="hitl-card-header">
+                            <span class="hitl-card-badge">Presente nel database</span>
+                            <div class="hitl-card-title">${_esc(dbName)}</div>
+                        </div>
+                        <div class="hitl-card-subheader">
+                            <span class="hitl-card-label">Codice modello:</span>
+                            <span class="hitl-card-code">${_esc(dbCode || '-')}</span>
+                        </div>
+                        <div class="hitl-card-body">
+                            ${dbPhotoHtml}
+                        </div>
+                    </div>
+
+                    <!-- Colonna B (Destra: Articolo in entrata) -->
+                    <div class="hitl-card hitl-card--incoming">
+                        <div class="hitl-card-header">
+                            <span class="hitl-card-badge hitl-card-badge--incoming">Articolo in ingresso</span>
+                            <div class="hitl-card-title">${_esc(incomingName)}</div>
+                        </div>
+                        <div class="hitl-card-subheader">
+                            <span class="hitl-card-label">Codice modello:</span>
+                            <span class="hitl-card-code">${_esc(incomingCode || '-')}</span>
+                        </div>
+                        <div class="hitl-card-body">
+                            ${incomingPhotoHtml}
+                        </div>
+                    </div>
                 </div>
-                ${actionsHtml}
+                <div class="hitl-box-footer">
+                    <button type="button" class="btn-hitl-reject" data-rec-id="${recId}">
+                        No, sono articoli diversi
+                    </button>
+                    <button type="button" class="btn-hitl-confirm" data-rec-id="${recId}">
+                        Si, sono lo stesso articolo
+                    </button>
+                </div>
             </div>
         `;
     }
