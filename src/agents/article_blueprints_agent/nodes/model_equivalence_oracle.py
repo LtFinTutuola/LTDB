@@ -539,6 +539,51 @@ def evaluate_equivalence_matrix(
     }
 
 
+def _clean_reasoning(text: str, code_x: str, code_y: str) -> str:
+    """Sostituisce riferimenti generici ad Articolo X/Y o 1/2 e lettere isolate X/Y con i codici articolo effettivi."""
+    if not text:
+        return ""
+    cleaned = text
+
+    def _replace_for(t: str, code: str, letter: str, num: str) -> str:
+        if not code:
+            return t
+        # 1. Riferimenti estesi con Articolo X/Y o Articolo 1/2
+        t = re.sub(rf"\b(dell|dall|nell|all|sull)['’]Articolo\s+[{letter}{num}]\b", rf"\1'articolo {code}", t, flags=re.IGNORECASE)
+        t = re.sub(rf"\bl['’]Articolo\s+[{letter}{num}]\b", f"l'articolo {code}", t, flags=re.IGNORECASE)
+        t = re.sub(rf"\bdi\s+Articolo\s+[{letter}{num}]\b", f"dell'articolo {code}", t, flags=re.IGNORECASE)
+        t = re.sub(rf"\bda\s+Articolo\s+[{letter}{num}]\b", f"dall'articolo {code}", t, flags=re.IGNORECASE)
+        t = re.sub(rf"\bin\s+Articolo\s+[{letter}{num}]\b", f"nell'articolo {code}", t, flags=re.IGNORECASE)
+        t = re.sub(rf"\b(?:a|ad)\s+Articolo\s+[{letter}{num}]\b", f"all'articolo {code}", t, flags=re.IGNORECASE)
+        t = re.sub(rf"\bsu\s+Articolo\s+[{letter}{num}]\b", f"sull'articolo {code}", t, flags=re.IGNORECASE)
+        t = re.sub(rf"\bper\s+Articolo\s+[{letter}{num}]\b", f"per l'articolo {code}", t, flags=re.IGNORECASE)
+        t = re.sub(rf"\bArticolo\s+[{letter}{num}]\b", f"l'articolo {code}", t, flags=re.IGNORECASE)
+
+        # 2. Preposizioni seguite da lettera isolata (X o Y)
+        t = re.sub(rf"\bdi\s+{letter}\b", f"dell'articolo {code}", t)
+        t = re.sub(rf"\bda\s+{letter}\b", f"dall'articolo {code}", t)
+        t = re.sub(rf"\bin\s+{letter}\b", f"nell'articolo {code}", t)
+        t = re.sub(rf"\b(?:a|ad)\s+{letter}\b", f"all'articolo {code}", t)
+        t = re.sub(rf"\bsu\s+{letter}\b", f"sull'articolo {code}", t)
+        t = re.sub(rf"\bper\s+{letter}\b", f"per l'articolo {code}", t)
+        t = re.sub(rf"\btra\s+{letter}\b", f"tra l'articolo {code}", t)
+        t = re.sub(rf"\bfra\s+{letter}\b", f"fra l'articolo {code}", t)
+        t = re.sub(rf"\bcon\s+{letter}\b", f"con l'articolo {code}", t)
+        t = re.sub(rf"\bl['’]{letter}\b", f"l'articolo {code}", t)
+
+        # 3. Lettera isolata residua
+        t = re.sub(rf"\b{letter}\b", f"l'articolo {code}", t)
+        return t
+
+    cleaned = _replace_for(cleaned, code_x, "X", "1")
+    cleaned = _replace_for(cleaned, code_y, "Y", "2")
+
+    # Maiuscole a inizio periodo o dopo punteggiatura
+    cleaned = re.sub(r"(^|[.!?]\s+)l['’]articolo\b", r"\1L'articolo", cleaned)
+    cleaned = re.sub(r"(^|[.!?]\s+)dell['’]articolo\b", r"\1Dell'articolo", cleaned)
+    return cleaned
+
+
 # ---------------------------------------------------------------------------
 # Chiamata Asincrona ai Micro-Giudici
 # ---------------------------------------------------------------------------
@@ -550,6 +595,8 @@ async def _judge_dimension(
     context_y: str,
     config: dict[str, Any],
     semaphore: asyncio.Semaphore,
+    code_x: str = "",
+    code_y: str = "",
 ) -> DimensionEvaluationResult:
     """Esegue la singola micro-chiamata per una dimensione delimitata dal semaforo di concorrenza."""
     system_prompt = _PROMPTS[dimension]
@@ -567,7 +614,10 @@ async def _judge_dimension(
                 response_schema=DimensionEvaluationResult,
                 temperature=temperature,
             )
-            return DimensionEvaluationResult.model_validate_json(raw)
+            res = DimensionEvaluationResult.model_validate_json(raw)
+            if code_x or code_y:
+                res.reasoning = _clean_reasoning(res.reasoning, code_x, code_y)
+            return res
         except Exception as exc:
             logger.log_agent("model_equivalence_oracle", "micro_judge_failed", "warn", dim=dimension, exc=str(exc))
             return DimensionEvaluationResult(
@@ -666,9 +716,11 @@ async def evaluate_pair(
     context_y = build_article_comparison_context(b_item)
 
     # 5. Esecuzione 5 micro-giudici paralleli
+    code_x = codes_a[0] if codes_a else ""
+    code_y = codes_b[0] if codes_b else ""
     dimensions_to_eval = ["TYPOLOGY", "LINE", "SIZE", "MATERIAL", "CONSTRUCTION"]
     tasks = [
-        _judge_dimension(client, dim, context_x, context_y, cfg, semaphore)
+        _judge_dimension(client, dim, context_x, context_y, cfg, semaphore, code_x=code_x, code_y=code_y)
         for dim in dimensions_to_eval
     ]
 

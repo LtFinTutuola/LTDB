@@ -200,6 +200,7 @@ def _enrich_reconciliations_with_photos(db: Session, reconciliations: list[dict]
     if not reconciliations:
         return []
     from src.repositories.photo_repo import photo_repo
+    from src.models.wms import Article
     for rec in reconciliations:
         bps_to_check = list(rec.get("matched_db_blueprints") or []) + list(rec.get("affected_db_blueprints") or [])
         for bp in bps_to_check:
@@ -216,6 +217,22 @@ def _enrich_reconciliations_with_photos(db: Session, reconciliations: list[dict]
                         v["photo_url"] = f"/api/v1/ingestion/photos/{ph.id}"
                         if not bp.get("photo_url"):
                             bp["photo_url"] = v["photo_url"]
+
+            # Assicura che raw_vendor_code sia popolato con il codice grezzo non mascherato
+            if not bp.get("raw_vendor_code"):
+                raw = None
+                for v in bp.get("variants") or []:
+                    if v.get("supplier_code"):
+                        raw = v["supplier_code"]
+                        break
+                if not raw and bp_id:
+                    art = db.query(Article.supplier_code).filter(
+                        Article.article_blueprint_id == str(bp_id),
+                        Article.supplier_code.isnot(None)
+                    ).first()
+                    if art:
+                        raw = art[0]
+                bp["raw_vendor_code"] = raw or bp.get("normalized_vendor_code")
     return reconciliations
 
 

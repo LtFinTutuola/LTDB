@@ -893,3 +893,248 @@ class TestOracleV3ScenariosAndHITL:
         # Viene registrato il vincolo negativo (decisione umana)
         assert ["P10QMT7109K", "P10QMT71803"] in rec["negative_pairs"]
 
+    def test_clean_reasoning_substitutes_article_codes(self):
+        from src.agents.article_blueprints_agent.nodes.model_equivalence_oracle import _clean_reasoning
+        raw = "L'Articolo X è uno zaino mentre l'Articolo Y è una borsa. La tipologia dell'Articolo X differisce dall'Articolo Y."
+        cleaned = _clean_reasoning(raw, "P10QMT7109K", "P10QMT71803")
+        assert "Articolo X" not in cleaned
+        assert "Articolo Y" not in cleaned
+        assert "P10QMT7109K" in cleaned
+        assert "P10QMT71803" in cleaned
+
+    def test_clean_reasoning_handles_bare_x_and_y_with_prepositions(self):
+        from src.agents.article_blueprints_agent.nodes.model_equivalence_oracle import _clean_reasoning
+        # Caso reale riscontrato nel log
+        raw = (
+            "Entrambi gli articoli sono borse a tracolla in pelle martellata. "
+            "La differenza tra 'design compatto' e 'struttura a tripla pochette' non costituisce un conflitto, "
+            "poiché la descrizione di X è generica e quella di Y specifica l'organizzazione interna, risultando compatibili."
+        )
+        cleaned = _clean_reasoning(raw, "P10FZT1209K", "P10FZT1123")
+        assert "di X" not in cleaned
+        assert "di Y" not in cleaned
+        assert "dell'articolo P10FZT1209K" in cleaned
+        assert "dell'articolo P10FZT1123" in cleaned
+
+        # Caso con X a inizio frase e preposizioni in/su/per
+        raw2 = "X presenta una tracolla regolabile, mentre in Y non è specificata. Il materiale di X corrisponde a quello di Y."
+        cleaned2 = _clean_reasoning(raw2, "P10FZT1209K", "P10FZT1123")
+        assert cleaned2.startswith("L'articolo P10FZT1209K")
+        assert "nell'articolo P10FZT1123" in cleaned2
+        assert "dell'articolo P10FZT1209K" in cleaned2
+        assert "dell'articolo P10FZT1123" in cleaned2
+
+    def test_enrich_reconciliations_populates_raw_vendor_code(self, db_session):
+        from datetime import date
+        from src.services.data_ingestion_service import _enrich_reconciliations_with_photos
+        from src.agents.article_blueprints_agent.nodes.oracle_and_induction_node import _db_bp_view
+        from src.models.pim import Brand, ArticleBlueprint
+        from src.models.wms import Supplier, Batch, Article
+
+        # Creazione blueprint e articolo con raw vendor code
+        brand = Brand(name="Test Brand Raw")
+        db_session.add(brand)
+        db_session.flush()
+
+        supplier = Supplier(company_name="Test Supplier Raw")
+        db_session.add(supplier)
+        db_session.flush()
+
+        batch = Batch(
+            supplier_id=supplier.id,
+            delivery_note_number="DDT-RAW-001",
+            document_date=date.today(),
+        )
+        db_session.add(batch)
+        db_session.flush()
+
+        bp = ArticleBlueprint(
+            brand_id=brand.id,
+            article_name="Tracolla Tritty",
+            normalized_vendor_code="P10FZT12",  # mascherato
+            description="Borsa",
+            extended_description="Borsa tracolla",
+            tags=["tracolla"],
+            materials=["pelle"],
+        )
+        db_session.add(bp)
+        db_session.flush()
+
+        art = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="P10FZT1209K",  # raw vendor code
+            ean="8033748492012",
+        )
+        db_session.add(art)
+        db_session.commit()
+
+        # Verifica _db_bp_view
+        bp_dict = {
+            "id": str(bp.id),
+            "article_name": bp.article_name,
+            "normalized_vendor_code": bp.normalized_vendor_code,
+            "variants": [{"supplier_code": "P10FZT1209K", "colors": ["nero"]}],
+        }
+        view = _db_bp_view(bp_dict)
+        assert view["raw_vendor_code"] == "P10FZT1209K"
+
+        # Verifica _enrich_reconciliations_with_photos
+        recs = [
+            {
+                "reconciliation_id": "rec-1",
+                "matched_db_blueprints": [
+                    {
+                        "id": str(bp.id),
+                        "article_name": bp.article_name,
+                        "normalized_vendor_code": "P10FZT12",
+                        # variants vuote per testare query fallback su DB
+                    }
+                ],
+            }
+        ]
+        enriched = _enrich_reconciliations_with_photos(db_session, recs)
+        assert enriched[0]["matched_db_blueprints"][0]["raw_vendor_code"] == "P10FZT1209K"
+
+    def test_mask_update_reconciliation_carries_oracle_metadata(self, db_session):
+        from src.agents.article_blueprints_agent.nodes.oracle_and_induction_node import oracle_and_induction_node
+        from src.agents.article_blueprints_agent.state import BlueprintsGraphState
+
+        cohort = [
+            {
+                "id": "bp-db-1",
+                "article_name": "Zaino MD20",
+                "normalized_vendor_code": "P10QMT7109K",
+                "variants": [{"supplier_code": "P10QMT7109K", "colors": ["nero"]}],
+            }
+        ]
+        state = BlueprintsGraphState(
+            brand_id="brand-md",
+            brand_name="Mandarina Duck",
+            brand_cohort=cohort,
+            brand_heuristic={
+                "mode": "COLOR_MASKED",
+                "rules": [{"type": "FIXED", "length": 11, "masked_positions": [8, 9, 10], "signature": "xxxxxxxxxxx"}],
+                "negative_constraints": [],
+            },
+            new_blueprints=[
+                {
+                    "id": "cl-new",
+                    "is_new": True,
+                    "article_name": "Zaino MD20",
+                    "description": "Zaino MD20 Mandarina Duck",
+                    "cluster_items": [{"item_id": "it-new", "vendor_code": "P10QMT71803", "colors": ["sin"], "quantity": 1}],
+                }
+            ],
+        )
+        res = asyncio.run(oracle_and_induction_node(state))
+        recs = res.get("heuristic_reconciliations", [])
+        assert len(recs) >= 1
+        rec = recs[0]
+        assert rec["kind"] in ("MASK_UPDATE", "DISAMBIGUATION")
+        assert rec.get("oracle") is not None
+        assert "dimensions" in rec["oracle"]
+        assert "final_score" in rec["oracle"]
+
+    def test_matched_db_blueprints_orders_target_cand_first(self, monkeypatch):
+        """Verifica che quando la coorte ha più blueprint e una maschera tocca entrambi,
+        il candidato target dell'Oracolo (cand) compaia sempre come primo elemento in matched_db_blueprints."""
+        from src.agents.article_blueprints_agent.nodes.oracle_and_induction_node import oracle_and_induction_node
+        from src.agents.article_blueprints_agent.state import BlueprintsGraphState
+
+        async def _mock_eval(client, a, b):
+            # Se il candidato è bp-2 (zaino) ritorna SAME_MODEL, se è bp-1 (borsa) ritorna DIFFERENT_MODEL
+            cand_code = b.get("variants", [{}])[0].get("supplier_code", "")
+            if cand_code == "P10QMT7109K":
+                return OracleVerdictOutput(
+                    verdict=SAME_MODEL,
+                    color_relation="DIFFERENT_COLOR",
+                    reasoning="Entrambi zaini",
+                    final_score=104.0,
+                    dimensions={},
+                )
+            return OracleVerdictOutput(
+                verdict=DIFFERENT_MODEL,
+                color_relation="UNKNOWN",
+                reasoning="Borsa vs zaino",
+                final_score=-10.0,
+                dimensions={},
+            )
+
+        monkeypatch.setattr(
+            "src.agents.article_blueprints_agent.nodes.oracle_and_induction_node.evaluate_pair",
+            _mock_eval,
+        )
+
+        cohort = [
+            {
+                "id": "bp-db-1",
+                "article_name": "Shoulder Bag",
+                "normalized_vendor_code": "P10QMT56651",
+                "variants": [{"supplier_code": "P10QMT56651", "colors": ["nero"]}],
+            },
+            {
+                "id": "bp-db-2",
+                "article_name": "Zaino porta pc",
+                "normalized_vendor_code": "P10QMT7109K",
+                "variants": [{"supplier_code": "P10QMT7109K", "colors": ["nero"]}],
+            },
+        ]
+        state = BlueprintsGraphState(
+            brand_id="brand-md",
+            brand_name="Mandarina Duck",
+            brand_cohort=cohort,
+            brand_heuristic={"mode": "COLOR_MASKED", "rules": [], "negative_constraints": []},
+            new_blueprints=[
+                {
+                    "id": "cl-new-zaino",
+                    "is_new": True,
+                    "article_name": "Zaino",
+                    "description": "Zaino Mandarina Duck",
+                    "cluster_items": [{"item_id": "it-new-1", "vendor_code": "P10QMT71803", "colors": ["rosso"], "quantity": 1}],
+                }
+            ],
+        )
+
+        res = asyncio.run(oracle_and_induction_node(state))
+        recs = res.get("heuristic_reconciliations", [])
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec["merge_target_blueprint_id"] == "bp-db-2"
+        # Il primo elemento di matched_db_blueprints DEVE essere bp-db-2 (il target), non bp-db-1
+        assert len(rec["matched_db_blueprints"]) >= 1
+        assert rec["matched_db_blueprints"][0]["id"] == "bp-db-2"
+
+    def test_rejection_negative_pairs_restricted_to_merge_target(self):
+        """Verifica che rifiutando una riconciliazione con merge_target_blueprint_id,
+        il vincolo negativo sia registrato solo con il blueprint target e non con altri blueprint a magazzino."""
+        from src.services.staging_revision_service import _record_negative_constraints_on_rejection
+
+        rec = {
+            "reconciliation_id": "rec-1",
+            "merge_target_blueprint_id": "bp-target",
+            "incoming_items": [{"vendor_code": "P10QMT71803"}],
+            "matched_db_blueprints": [
+                {
+                    "id": "bp-target",
+                    "article_name": "Zaino porta pc",
+                    "variants": [{"supplier_code": "P10QMT7109K"}],
+                },
+                {
+                    "id": "bp-unrelated-shoulder-bag",
+                    "article_name": "Shoulder Bag",
+                    "variants": [{"supplier_code": "P10QMT56651"}],
+                },
+            ],
+            "negative_pairs": [],
+        }
+
+        _record_negative_constraints_on_rejection(rec)
+        # La coppia negativa deve coinvolgere SOLO P10QMT71803 e P10QMT7109K (il target)
+        assert rec["negative_pairs"] == [["P10QMT7109K", "P10QMT71803"]]
+        # P10QMT56651 (la borsa) NON deve comparire nei vincoli negativi
+        for pair in rec["negative_pairs"]:
+            assert "P10QMT56651" not in pair
+
+
+

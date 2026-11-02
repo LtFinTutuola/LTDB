@@ -605,15 +605,27 @@ def _apply_reject_heuristic_reconciliation(
             else:
                 item["normalized_vendor_code"] = vcn.clean_code(item.get("vendor_code")) or item.get("normalized_vendor_code")
 
-    # Build negative pairs (must-split constraint) between incoming codes and matched DB blueprint variant codes
+    # Build negative pairs (must-split constraint) between incoming codes and target DB blueprint variant codes
+    _record_negative_constraints_on_rejection(rec)
+
+
+def _record_negative_constraints_on_rejection(rec: dict) -> None:
+    """Costruisce le coppie negative (must-split) tra i codici in ingresso e i codici del blueprint target."""
+    from src.utils import vendor_code_normalizer as vcn
+
     inc_codes = {
         vcn.clean_code(it.get("vendor_code"))
         for it in (rec.get("incoming_items") or [])
         if vcn.clean_code(it.get("vendor_code"))
     }
+    target_id = rec.get("merge_target_blueprint_id")
+    target_bps = [bp for bp in (rec.get("matched_db_blueprints") or []) if bp.get("id") == target_id] if target_id else []
+    if not target_bps:
+        target_bps = rec.get("matched_db_blueprints") or []
+
     db_codes = {
         vcn.clean_code(v.get("supplier_code"))
-        for bp in (rec.get("matched_db_blueprints") or [])
+        for bp in target_bps
         for v in (bp.get("variants") or [])
         if vcn.clean_code(v.get("supplier_code"))
     }

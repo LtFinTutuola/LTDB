@@ -577,6 +577,7 @@ function _buildPhotoCarousel(bpId, items, photoProposals) {
 
 // Global modal function
 window._openImageModal = function (url) {
+    if (!url) return;
     let overlay = document.getElementById('image-zoom-modal');
     if (!overlay) {
         overlay = document.createElement('div');
@@ -584,7 +585,7 @@ window._openImageModal = function (url) {
         overlay.className = 'image-modal-overlay';
         overlay.innerHTML = `
             <div class="image-modal-content">
-                <button class="btn-close-modal">✕</button>
+                <button class="btn-close-modal" title="Chiudi">✕</button>
                 <img id="image-zoom-img" src="" alt="zoom">
             </div>
         `;
@@ -595,8 +596,15 @@ window._openImageModal = function (url) {
                 overlay.classList.remove('open');
             }
         });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && overlay.classList.contains('open')) {
+                overlay.classList.remove('open');
+            }
+        });
     }
-    document.getElementById('image-zoom-img').src = url;
+    const imgEl = document.getElementById('image-zoom-img');
+    if (imgEl) imgEl.src = url;
     overlay.classList.add('open');
 };
 
@@ -1354,6 +1362,48 @@ async function _handleConfirm() {
     }
 }
 
+function _formatReasoning(text, codeX, codeY) {
+    if (!text) return '';
+    let cleaned = text;
+
+    function replaceFor(t, code, letter, num) {
+        if (!code) return t;
+        // 1. Riferimenti con Articolo X/Y o Articolo 1/2
+        t = t.replace(new RegExp(`\\b(dell|dall|nell|all|sull)['’]Articolo\\s+[${letter}${num}]\\b`, 'gi'), `$1'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bl['’]Articolo\\s+[${letter}${num}]\\b`, 'gi'), `l'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bdi\\s+Articolo\\s+[${letter}${num}]\\b`, 'gi'), `dell'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bda\\s+Articolo\\s+[${letter}${num}]\\b`, 'gi'), `dall'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bin\\s+Articolo\\s+[${letter}${num}]\\b`, 'gi'), `nell'articolo ${code}`);
+        t = t.replace(new RegExp(`\\b(?:a|ad)\\s+Articolo\\s+[${letter}${num}]\\b`, 'gi'), `all'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bsu\\s+Articolo\\s+[${letter}${num}]\\b`, 'gi'), `sull'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bper\\s+Articolo\\s+[${letter}${num}]\\b`, 'gi'), `per l'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bArticolo\\s+[${letter}${num}]\\b`, 'gi'), `l'articolo ${code}`);
+
+        // 2. Preposizioni seguite da lettera isolata (X o Y)
+        t = t.replace(new RegExp(`\\bdi\\s+${letter}\\b`, 'g'), `dell'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bda\\s+${letter}\\b`, 'g'), `dall'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bin\\s+${letter}\\b`, 'g'), `nell'articolo ${code}`);
+        t = t.replace(new RegExp(`\\b(?:a|ad)\\s+${letter}\\b`, 'g'), `all'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bsu\\s+${letter}\\b`, 'g'), `sull'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bper\\s+${letter}\\b`, 'g'), `per l'articolo ${code}`);
+        t = t.replace(new RegExp(`\\btra\\s+${letter}\\b`, 'g'), `tra l'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bfra\\s+${letter}\\b`, 'g'), `fra l'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bcon\\s+${letter}\\b`, 'g'), `con l'articolo ${code}`);
+        t = t.replace(new RegExp(`\\bl['’]${letter}\\b`, 'g'), `l'articolo ${code}`);
+
+        // 3. Lettera isolata residua
+        t = t.replace(new RegExp(`\\b${letter}\\b`, 'g'), `l'articolo ${code}`);
+        return t;
+    }
+
+    cleaned = replaceFor(cleaned, codeX, 'X', '1');
+    cleaned = replaceFor(cleaned, codeY, 'Y', '2');
+
+    cleaned = cleaned.replace(/(^|[.!?]\s+)l['’]articolo\b/g, "$1L'articolo");
+    cleaned = cleaned.replace(/(^|[.!?]\s+)dell['’]articolo\b/g, "$1Dell'articolo");
+    return cleaned;
+}
+
 function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) {
     const actionable = (reconciliations || []).filter(
         r => r && r.requires_confirmation && r.status === 'PENDING_USER_CONFIRMATION'
@@ -1363,16 +1413,26 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
     let html = `<div class="hitl-reconciliations-container">`;
     for (const rec of actionable) {
         const recId = _esc(rec.reconciliation_id || '');
-        const dbBp = (rec.matched_db_blueprints || [])[0] || {};
+        const dbBp = (rec.matched_db_blueprints || []).find(b => b.id === rec.merge_target_blueprint_id)
+            || (rec.matched_db_blueprints || [])[0]
+            || {};
         const incoming = (rec.incoming_items || [])[0] || {};
 
-        // Colonna A (Blueprint già salvato nel magazzino)
+        // Colonna A (Blueprint già salvato nel magazzino) - visualizza il vendor code raw non mascherato
         const dbName = dbBp.article_name || 'Articolo a magazzino';
-        const dbCode = dbBp.normalized_vendor_code || (dbBp.variants && dbBp.variants[0]?.supplier_code) || '';
+        const dbCode = dbBp.raw_vendor_code
+            || (dbBp.variants && dbBp.variants.find(v => v.supplier_code)?.supplier_code)
+            || (dbBp.variants && dbBp.variants[0]?.supplier_code)
+            || dbBp.normalized_vendor_code
+            || '';
         const dbPhotoUrl = dbBp.photo_url || (dbBp.variants && dbBp.variants.find(v => v.photo_url)?.photo_url) || null;
-        const dbPhotoHtml = dbPhotoUrl
-            ? `<img src="${_esc(dbPhotoUrl)}" alt="${_esc(dbName)}" class="hitl-card-img" onclick="if(window._openImageModal) window._openImageModal(this.src)">`
-            : `<div class="hitl-photo-placeholder"><span class="material-symbols-rounded hitl-photo-placeholder__icon">image</span><span class="hitl-photo-placeholder__text">Nessuna foto a catalogo</span></div>`;
+        const dbPhotoBodyHtml = dbPhotoUrl
+            ? `<div class="hitl-card-body hitl-card-body--has-photo" onclick="if(window._openImageModal) window._openImageModal('${_esc(dbPhotoUrl)}')">
+                   <img src="${_esc(dbPhotoUrl)}" alt="${_esc(dbName)}" class="hitl-card-img">
+               </div>`
+            : `<div class="hitl-card-body hitl-card-body--placeholder">
+                   <div class="hitl-photo-placeholder"><span class="material-symbols-rounded hitl-photo-placeholder__icon">image</span><span class="hitl-photo-placeholder__text">Nessuna foto a catalogo</span></div>
+               </div>`;
 
         // Colonna B (Articolo in ingresso)
         const stagingBp = (_stagingData?.blueprints || []).find(b => (rec.staging_blueprint_ids || []).includes(b.id));
@@ -1380,18 +1440,73 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
         const incomingCode = incoming.vendor_code || '';
         const incomingProposal = _findProposal(photoProposals, incoming.item_id);
         const incomingPhotoUrl = incoming.photo_url || incomingProposal?.url || incomingProposal?.photo_url || null;
-        const incomingPhotoHtml = incomingPhotoUrl
-            ? `<img src="${_esc(incomingPhotoUrl)}" alt="${_esc(incomingName)}" class="hitl-card-img" onclick="if(window._openImageModal) window._openImageModal(this.src)">`
-            : `<div class="hitl-photo-placeholder"><span class="material-symbols-rounded hitl-photo-placeholder__icon">image</span><span class="hitl-photo-placeholder__text">Nessuna foto disponibile</span></div>`;
+        const incomingPhotoBodyHtml = incomingPhotoUrl
+            ? `<div class="hitl-card-body hitl-card-body--has-photo" onclick="if(window._openImageModal) window._openImageModal('${_esc(incomingPhotoUrl)}')">
+                   <img src="${_esc(incomingPhotoUrl)}" alt="${_esc(incomingName)}" class="hitl-card-img">
+               </div>`
+            : `<div class="hitl-card-body hitl-card-body--placeholder">
+                   <div class="hitl-photo-placeholder"><span class="material-symbols-rounded hitl-photo-placeholder__icon">image</span><span class="hitl-photo-placeholder__text">Nessuna foto disponibile</span></div>
+               </div>`;
+
+        const isOracleDisambiguation = rec.kind === 'DISAMBIGUATION' || !!rec.oracle;
+        const subheaderText = isOracleDisambiguation
+            ? "L'articolo in ingresso è molto simile ad un altro articolo presente nel database, sebbene i due codici siano diversi tra di loro. Confermi che si tratta di due articoli diversi, oppure sono due varianti cromatiche delle stesso articolo?"
+            : "L’articolo in ingresso sembra essere una variante cromatica diversa di un articolo già presente nel database. Confermi il match, oppure si tratta di due articoli diversi?";
+
+        // Tabella Analisi AI sui due articoli (quando l'oracolo ha valutato le dimensioni)
+        let oracleTableHtml = '';
+        if (rec.oracle && rec.oracle.dimensions) {
+            const dimMap = {
+                TYPOLOGY: "Tipologia articolo",
+                LINE: "Linea",
+                SIZE: "Dimensioni",
+                MATERIAL: "Materiali",
+                CONSTRUCTION: "Dettagli costruttivi"
+            };
+            const rows = Object.entries(rec.oracle.dimensions).map(([dimKey, dimData]) => {
+                const label = dimMap[dimKey] || dimKey;
+                let iconHtml = '';
+                if (dimData.verdict === 'MATCH') {
+                    iconHtml = '<span class="material-symbols-rounded hitl-ai-icon hitl-ai-icon--match" title="Compatibile">check_circle</span>';
+                } else if (dimData.verdict === 'CONFLICT') {
+                    iconHtml = '<span class="material-symbols-rounded hitl-ai-icon hitl-ai-icon--conflict" title="Conflitto">cancel</span>';
+                } else {
+                    iconHtml = '<span class="hitl-ai-icon hitl-ai-icon--unknown" title="Non specificato">—</span>';
+                }
+                const cleanedReasoning = _formatReasoning(dimData.reasoning || '', incomingCode, dbCode);
+                return `
+                    <tr>
+                        <td class="hitl-ai-analysis__col-dim">${_esc(label)}</td>
+                        <td class="hitl-ai-analysis__col-verdict">${iconHtml}</td>
+                        <td class="hitl-ai-analysis__col-reasoning">${_esc(cleanedReasoning)}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            oracleTableHtml = `
+                <div class="hitl-ai-analysis">
+                    <div class="hitl-ai-analysis__header">
+                        <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent);">psychology</span>
+                        <span>Risultati analisi AI sui due articoli</span>
+                    </div>
+                    <table class="hitl-ai-analysis__table">
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        }
 
         html += `
             <div class="hitl-reconciliation-box" data-rec-id="${recId}">
                 <div class="hitl-box-header">
-                    <span class="material-symbols-rounded hitl-box-header__icon">warning</span>
-                    <h3 class="hitl-box-header__title">Rilevata una possibile coincidenza nel database</h3>
+                    <div class="hitl-box-header__left">
+                        <span class="material-symbols-rounded hitl-box-header__icon">warning</span>
+                        <h3 class="hitl-box-header__title">Rilevata una possibile coincidenza nel database</h3>
+                    </div>
+                    <span class="hitl-status-chip">In attesa di conferma</span>
                 </div>
                 <p class="hitl-box-subheader">
-                    L’articolo in ingresso sembra essere una variante cromatica diversa di un articolo già presente nel database. Confermi il match, oppure si tratta di due articoli diversi?
+                    ${subheaderText}
                 </p>
                 <div class="hitl-columns-grid">
                     <!-- Colonna A (Sinistra: Blueprint a magazzino) -->
@@ -1404,9 +1519,7 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
                             <span class="hitl-card-label">Codice modello:</span>
                             <span class="hitl-card-code">${_esc(dbCode || '-')}</span>
                         </div>
-                        <div class="hitl-card-body">
-                            ${dbPhotoHtml}
-                        </div>
+                        ${dbPhotoBodyHtml}
                     </div>
 
                     <!-- Colonna B (Destra: Articolo in entrata) -->
@@ -1419,11 +1532,10 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
                             <span class="hitl-card-label">Codice modello:</span>
                             <span class="hitl-card-code">${_esc(incomingCode || '-')}</span>
                         </div>
-                        <div class="hitl-card-body">
-                            ${incomingPhotoHtml}
-                        </div>
+                        ${incomingPhotoBodyHtml}
                     </div>
                 </div>
+                ${oracleTableHtml}
                 <div class="hitl-box-footer">
                     <button type="button" class="btn-hitl-reject" data-rec-id="${recId}">
                         No, sono articoli diversi

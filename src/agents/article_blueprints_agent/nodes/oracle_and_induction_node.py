@@ -84,10 +84,19 @@ def _affected_db_blueprints(cohort: list[dict], rules_after: list[dict]) -> list
 
 
 def _db_bp_view(bp: dict) -> dict:
+    raw_code = None
+    for v in bp.get("variants", []):
+        if v.get("supplier_code"):
+            raw_code = v["supplier_code"]
+            break
+    if not raw_code:
+        raw_code = bp.get("raw_vendor_code") or bp.get("normalized_vendor_code")
+
     return {
         "id": bp["id"],
         "article_name": bp.get("article_name"),
         "normalized_vendor_code": bp.get("normalized_vendor_code"),
+        "raw_vendor_code": raw_code,
         "new_normalized_vendor_code": bp.get("_new_normalized"),
         "variants": [
             {"supplier_code": v.get("supplier_code"), "colors": list(v.get("colors") or [])}
@@ -305,12 +314,24 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                             "il resto del codice identifica il modello."
                         )
                         if affected:
+                            # Assicura che il candidato bersaglio del confronto (cand) sia sempre al primo posto (indice 0)
+                            cand_in_affected = any(a.get("id") == cand.get("id") for a in affected)
+                            ordered_affected = [cand] + [a for a in affected if a.get("id") != cand.get("id")] if not cand_in_affected else sorted(affected, key=lambda a: 0 if a.get("id") == cand.get("id") else 1)
                             rec = _record(
                                 kind="MASK_UPDATE", status=STATUS_PENDING, requires_confirmation=True,
                                 staging_blueprint_ids=[cluster["id"]], incoming_items=_incoming_view(cluster),
-                                matched_db_blueprints=[_db_bp_view(a) for a in affected],
+                                matched_db_blueprints=[_db_bp_view(a) for a in ordered_affected],
                                 proposed_heuristic_update=_proposal(rules, new_rule, codes[0], explanation),
                                 rule_update=new_rule, merge_target_blueprint_id=cand["id"],
+                                oracle={
+                                    "final_score": _get_score(best_res),
+                                    "raw_score": getattr(best_res, "raw_score", _get_score(best_res)),
+                                    "ambiguity_reason": getattr(best_res, "ambiguity_reason", None),
+                                    "code_verdict": getattr(best_res, "code_verdict", "NEUTRAL"),
+                                    "color_relation": relation,
+                                    "dimensions": _serialize_dimensions(getattr(best_res, "dimensions", {})),
+                                    "reasoning": getattr(best_res, "reasoning", ""),
+                                },
                             )
                             cluster["_heuristic_reconciliation_id"] = rec["reconciliation_id"]
                             records.append(rec)
