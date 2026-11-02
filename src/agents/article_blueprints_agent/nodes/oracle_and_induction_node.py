@@ -70,6 +70,44 @@ def _existing_rule_for(code: str, rules: list[dict]) -> Optional[dict]:
     return None
 
 
+def _induce_mask_for_candidate(
+    codes: list[str],
+    cand_codes: set[str],
+    existing_rule: Optional[dict],
+    negatives: list[list[str]],
+) -> dict:
+    """
+    Calcola la maschera posizionale tra i codici in ingresso e quelli del candidato DB.
+    Se il candidato contiene molteplici varianti storiche (eventualmente frutto di una
+    precedente maschera errata), privilegia la variante a minima divergenza qualora
+    la maschera della coppia differisca dalla regola precedente o l'insieme completo fallisca.
+    """
+    all_codes = sorted(set(codes) | set(cand_codes))
+    if len(cand_codes) > 1 and codes:
+        ref = codes[0]
+        best_cand = min(
+            sorted(cand_codes),
+            key=lambda cc: (
+                abs(len(cc) - len(ref)) + sum(1 for x, y in zip(cc, ref) if x != y)
+                if len(cc) == len(ref)
+                else 999
+            ),
+        )
+        pair_res = vcn.induce_positional_mask(sorted(set(codes) | {best_cand}), existing_rule, negatives)
+        full_res = vcn.induce_positional_mask(all_codes, existing_rule, negatives)
+        if full_res["status"] != vcn.OK and pair_res["status"] == vcn.OK:
+            return pair_res
+        if (
+            pair_res["status"] == vcn.OK
+            and existing_rule
+            and existing_rule.get("masked_positions")
+            and pair_res["rule"].get("masked_positions") != existing_rule.get("masked_positions")
+        ):
+            return pair_res
+        return full_res
+    return vcn.induce_positional_mask(all_codes, existing_rule, negatives)
+
+
 def _affected_db_blueprints(cohort: list[dict], rules_after: list[dict]) -> list[dict]:
     """Blueprint DB il cui codice normalizzato cambierebbe applicando ``rules_after``."""
     affected = []
@@ -304,7 +342,7 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                 if relation == "DIFFERENT":
                     # Q1: stesso modello, colori diversi, codici diversi -> induzione posizionale
                     all_codes = sorted(set(codes) | cand_codes)
-                    res = vcn.induce_positional_mask(all_codes, _existing_rule_for(all_codes[0], rules), negatives)
+                    res = _induce_mask_for_candidate(codes, cand_codes, _existing_rule_for(all_codes[0], rules), negatives)
                     if res["status"] == vcn.OK:
                         new_rule = res["rule"]
                         new_rules = vcn.merge_rule(rules, new_rule)
@@ -375,6 +413,10 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                         handled = True
                 else:
                     # Stesso modello ma colore non dimostrabilmente diverso (A3 / H3)
+                    all_codes = sorted(set(codes) | cand_codes)
+                    ind_res = _induce_mask_for_candidate(codes, cand_codes, _existing_rule_for(all_codes[0], rules), negatives)
+                    proposed_rule = ind_res["rule"] if ind_res["status"] == vcn.OK else None
+                    explanation = "Le posizioni variabili del codice identificano il colore; il resto identifica il modello."
                     rec = _record(
                         kind="DISAMBIGUATION",
                         status=STATUS_PENDING,
@@ -392,6 +434,8 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                             "dimensions": _serialize_dimensions(getattr(best_res, "dimensions", {})),
                             "reasoning": f"Modello equivalente ma variante cromatica non dimostrabile ({relation}).",
                         },
+                        proposed_heuristic_update=_proposal(rules, proposed_rule, codes[0], explanation) if proposed_rule else None,
+                        rule_update=proposed_rule,
                     )
                     cluster["_heuristic_reconciliation_id"] = rec["reconciliation_id"]
                     records.append(rec)
@@ -406,7 +450,7 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
 
             # Calcolo di prova della maschera posizionale se l'utente dovesse confermare l'unione
             all_codes = sorted(set(codes) | cand_codes)
-            ind_res = vcn.induce_positional_mask(all_codes, _existing_rule_for(all_codes[0], rules), negatives)
+            ind_res = _induce_mask_for_candidate(codes, cand_codes, _existing_rule_for(all_codes[0], rules), negatives)
             proposed_rule = ind_res["rule"] if ind_res["status"] == vcn.OK else None
             affected = _affected_db_blueprints(cohort, vcn.merge_rule(rules, proposed_rule)) if proposed_rule else []
 

@@ -564,9 +564,10 @@ def _apply_reconciliations_and_realign(
 ) -> None:
     """
     Applica atomicamente gli aggiornamenti all'euristica del brand (NOT_REQUIRED / ACCEPTED / REJECTED)
-    e riallinea retroattivamente i codici normalizzati dei blueprint esistenti nel DB.
+    e riallinea retroattivamente i codici normalizzati dei blueprint esistenti nel DB,
+    eseguendo anche gli eventuali split e merge retroattivi approvati dall'utente (HITL).
     """
-    from src.models.pim import ArticleBlueprint
+    from src.models.pim import ArticleBlueprint, ArticlePhoto
     from sqlalchemy.orm import selectinload
 
     active_h = heuristic_repo.get_active_heuristic(db, brand_id)
@@ -580,16 +581,64 @@ def _apply_reconciliations_and_realign(
     changed = False
     rules_changed = False
 
+    accepted_splits: list[dict] = []
+    rejected_split_bp_ids: set[str] = set()
+    accepted_merges: list[dict] = []
+    rejected_merges: list[dict] = []
+
     for rec in reconciliations or []:
         st = rec.get("status") or "NOT_REQUIRED"
+        kind = rec.get("kind") or ""
+
         if st == "REJECTED":
             for pair in rec.get("negative_pairs") or []:
                 if pair not in negatives and pair[::-1] not in negatives:
                     negatives.append(pair)
                     changed = True
+            src_split_id = rec.get("split_source_blueprint_id") or rec.get("source_blueprint_id")
+            if kind == "RETROACTIVE_SPLIT" and src_split_id:
+                rejected_split_bp_ids.add(str(src_split_id))
+            elif kind == "RETROACTIVE_MERGE":
+                rejected_merges.append(rec)
             continue
+
         if st not in ("NOT_REQUIRED", "ACCEPTED"):
             continue
+
+        if kind == "RETROACTIVE_SPLIT" and st == "ACCEPTED":
+            accepted_splits.append(rec)
+            continue
+
+        if kind == "RETROACTIVE_MERGE" and st == "ACCEPTED":
+            accepted_merges.append(rec)
+            continue
+
+        # Se l'utente ha confermato esplicitamente una riconciliazione, rimuovi eventuali vincoli
+        # negativi pregressi tra i codici dell'articolo in ingresso e il blueprint target confermato.
+        if st == "ACCEPTED" and rec.get("merge_target_blueprint_id"):
+            target_bp_id = str(rec["merge_target_blueprint_id"])
+            inc_codes = {
+                vcn.clean_code(it.get("vendor_code"))
+                for it in (rec.get("incoming_items") or [])
+                if it.get("vendor_code")
+            }
+            cand_codes: set[str] = set()
+            for mb in (rec.get("matched_db_blueprints") or []) + (rec.get("affected_db_blueprints") or []):
+                if str(mb.get("id")) == target_bp_id:
+                    for v in mb.get("variants") or []:
+                        if v.get("supplier_code"):
+                            cand_codes.add(vcn.clean_code(v["supplier_code"]))
+            if inc_codes and cand_codes:
+                new_negatives = []
+                for pair in negatives:
+                    if len(pair) == 2 and (
+                        (pair[0] in inc_codes and pair[1] in cand_codes)
+                        or (pair[1] in inc_codes and pair[0] in cand_codes)
+                    ):
+                        changed = True
+                        continue
+                    new_negatives.append(pair)
+                negatives = new_negatives
 
         for pair in rec.get("negative_pairs") or []:
             if pair not in negatives and pair[::-1] not in negatives:
@@ -638,58 +687,221 @@ def _apply_reconciliations_and_realign(
             heuristic_metadata={"rules": rules, "negative_constraints": negatives},
         )
 
-    if not rules_changed:
+    if not rules_changed and not accepted_splits and not accepted_merges:
         return
 
-    # Aggiorna in-memory i codici normalizzati degli items in conferma
-    for item in items:
-        if item.vendor_code:
-            masked = vcn.apply_rules(item.vendor_code, rules)
-            if masked:
-                item.normalized_vendor_code = masked
-
-    # Riallineamento retroattivo in due fasi sui blueprint esistenti del brand
+    # Carica tutti i blueprint esistenti del brand con articoli e foto per il riallineamento retroattivo
     db_blueprints = (
         db.query(ArticleBlueprint)
-        .options(selectinload(ArticleBlueprint.articles))
+        .options(
+            selectinload(ArticleBlueprint.articles),
+            selectinload(ArticleBlueprint.photos),
+        )
         .filter(ArticleBlueprint.brand_id == brand_id)
         .all()
     )
-    planned_updates: list[tuple[ArticleBlueprint, str]] = []
-    occupied = {bp.normalized_vendor_code: str(bp.id) for bp in db_blueprints if bp.normalized_vendor_code}
+    bp_by_id: dict[str, ArticleBlueprint] = {str(bp.id): bp for bp in db_blueprints}
+    orig_norm_by_id: dict[str, Optional[str]] = {str(bp.id): bp.normalized_vendor_code for bp in db_blueprints}
 
-    for bp in db_blueprints:
-        var_codes = [vcn.clean_code(a.supplier_code) for a in (bp.articles or []) if a.supplier_code]
-        if not var_codes:
-            continue
-        new_norms = {vcn.apply_rules(c, rules) or c for c in var_codes}
-        if len(new_norms) != 1:
-            logger.log_execution(
-                "data_ingestion_service", "retroactive_realign_skipped_multi_norm", "warn",
-                blueprint_id=str(bp.id), norms=sorted(new_norms),
-            )
-            continue
-        target_norm = new_norms.pop()
-        if target_norm == bp.normalized_vendor_code:
-            continue
-        other_owner = occupied.get(target_norm)
-        if other_owner and other_owner != str(bp.id):
-            logger.log_execution(
-                "data_ingestion_service", "retroactive_realign_skipped_collision", "warn",
-                blueprint_id=str(bp.id), target_norm=target_norm, owner_id=other_owner,
-            )
-            continue
-        occupied.pop(bp.normalized_vendor_code, None)
-        occupied[target_norm] = str(bp.id)
-        planned_updates.append((bp, target_norm))
-
-    if planned_updates:
-        for bp, _ in planned_updates:
+    # Fase 0: Imposta codici normalizzati temporanei su tutti i blueprint del brand per evitare
+    # collisioni intermedie su uq_brand_normalized_vendor_code durante split, merge e riallineamento
+    if db_blueprints:
+        for bp in db_blueprints:
             bp.normalized_vendor_code = f"__TMP__{bp.id}"
         db.flush()
-        for bp, target_norm in planned_updates:
-            bp.normalized_vendor_code = target_norm
+
+    # Fase A: Esecuzione degli Split Retroattivi approvati dall'utente (RETROACTIVE_SPLIT == ACCEPTED)
+    split_new_bps: list[tuple[ArticleBlueprint, str]] = []
+    for sp_rec in accepted_splits:
+        src_id = str(sp_rec.get("split_source_blueprint_id") or sp_rec.get("source_blueprint_id") or "")
+        source_bp = bp_by_id.get(src_id)
+        split_art_ids = {str(aid) for aid in (sp_rec.get("split_article_ids") or []) if aid}
+        split_norm = sp_rec.get("split_normalized_code")
+        if not source_bp or not split_art_ids or not split_norm:
+            continue
+
+        arts_to_move = [a for a in list(source_bp.articles or []) if str(a.id) in split_art_ids]
+        if not arts_to_move:
+            continue
+
+        new_bp = ArticleBlueprint(
+            brand_id=source_bp.brand_id,
+            category_id=source_bp.category_id,
+            normalized_vendor_code=f"__TMP_SPLIT__{uuid.uuid4()}",
+            article_name=source_bp.article_name,
+            description=source_bp.description,
+            extended_description=source_bp.extended_description,
+            dimensions=copy.deepcopy(source_bp.dimensions),
+            tags=copy.deepcopy(source_bp.tags),
+            materials=copy.deepcopy(source_bp.materials),
+            embedding=source_bp.embedding,
+        )
+        db.add(new_bp)
         db.flush()
+
+        moved_colors = {
+            str(c).strip().lower()
+            for a in arts_to_move
+            for c in (a.colors or [])
+            if c and str(c).strip()
+        }
+        rem_colors = {
+            str(c).strip().lower()
+            for a in (source_bp.articles or [])
+            if str(a.id) not in split_art_ids
+            for c in (a.colors or [])
+            if c and str(c).strip()
+        }
+
+        for a in arts_to_move:
+            a.article_blueprint_id = new_bp.id
+            a.blueprint = new_bp
+
+        for ph in list(source_bp.photos or []):
+            c_name = (ph.canonical_color_name or "").strip().lower()
+            if c_name in moved_colors and c_name not in rem_colors:
+                ph.article_blueprint_id = new_bp.id
+                ph.blueprint = new_bp
+            elif c_name in moved_colors and c_name in rem_colors:
+                cloned_ph = ArticlePhoto(
+                    article_blueprint_id=new_bp.id,
+                    canonical_color_name=ph.canonical_color_name,
+                    photo_path=ph.photo_path,
+                    original_url=ph.original_url,
+                )
+                db.add(cloned_ph)
+
+        db.flush()
+        split_new_bps.append((new_bp, split_norm))
+        logger.log_execution(
+            "data_ingestion_service",
+            "retroactive_split_executed",
+            "ok",
+            source_blueprint_id=src_id,
+            new_blueprint_id=str(new_bp.id),
+            split_normalized_code=split_norm,
+            moved_article_ids=sorted(split_art_ids),
+        )
+
+    # Fase B: Esecuzione dei Merge Retroattivi approvati dall'utente (RETROACTIVE_MERGE == ACCEPTED)
+    deleted_bp_ids: set[str] = set()
+    for mg_rec in accepted_merges:
+        primary_id = str(mg_rec.get("merge_target_blueprint_id") or "")
+        sec_id = str(mg_rec.get("merge_secondary_blueprint_id") or mg_rec.get("secondary_blueprint_id") or "")
+        primary_bp = bp_by_id.get(primary_id)
+        sec_bp = bp_by_id.get(sec_id)
+        if not primary_bp or not sec_bp or primary_id == sec_id or sec_id in deleted_bp_ids:
+            continue
+
+        for a in list(sec_bp.articles or []):
+            a.article_blueprint_id = primary_bp.id
+            a.blueprint = primary_bp
+
+        existing_photo_colors = {
+            (p.canonical_color_name or "").strip().lower()
+            for p in (primary_bp.photos or [])
+            if p.canonical_color_name
+        }
+        for ph in list(sec_bp.photos or []):
+            c_name = (ph.canonical_color_name or "").strip().lower()
+            if c_name and c_name not in existing_photo_colors:
+                ph.article_blueprint_id = primary_bp.id
+                ph.blueprint = primary_bp
+                existing_photo_colors.add(c_name)
+            else:
+                db.delete(ph)
+
+        for item in items:
+            if item.blueprint_group_id == sec_id:
+                item.blueprint_group_id = primary_id
+
+        db.flush()
+        db.delete(sec_bp)
+        deleted_bp_ids.add(sec_id)
+        db.flush()
+        logger.log_execution(
+            "data_ingestion_service",
+            "retroactive_merge_executed",
+            "ok",
+            primary_blueprint_id=primary_id,
+            secondary_blueprint_id=sec_id,
+        )
+
+    # Fase C: Assegnazione finale dei codici normalizzati su tutti i blueprint superstiti e nuovi da split
+    occupied_final: set[str] = set()
+
+    for new_bp, split_norm in split_new_bps:
+        cand_norm = split_norm
+        if cand_norm in occupied_final:
+            cand_norm = f"{split_norm}__{str(new_bp.id)[:6]}"
+        new_bp.normalized_vendor_code = cand_norm
+        occupied_final.add(cand_norm)
+
+    for bp in db_blueprints:
+        bp_id_str = str(bp.id)
+        if bp_id_str in deleted_bp_ids:
+            continue
+
+        orig_norm = orig_norm_by_id.get(bp_id_str)
+        if bp_id_str in rejected_split_bp_ids:
+            # L'utente ha rifiutato lo split retroattivo di questo blueprint: resta intatto con il suo codice originale
+            target_norm = orig_norm if (orig_norm and orig_norm not in occupied_final) else (orig_norm or f"__KEEP__{bp.id}")
+            if target_norm in occupied_final:
+                target_norm = f"{target_norm}__{bp_id_str[:6]}"
+            bp.normalized_vendor_code = target_norm
+            occupied_final.add(target_norm)
+            continue
+
+        var_codes = [
+            vcn.clean_code(a.supplier_code)
+            for a in (bp.articles or [])
+            if a.supplier_code and str(a.article_blueprint_id) == bp_id_str
+        ]
+        if not var_codes:
+            fallback = orig_norm if (orig_norm and orig_norm not in occupied_final) else f"__EMPTY__{bp.id}"
+            bp.normalized_vendor_code = fallback
+            occupied_final.add(fallback)
+            continue
+
+        new_norms = sorted({vcn.apply_rules(c, rules) or c for c in var_codes})
+        target_norm = new_norms[0]
+        if target_norm in occupied_final:
+            # Collisione (es. merge retroattivo rifiutato dall'utente o vincolo negativo):
+            # preserva il codice originario non collidente o il codice fornitore grezzo
+            fallback = orig_norm if (orig_norm and orig_norm not in occupied_final) else var_codes[0]
+            if fallback in occupied_final:
+                fallback = f"{var_codes[0]}__{bp_id_str[:6]}"
+            bp.normalized_vendor_code = fallback
+            occupied_final.add(fallback)
+            logger.log_execution(
+                "data_ingestion_service",
+                "retroactive_realign_kept_distinct_code",
+                "ok",
+                blueprint_id=bp_id_str,
+                target_norm=target_norm,
+                assigned_norm=fallback,
+            )
+        else:
+            bp.normalized_vendor_code = target_norm
+            occupied_final.add(target_norm)
+
+    db.flush()
+
+    # Aggiorna in-memory i codici normalizzati degli items in conferma
+    surviving_bp_ids = {str(bp.id) for bp in db_blueprints if str(bp.id) not in deleted_bp_ids} | {
+        str(nb.id) for nb, _ in split_new_bps
+    }
+    for item in items:
+        if item.vendor_code:
+            raw_clean = vcn.clean_code(item.vendor_code)
+            masked = vcn.apply_rules(raw_clean, rules)
+            if masked:
+                # Se l'item sta creando un NUOVO blueprint ma il codice mascherato è già occupato
+                # da un blueprint esistente (es. perché l'utente ha rifiutato l'unione), usa il codice grezzo
+                if item.blueprint_group_id not in surviving_bp_ids and masked in occupied_final:
+                    item.normalized_vendor_code = raw_clean
+                else:
+                    item.normalized_vendor_code = masked
 
 
 async def confirm_and_persist_staging(

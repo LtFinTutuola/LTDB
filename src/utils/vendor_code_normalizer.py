@@ -145,9 +145,6 @@ def induce_positional_mask(
         masked = {i for i in range(length) if len({c[i] for c in distinct}) > 1}
         if not masked:
             return _fail(NO_VARIANCE)
-        if existing_rule and existing_rule.get("type") == "FIXED" \
-                and existing_rule.get("length") == length and existing_rule.get("signature") == signature:
-            masked |= set(existing_rule.get("masked_positions", []))
         if any(not distinct[0][i].isalnum() for i in masked):
             return _fail(SIGNATURE_MISMATCH, "separatore nello span variabile")
         ordered = sorted(masked)

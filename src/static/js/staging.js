@@ -1448,10 +1448,34 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
                    <div class="hitl-photo-placeholder"><span class="material-symbols-rounded hitl-photo-placeholder__icon">image</span><span class="hitl-photo-placeholder__text">Nessuna foto disponibile</span></div>
                </div>`;
 
+        const isRetroactiveSplit = rec.kind === 'RETROACTIVE_SPLIT';
+        const isRetroactiveMerge = rec.kind === 'RETROACTIVE_MERGE';
         const isOracleDisambiguation = rec.kind === 'DISAMBIGUATION' || !!rec.oracle;
-        const subheaderText = isOracleDisambiguation
+
+        let headerTitle = "Rilevata una possibile coincidenza nel database";
+        let subheaderText = isOracleDisambiguation
             ? "L'articolo in ingresso è molto simile ad un altro articolo presente nel database, sebbene i due codici siano diversi tra di loro. Confermi che si tratta di due articoli diversi, oppure sono due varianti cromatiche delle stesso articolo?"
             : "L’articolo in ingresso sembra essere una variante cromatica diversa di un articolo già presente nel database. Confermi il match, oppure si tratta di due articoli diversi?";
+        let colABadge = "Presente nel database";
+        let colBBadge = "Articolo in ingresso";
+        let rejectBtnLabel = "No, sono articoli diversi";
+        let confirmBtnLabel = "Si, sono lo stesso articolo";
+
+        if (isRetroactiveSplit) {
+            headerTitle = "Rilevata divisione retroattiva nel database";
+            subheaderText = "Alla luce della nuova regola sul codice articolo, un articolo già presente nel database raggruppa due codici modello differenti. Confermi la separazione in due articoli distinti, oppure vuoi mantenerli uniti?";
+            colABadge = "Articolo a magazzino #1";
+            colBBadge = "Articolo a magazzino #2 (da separare)";
+            rejectBtnLabel = "No, mantieni come adesso";
+            confirmBtnLabel = "Si, separa in due articoli";
+        } else if (isRetroactiveMerge) {
+            headerTitle = "Rilevata possibile coincidenza retroattiva nel database";
+            subheaderText = "Alla luce della nuova regola sul codice articolo, questi due articoli già presenti nel database risultano essere varianti cromatiche dello stesso modello. Confermi l'unione, oppure si tratta di due articoli diversi?";
+            colABadge = "Presente nel database";
+            colBBadge = "Presente nel database";
+            rejectBtnLabel = "No, sono articoli diversi";
+            confirmBtnLabel = "Si, sono lo stesso articolo";
+        }
 
         // Tabella Analisi AI sui due articoli (quando l'oracolo ha valutato le dimensioni)
         let oracleTableHtml = '';
@@ -1501,7 +1525,7 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
                 <div class="hitl-box-header">
                     <div class="hitl-box-header__left">
                         <span class="material-symbols-rounded hitl-box-header__icon">warning</span>
-                        <h3 class="hitl-box-header__title">Rilevata una possibile coincidenza nel database</h3>
+                        <h3 class="hitl-box-header__title">${_esc(headerTitle)}</h3>
                     </div>
                     <span class="hitl-status-chip">In attesa di conferma</span>
                 </div>
@@ -1512,7 +1536,7 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
                     <!-- Colonna A (Sinistra: Blueprint a magazzino) -->
                     <div class="hitl-card hitl-card--db">
                         <div class="hitl-card-header">
-                            <span class="hitl-card-badge">Presente nel database</span>
+                            <span class="hitl-card-badge">${_esc(colABadge)}</span>
                             <div class="hitl-card-title">${_esc(dbName)}</div>
                         </div>
                         <div class="hitl-card-subheader">
@@ -1522,10 +1546,10 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
                         ${dbPhotoBodyHtml}
                     </div>
 
-                    <!-- Colonna B (Destra: Articolo in entrata) -->
+                    <!-- Colonna B (Destra: Articolo in entrata o secondo elemento) -->
                     <div class="hitl-card hitl-card--incoming">
                         <div class="hitl-card-header">
-                            <span class="hitl-card-badge hitl-card-badge--incoming">Articolo in ingresso</span>
+                            <span class="hitl-card-badge hitl-card-badge--incoming">${_esc(colBBadge)}</span>
                             <div class="hitl-card-title">${_esc(incomingName)}</div>
                         </div>
                         <div class="hitl-card-subheader">
@@ -1538,10 +1562,10 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
                 ${oracleTableHtml}
                 <div class="hitl-box-footer">
                     <button type="button" class="btn-hitl-reject" data-rec-id="${recId}">
-                        No, sono articoli diversi
+                        ${_esc(rejectBtnLabel)}
                     </button>
                     <button type="button" class="btn-hitl-confirm" data-rec-id="${recId}">
-                        Si, sono lo stesso articolo
+                        ${_esc(confirmBtnLabel)}
                     </button>
                 </div>
             </div>

@@ -1136,5 +1136,553 @@ class TestOracleV3ScenariosAndHITL:
         for pair in rec["negative_pairs"]:
             assert "P10QMT56651" not in pair
 
+    def _setup_catalog(self, db_session, brand_name="GuessHITL"):
+        brand = Brand(name=brand_name)
+        cat = Category(name="Borse", description="Borse")
+        reason = db_session.query(MovementReason).filter_by(code="CARICO_DDT").first()
+        if not reason:
+            reason = MovementReason(code="CARICO_DDT", sign=1)
+            db_session.add(reason)
+        sup = Supplier(company_name=f"Sup-{brand_name}")
+        db_session.add_all([brand, cat, sup])
+        db_session.commit()
+        brand.categories.append(cat)
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-1", document_date=date.today())
+        db_session.add(batch)
+        db_session.commit()
+        return brand, cat, batch
+
+    def test_mask_invalidation_replaces_previous_rule_without_union(self):
+        """Verifica che l'induzione di una nuova maschera posizionale NON faccia l'unione insiemistica
+        con la regola precedente (niente trascinamento di posizioni spurie come [7, 8] | [8, 9, 10])."""
+        old_rule = {
+            "type": "FIXED",
+            "length": 11,
+            "masked_positions": [7, 8],
+            "signature": vcn.compute_invariant_signature("P10FZT12001"),
+        }
+        res = vcn.induce_positional_mask(
+            ["P10QMT7109K", "P10QMT71803"],
+            existing_rule=old_rule,
+            negative_pairs=[],
+        )
+        assert res["status"] == vcn.OK
+        new_rule = res["rule"]
+        # Deve contenere SOLO [8, 9, 10] e NON la posizione 7 della regola precedente
+        assert new_rule["masked_positions"] == [8, 9, 10]
+
+        merged_rules = vcn.merge_rule([old_rule], new_rule)
+        assert len(merged_rules) == 1
+        assert merged_rules[0]["masked_positions"] == [8, 9, 10]
+
+        # P10QMT7109K (Zaino) e P10QMT72A46 (Camera Bag) rimangono distinti dopo la maschera!
+        assert vcn.apply_rules("P10QMT7109K", merged_rules) == "P10QMT71###"
+        assert vcn.apply_rules("P10QMT72A46", merged_rules) == "P10QMT72###"
+
+    def test_retroactive_split_requires_hitl_and_executes_when_accepted(self, db_session):
+        """Simula lo scenario Mandarina Duck (Job 1-8):
+        - BP1 ('Mellow Leather Crossover') contiene erroneamente P10FZT12001 e P10FZT13B01 per via della vecchia maschera [7, 8].
+        - BP2 ('MD20 Zaino porta pc') contiene P10QMT7109K.
+        - Arriva P10QMT71803 che induce la nuova maschera [8, 9, 10] su BP2.
+        - Alla conferma della nuova maschera viene generata una card HITL RETROACTIVE_SPLIT per BP1.
+        - Finché la card RETROACTIVE_SPLIT è pendente, confirm_and_persist_staging restituisce 409.
+        - Dopo l'approvazione utente dello split, BP1 viene diviso in due blueprint distinti e P10QMT72A46 non fa più short-circuit errato."""
+        brand, cat, batch = self._setup_catalog(db_session, "MandarinaDuckSplitAccept")
+
+        old_rule = {
+            "type": "FIXED",
+            "length": 11,
+            "masked_positions": [7, 8],
+            "signature": vcn.compute_invariant_signature("P10FZT12001"),
+        }
+        heuristic_repo.create_heuristic(
+            db_session,
+            brand_id=str(brand.id),
+            pattern=vcn.rule_to_regex(old_rule),
+            heuristic_mode=HeuristicMode.COLOR_MASKED,
+            heuristic_confirmed=True,
+            heuristic_metadata={"rules": [old_rule], "negative_constraints": []},
+        )
+
+        # BP1: contiene 2 articoli con 8° carattere diverso ('2' vs '3') fusi dalla vecchia maschera [7, 8]
+        bp_mellow = ArticleBlueprint(
+            brand_id=brand.id,
+            category_id=cat.id,
+            normalized_vendor_code="P10FZT1##01",
+            article_name="Mellow Leather Crossover",
+            description="Borsa a tracolla Mellow",
+            extended_description="Borsa a tracolla in pelle martellata",
+            tags=["borsa", "mellow"],
+            materials=["pelle"],
+        )
+        # BP2: Zaino MD20
+        bp_zaino = ArticleBlueprint(
+            brand_id=brand.id,
+            category_id=cat.id,
+            normalized_vendor_code="P10QMT7109K",
+            article_name="MD20 Zaino porta pc",
+            description="Zaino porta pc MD20",
+            extended_description="Zaino in tessuto tecnico",
+            tags=["zaino", "md20"],
+            materials=["poliestere"],
+        )
+        db_session.add_all([bp_mellow, bp_zaino])
+        db_session.commit()
+
+        art_mellow_12 = Article(
+            article_blueprint_id=bp_mellow.id,
+            batch_id=batch.id,
+            supplier_code="P10FZT12001",
+            colors=["black"],
+        )
+        art_mellow_13 = Article(
+            article_blueprint_id=bp_mellow.id,
+            batch_id=batch.id,
+            supplier_code="P10FZT13B01",
+            colors=["espresso"],
+        )
+        art_zaino_1 = Article(
+            article_blueprint_id=bp_zaino.id,
+            batch_id=batch.id,
+            supplier_code="P10QMT7109K",
+            colors=["taupe"],
+        )
+        db_session.add_all([art_mellow_12, art_mellow_13, art_zaino_1])
+        db_session.commit()
+
+        new_rule = {
+            "type": "FIXED",
+            "length": 11,
+            "masked_positions": [8, 9, 10],
+            "signature": vcn.compute_invariant_signature("P10QMT7109K"),
+        }
+        rec_mask = {
+            "reconciliation_id": "rec-mask-md20",
+            "kind": "MASK_UPDATE",
+            "status": "PENDING_USER_CONFIRMATION",
+            "requires_confirmation": True,
+            "staging_blueprint_ids": ["staged-zaino-sin"],
+            "merge_target_blueprint_id": str(bp_zaino.id),
+            "incoming_items": [{
+                "item_id": "it-zaino-sin",
+                "vendor_code": "P10QMT71803",
+                "article_name": "MD20 Zaino porta pc",
+                "colors": ["sin"],
+            }],
+            "matched_db_blueprints": [{
+                "id": str(bp_zaino.id),
+                "article_name": "MD20 Zaino porta pc",
+                "normalized_vendor_code": "P10QMT7109K",
+                "variants": [{"supplier_code": "P10QMT7109K", "colors": ["taupe"]}],
+            }],
+            "rule_update": new_rule,
+            "proposed_heuristic_update": {
+                "new_mask_preview": "P10QMT71###",
+                "explanation": "Posizioni 9-11 identificano il colore.",
+            },
+            "negative_pairs": [],
+        }
+
+        job_id = "job-md-retro-split-accept"
+        staging_repo.create_job(db_session, job_id=job_id, job_type=JobType.SINGLE_ITEM_IMPORT.value)
+        staging_repo.update_job(
+            db_session,
+            job_id=job_id,
+            status=JobStatus.COMPLETED.value,
+            data={
+                "items": [{
+                    "item_id": "it-zaino-sin",
+                    "vendor_code": "P10QMT71803",
+                    "normalized_vendor_code": "P10QMT71803",
+                    "barcode": "8059999000001",
+                    "quantity": 1,
+                    "colors": ["sin"],
+                    "article_blueprint_id": "staged-zaino-sin",
+                }],
+                "blueprints": [{
+                    "id": "staged-zaino-sin",
+                    "is_new": True,
+                    "article_name": "MD20 Zaino porta pc",
+                    "description": "Zaino porta pc MD20",
+                    "extended_description": "Zaino in tessuto tecnico",
+                    "category": {"id": str(cat.id), "description": cat.name},
+                    "sub_category": None,
+                    "tags": ["zaino"],
+                    "materials": ["poliestere"],
+                    "dimensions": None,
+                }],
+                "photo_proposals": [],
+                "heuristic_reconciliations": [rec_mask],
+                "warnings": [],
+                "job_id": job_id,
+                "brand_id": str(brand.id),
+            },
+        )
+
+        # Passo 1: L'utente conferma la riconciliazione di P10QMT71803 con BP2
+        updated_data = revise_staging_data(
+            db_session,
+            job_id,
+            [RevisionOperation(op="confirm_heuristic_reconciliation", reconciliation_id="rec-mask-md20")],
+        )
+        recs_after_step1 = updated_data["heuristic_reconciliations"]
+        # Deve essere stata generata la card HITL di RETROACTIVE_SPLIT per bp_mellow!
+        split_recs = [r for r in recs_after_step1 if r.get("kind") == "RETROACTIVE_SPLIT"]
+        assert len(split_recs) == 1
+        split_rec = split_recs[0]
+        assert split_rec["status"] == "PENDING_USER_CONFIRMATION"
+        assert split_rec["requires_confirmation"] is True
+        assert split_rec["split_source_blueprint_id"] == str(bp_mellow.id)
+        assert split_rec["split_normalized_code"] == "P10FZT13###"
+
+        # Finché la card RETROACTIVE_SPLIT non viene decisa dall'utente, la conferma finale è bloccata (409)
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(confirm_and_persist_staging(db_session, job_id, BackgroundTasks()))
+        assert exc_info.value.status_code == 409
+
+        # Passo 2: L'utente approva anche la card RETROACTIVE_SPLIT
+        updated_data_2 = revise_staging_data(
+            db_session,
+            job_id,
+            [RevisionOperation(op="confirm_heuristic_reconciliation", reconciliation_id=split_rec["reconciliation_id"])],
+        )
+        split_rec_after = [r for r in updated_data_2["heuristic_reconciliations"] if r.get("kind") == "RETROACTIVE_SPLIT"][0]
+        assert split_rec_after["status"] == "ACCEPTED"
+
+        # Passo 3: Conferma e persistenza finale
+        asyncio.run(confirm_and_persist_staging(db_session, job_id, BackgroundTasks()))
+
+        # Verifica stato DB:
+        # 1) Ora devono esistere 3 blueprint per il brand: P10FZT12###, P10FZT13### e P10QMT71###
+        all_bps = db_session.query(ArticleBlueprint).filter_by(brand_id=brand.id).all()
+        norm_map = {bp.normalized_vendor_code: bp for bp in all_bps}
+        assert set(norm_map.keys()) == {"P10FZT12###", "P10FZT13###", "P10QMT71###"}
+
+        bp_12 = norm_map["P10FZT12###"]
+        bp_13 = norm_map["P10FZT13###"]
+        bp_71 = norm_map["P10QMT71###"]
+        assert {a.supplier_code for a in bp_12.articles} == {"P10FZT12001"}
+        assert {a.supplier_code for a in bp_13.articles} == {"P10FZT13B01"}
+        assert {a.supplier_code for a in bp_71.articles} == {"P10QMT7109K", "P10QMT71803"}
+
+        # 2) Verifica che l'importazione successiva di P10QMT72A46 (Camera Bag) NON faccia short-circuit su P10QMT71###!
+        active_h = heuristic_repo.get_active_heuristic(db_session, str(brand.id))
+        r_items, ur_items, _, _, _ = _resolve_items_with_photos(
+            db_session,
+            str(brand.id),
+            [{"item_id": "it-cam", "vendor_code": "P10QMT72A46", "colors": ["scarab"], "quantity": 1}],
+            [active_h],
+        )
+        assert len(r_items) == 0
+        assert len(ur_items) == 1
+        assert ur_items[0]["normalized_vendor_code"] == "P10QMT72###"
+
+    def test_retroactive_split_rejected_leaves_historical_blueprint_intact(self, db_session):
+        """Verifica che se l'utente RIFIUTA lo split retroattivo di un blueprint storico,
+        quel blueprint storico rimane intatto con entrambi i suoi articoli, mentre la nuova
+        maschera viene comunque applicata al brand e al blueprint confermato."""
+        brand, cat, batch = self._setup_catalog(db_session, "MandarinaDuckSplitReject")
+
+        old_rule = {
+            "type": "FIXED",
+            "length": 11,
+            "masked_positions": [7, 8],
+            "signature": vcn.compute_invariant_signature("P10FZT12001"),
+        }
+        heuristic_repo.create_heuristic(
+            db_session,
+            brand_id=str(brand.id),
+            pattern=vcn.rule_to_regex(old_rule),
+            heuristic_mode=HeuristicMode.COLOR_MASKED,
+            heuristic_confirmed=True,
+            heuristic_metadata={"rules": [old_rule], "negative_constraints": []},
+        )
+
+        bp_mellow = ArticleBlueprint(
+            brand_id=brand.id,
+            category_id=cat.id,
+            normalized_vendor_code="P10FZT1##01",
+            article_name="Mellow Leather Crossover",
+            description="Borsa a tracolla Mellow",
+            extended_description="Borsa a tracolla in pelle",
+            tags=["borsa"],
+            materials=["pelle"],
+        )
+        bp_zaino = ArticleBlueprint(
+            brand_id=brand.id,
+            category_id=cat.id,
+            normalized_vendor_code="P10QMT7109K",
+            article_name="MD20 Zaino porta pc",
+            description="Zaino porta pc MD20",
+            extended_description="Zaino tecnico",
+            tags=["zaino"],
+            materials=["poliestere"],
+        )
+        db_session.add_all([bp_mellow, bp_zaino])
+        db_session.commit()
+
+        db_session.add_all([
+            Article(article_blueprint_id=bp_mellow.id, batch_id=batch.id, supplier_code="P10FZT12001", colors=["black"]),
+            Article(article_blueprint_id=bp_mellow.id, batch_id=batch.id, supplier_code="P10FZT13B01", colors=["espresso"]),
+            Article(article_blueprint_id=bp_zaino.id, batch_id=batch.id, supplier_code="P10QMT7109K", colors=["taupe"]),
+        ])
+        db_session.commit()
+
+        new_rule = {
+            "type": "FIXED",
+            "length": 11,
+            "masked_positions": [8, 9, 10],
+            "signature": vcn.compute_invariant_signature("P10QMT7109K"),
+        }
+        rec_mask = {
+            "reconciliation_id": "rec-mask-md20-rej",
+            "kind": "MASK_UPDATE",
+            "status": "PENDING_USER_CONFIRMATION",
+            "requires_confirmation": True,
+            "staging_blueprint_ids": ["staged-zaino-sin-2"],
+            "merge_target_blueprint_id": str(bp_zaino.id),
+            "incoming_items": [{
+                "item_id": "it-zaino-sin-2",
+                "vendor_code": "P10QMT71803",
+                "article_name": "MD20 Zaino porta pc",
+                "colors": ["sin"],
+            }],
+            "matched_db_blueprints": [{
+                "id": str(bp_zaino.id),
+                "article_name": "MD20 Zaino porta pc",
+                "normalized_vendor_code": "P10QMT7109K",
+                "variants": [{"supplier_code": "P10QMT7109K", "colors": ["taupe"]}],
+            }],
+            "rule_update": new_rule,
+            "proposed_heuristic_update": {"new_mask_preview": "P10QMT71###"},
+            "negative_pairs": [],
+        }
+
+        job_id = "job-md-retro-split-reject"
+        staging_repo.create_job(db_session, job_id=job_id, job_type=JobType.SINGLE_ITEM_IMPORT.value)
+        staging_repo.update_job(
+            db_session,
+            job_id=job_id,
+            status=JobStatus.COMPLETED.value,
+            data={
+                "items": [{
+                    "item_id": "it-zaino-sin-2",
+                    "vendor_code": "P10QMT71803",
+                    "normalized_vendor_code": "P10QMT71803",
+                    "barcode": "8059999000002",
+                    "quantity": 1,
+                    "colors": ["sin"],
+                    "article_blueprint_id": "staged-zaino-sin-2",
+                }],
+                "blueprints": [{
+                    "id": "staged-zaino-sin-2",
+                    "is_new": True,
+                    "article_name": "MD20 Zaino porta pc",
+                    "description": "Zaino porta pc MD20",
+                    "extended_description": "Zaino tecnico",
+                    "category": {"id": str(cat.id), "description": cat.name},
+                    "sub_category": None,
+                    "tags": ["zaino"],
+                    "materials": ["poliestere"],
+                    "dimensions": None,
+                }],
+                "photo_proposals": [],
+                "heuristic_reconciliations": [rec_mask],
+                "warnings": [],
+                "job_id": job_id,
+                "brand_id": str(brand.id),
+            },
+        )
+
+        # L'utente conferma la maschera ma RIFIUTA lo split retroattivo di bp_mellow
+        updated_1 = revise_staging_data(
+            db_session,
+            job_id,
+            [RevisionOperation(op="confirm_heuristic_reconciliation", reconciliation_id="rec-mask-md20-rej")],
+        )
+        split_rec = [r for r in updated_1["heuristic_reconciliations"] if r.get("kind") == "RETROACTIVE_SPLIT"][0]
+
+        revise_staging_data(
+            db_session,
+            job_id,
+            [RevisionOperation(op="reject_heuristic_reconciliation", reconciliation_id=split_rec["reconciliation_id"])],
+        )
+
+        asyncio.run(confirm_and_persist_staging(db_session, job_id, BackgroundTasks()))
+
+        all_bps = db_session.query(ArticleBlueprint).filter_by(brand_id=brand.id).all()
+        assert len(all_bps) == 2
+        db_session.refresh(bp_mellow)
+        db_session.refresh(bp_zaino)
+        assert bp_mellow.normalized_vendor_code == "P10FZT1##01"
+        assert {a.supplier_code for a in bp_mellow.articles} == {"P10FZT12001", "P10FZT13B01"}
+        assert bp_zaino.normalized_vendor_code == "P10QMT71###"
+        assert {a.supplier_code for a in bp_zaino.articles} == {"P10QMT7109K", "P10QMT71803"}
+
+    def test_retroactive_merge_hitl_accept_and_reject(self, db_session):
+        """Verifica la generazione e l'esecuzione (sia in caso di approvazione che di rifiuto)
+        delle card HITL RETROACTIVE_MERGE quando una nuova maschera fa collidere due blueprint storici."""
+        # --- Caso A: Approvazione del RETROACTIVE_MERGE ---
+        brand_a, cat_a, batch_a = self._setup_catalog(db_session, "BrandRetroMergeAccept")
+        bp_target = ArticleBlueprint(
+            brand_id=brand_a.id, category_id=cat_a.id, normalized_vendor_code="P10FZT12001",
+            article_name="Mellow Crossover", description="Borsa", extended_description="Borsa", tags=["borsa"],
+        )
+        bp_hist_1 = ArticleBlueprint(
+            brand_id=brand_a.id, category_id=cat_a.id, normalized_vendor_code="P10QMT7109K",
+            article_name="Zaino MD20 Taupe", description="Zaino", extended_description="Zaino", tags=["zaino"],
+        )
+        bp_hist_2 = ArticleBlueprint(
+            brand_id=brand_a.id, category_id=cat_a.id, normalized_vendor_code="P10QMT71999",
+            article_name="Zaino MD20 Blue", description="Zaino", extended_description="Zaino", tags=["zaino"],
+        )
+        db_session.add_all([bp_target, bp_hist_1, bp_hist_2])
+        db_session.commit()
+        db_session.add_all([
+            Article(article_blueprint_id=bp_target.id, batch_id=batch_a.id, supplier_code="P10FZT12001", colors=["black"]),
+            Article(article_blueprint_id=bp_hist_1.id, batch_id=batch_a.id, supplier_code="P10QMT7109K", colors=["taupe"]),
+            Article(article_blueprint_id=bp_hist_2.id, batch_id=batch_a.id, supplier_code="P10QMT71999", colors=["blue"]),
+        ])
+        db_session.commit()
+
+        rule_8910 = {
+            "type": "FIXED",
+            "length": 11,
+            "masked_positions": [8, 9, 10],
+            "signature": vcn.compute_invariant_signature("P10FZT12001"),
+        }
+        rec_init = {
+            "reconciliation_id": "rec-init-a",
+            "kind": "MASK_UPDATE",
+            "status": "PENDING_USER_CONFIRMATION",
+            "requires_confirmation": True,
+            "staging_blueprint_ids": ["staged-a"],
+            "merge_target_blueprint_id": str(bp_target.id),
+            "incoming_items": [{"item_id": "it-a", "vendor_code": "P10FZT12B01", "article_name": "Mellow Crossover", "colors": ["espresso"]}],
+            "matched_db_blueprints": [{"id": str(bp_target.id), "article_name": "Mellow Crossover", "variants": [{"supplier_code": "P10FZT12001"}]}],
+            "rule_update": rule_8910,
+            "proposed_heuristic_update": {"new_mask_preview": "P10FZT12###"},
+            "negative_pairs": [],
+        }
+        job_a = "job-retro-merge-accept"
+        staging_repo.create_job(db_session, job_id=job_a, job_type=JobType.SINGLE_ITEM_IMPORT.value)
+        staging_repo.update_job(
+            db_session,
+            job_id=job_a,
+            status=JobStatus.COMPLETED.value,
+            data={
+                "items": [{
+                    "item_id": "it-a", "vendor_code": "P10FZT12B01", "normalized_vendor_code": "P10FZT12B01",
+                    "barcode": "8050000000011", "quantity": 1, "colors": ["espresso"], "article_blueprint_id": "staged-a",
+                }],
+                "blueprints": [{
+                    "id": "staged-a", "is_new": True, "article_name": "Mellow Crossover", "description": "Borsa",
+                    "extended_description": "Borsa", "category": {"id": str(cat_a.id), "description": cat_a.name},
+                    "sub_category": None, "tags": ["borsa"], "materials": ["pelle"], "dimensions": None,
+                }],
+                "photo_proposals": [],
+                "heuristic_reconciliations": [rec_init],
+                "warnings": [],
+                "job_id": job_a,
+                "brand_id": str(brand_a.id),
+            },
+        )
+
+        upd_a = revise_staging_data(
+            db_session, job_a,
+            [RevisionOperation(op="confirm_heuristic_reconciliation", reconciliation_id="rec-init-a")],
+        )
+        merge_recs = [r for r in upd_a["heuristic_reconciliations"] if r.get("kind") == "RETROACTIVE_MERGE"]
+        assert len(merge_recs) == 1
+        merge_rec = merge_recs[0]
+        assert merge_rec["status"] == "PENDING_USER_CONFIRMATION"
+
+        # Approva il merge retroattivo
+        revise_staging_data(
+            db_session, job_a,
+            [RevisionOperation(op="confirm_heuristic_reconciliation", reconciliation_id=merge_rec["reconciliation_id"])],
+        )
+        asyncio.run(confirm_and_persist_staging(db_session, job_a, BackgroundTasks()))
+
+        bps_a = db_session.query(ArticleBlueprint).filter_by(brand_id=brand_a.id).all()
+        assert len(bps_a) == 2
+        norm_map_a = {bp.normalized_vendor_code: bp for bp in bps_a}
+        assert set(norm_map_a.keys()) == {"P10FZT12###", "P10QMT71###"}
+        assert {a.supplier_code for a in norm_map_a["P10QMT71###"].articles} == {"P10QMT7109K", "P10QMT71999"}
+
+        # --- Caso B: Rifiuto del RETROACTIVE_MERGE ---
+        import copy
+        brand_b, cat_b, batch_b = self._setup_catalog(db_session, "BrandRetroMergeReject")
+        bp_target_b = ArticleBlueprint(
+            brand_id=brand_b.id, category_id=cat_b.id, normalized_vendor_code="P10FZT12001",
+            article_name="Mellow Crossover", description="Borsa", extended_description="Borsa", tags=["borsa"],
+        )
+        bp_hist_b1 = ArticleBlueprint(
+            brand_id=brand_b.id, category_id=cat_b.id, normalized_vendor_code="P10QMT7109K",
+            article_name="Zaino MD20 Taupe", description="Zaino", extended_description="Zaino", tags=["zaino"],
+        )
+        bp_hist_b2 = ArticleBlueprint(
+            brand_id=brand_b.id, category_id=cat_b.id, normalized_vendor_code="P10QMT71999",
+            article_name="Borsa MD20 Special", description="Borsa", extended_description="Borsa", tags=["borsa"],
+        )
+        db_session.add_all([bp_target_b, bp_hist_b1, bp_hist_b2])
+        db_session.commit()
+        db_session.add_all([
+            Article(article_blueprint_id=bp_target_b.id, batch_id=batch_b.id, supplier_code="P10FZT12001", colors=["black"]),
+            Article(article_blueprint_id=bp_hist_b1.id, batch_id=batch_b.id, supplier_code="P10QMT7109K", colors=["taupe"]),
+            Article(article_blueprint_id=bp_hist_b2.id, batch_id=batch_b.id, supplier_code="P10QMT71999", colors=["blue"]),
+        ])
+        db_session.commit()
+
+        rec_init_b = copy.deepcopy(rec_init)
+        rec_init_b["reconciliation_id"] = "rec-init-b"
+        rec_init_b["merge_target_blueprint_id"] = str(bp_target_b.id)
+        rec_init_b["matched_db_blueprints"][0]["id"] = str(bp_target_b.id)
+
+        job_b = "job-retro-merge-reject"
+        staging_repo.create_job(db_session, job_id=job_b, job_type=JobType.SINGLE_ITEM_IMPORT.value)
+        staging_repo.update_job(
+            db_session,
+            job_id=job_b,
+            status=JobStatus.COMPLETED.value,
+            data={
+                "items": [{
+                    "item_id": "it-b", "vendor_code": "P10FZT12B01", "normalized_vendor_code": "P10FZT12B01",
+                    "barcode": "8050000000022", "quantity": 1, "colors": ["espresso"], "article_blueprint_id": "staged-a",
+                }],
+                "blueprints": [{
+                    "id": "staged-a", "is_new": True, "article_name": "Mellow Crossover", "description": "Borsa",
+                    "extended_description": "Borsa", "category": {"id": str(cat_b.id), "description": cat_b.name},
+                    "sub_category": None, "tags": ["borsa"], "materials": ["pelle"], "dimensions": None,
+                }],
+                "photo_proposals": [],
+                "heuristic_reconciliations": [rec_init_b],
+                "warnings": [],
+                "job_id": job_b,
+                "brand_id": str(brand_b.id),
+            },
+        )
+
+        upd_b = revise_staging_data(
+            db_session, job_b,
+            [RevisionOperation(op="confirm_heuristic_reconciliation", reconciliation_id="rec-init-b")],
+        )
+        merge_rec_b = [r for r in upd_b["heuristic_reconciliations"] if r.get("kind") == "RETROACTIVE_MERGE"][0]
+
+        # Rifiuta il merge retroattivo
+        revise_staging_data(
+            db_session, job_b,
+            [RevisionOperation(op="reject_heuristic_reconciliation", reconciliation_id=merge_rec_b["reconciliation_id"])],
+        )
+        asyncio.run(confirm_and_persist_staging(db_session, job_b, BackgroundTasks()))
+
+        bps_b = db_session.query(ArticleBlueprint).filter_by(brand_id=brand_b.id).all()
+        # Tutti e 3 i blueprint rimangono separati e unici!
+        assert len(bps_b) == 3
+        active_hb = heuristic_repo.get_active_heuristic(db_session, str(brand_b.id))
+        negs_b = active_hb.heuristic_metadata.get("negative_constraints", [])
+        assert ["P10QMT7109K", "P10QMT71999"] in negs_b or ["P10QMT71999", "P10QMT7109K"] in negs_b
+
+
 
 

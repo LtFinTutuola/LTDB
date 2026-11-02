@@ -496,9 +496,41 @@ def _apply_confirm_heuristic_reconciliation(
     staging_bp_ids = set(rec.get("staging_blueprint_ids") or [])
     incoming_item_ids = {it.get("item_id") for it in (rec.get("incoming_items") or []) if it.get("item_id")}
 
+    # Caso 0: Conferma di una card retroattiva su blueprint storici (RETROACTIVE_SPLIT / RETROACTIVE_MERGE)
+    if kind in ("RETROACTIVE_SPLIT", "RETROACTIVE_MERGE"):
+        return
+
     if target_bp_id:
         # Ensure target DB blueprint is present in staging_data["blueprints"] with is_new=False
         _resolve_blueprint_ref(target_bp_id, generated_ids, staging_data, db, op_index, "confirm_heuristic_reconciliation")
+
+    # Se rule_update non era stato pre-calcolato (es. DISAMBIGUATION senza proposta) ma i codici differiscono, inducila ora
+    if not rule and target_bp_id:
+        inc_codes = [
+            vcn.clean_code(it.get("vendor_code"))
+            for it in (rec.get("incoming_items") or [])
+            if vcn.clean_code(it.get("vendor_code"))
+        ]
+        target_bps = [
+            bp for bp in (rec.get("matched_db_blueprints") or [])
+            if str(bp.get("id")) == str(target_bp_id)
+        ] or (rec.get("matched_db_blueprints") or [])
+        cand_codes = {
+            vcn.clean_code(v.get("supplier_code"))
+            for bp in target_bps
+            for v in (bp.get("variants") or [])
+            if vcn.clean_code(v.get("supplier_code"))
+        }
+        if not cand_codes:
+            for bp in target_bps:
+                rc = vcn.clean_code(bp.get("raw_vendor_code") or bp.get("normalized_vendor_code"))
+                if rc and "#" not in rc:
+                    cand_codes.add(rc)
+        if inc_codes and cand_codes and (set(inc_codes) != cand_codes):
+            ind_res = vcn.induce_positional_mask(sorted(set(inc_codes) | cand_codes))
+            if ind_res["status"] == vcn.OK:
+                rule = ind_res["rule"]
+                rec["rule_update"] = rule
 
     # Caso 1: Conferma di DISAMBIGUATION
     if kind == "DISAMBIGUATION":
@@ -526,7 +558,7 @@ def _apply_confirm_heuristic_reconciliation(
         if rule:
             affected_bps = rec.get("affected_db_blueprints") or []
             if affected_bps:
-                # Modifica retroattiva su DB esistente: catena la SECONDA richiesta esplicita (HITL)
+                # Modifica retroattiva su DB esistente (esplicita in affected_db_blueprints): catena la SECONDA richiesta esplicita (HITL)
                 chained_mask_rec = {
                     "reconciliation_id": str(uuid.uuid4()),
                     "status": "PENDING_USER_CONFIRMATION",
@@ -542,7 +574,7 @@ def _apply_confirm_heuristic_reconciliation(
                 }
                 staging_data.setdefault("heuristic_reconciliations", []).append(chained_mask_rec)
             else:
-                # Nessun impatto retroattivo su altri blueprint: applica subito la maschera
+                # Applica la maschera agli item correnti e genera eventuali card HITL di split/merge retroattivo su DB
                 for item in staging_data.get("items", []):
                     if item.get("article_blueprint_id") == target_bp_id or item.get("item_id") in incoming_item_ids:
                         raw_code = item.get("vendor_code") or ""
@@ -550,6 +582,7 @@ def _apply_confirm_heuristic_reconciliation(
                         if masked:
                             item["normalized_vendor_code"] = masked
                 rec["mode_update"] = "COLOR_MASKED"
+                _generate_retroactive_db_reconciliations(db, staging_data, rule, target_bp_id)
 
     # Caso 2: Conferma di MASK_UPDATE (diretto oppure origin == "DISAMBIGUATION")
     else:
@@ -566,6 +599,221 @@ def _apply_confirm_heuristic_reconciliation(
         for old_bp_id in staging_bp_ids:
             if target_bp_id and old_bp_id != target_bp_id:
                 _orphan_cleanup(staging_data, old_bp_id)
+
+        if rule:
+            _generate_retroactive_db_reconciliations(db, staging_data, rule, target_bp_id)
+
+
+def _generate_retroactive_db_reconciliations(
+    db: Session,
+    staging_data: dict,
+    rule: dict,
+    target_bp_id: Optional[str],
+) -> None:
+    """
+    Ispeziona i blueprint del brand già consolidati a database alla luce della nuova regola
+    confermata dall'utente. Se un blueprint esistente contiene articoli che ora divergono
+    in più codici normalizzati (RETROACTIVE_SPLIT) o se due blueprint distinti collassano
+    ora sullo stesso codice normalizzato (RETROACTIVE_MERGE), genera card HITL dedicate
+    nella Staging Area affinché l'utente esprima il proprio consenso esplicito.
+    """
+    import uuid
+    from collections import OrderedDict
+    from sqlalchemy.orm import selectinload
+    from src.models.pim import ArticleBlueprint
+    from src.repositories.pim_repo import heuristic_repo
+    from src.utils import vendor_code_normalizer as vcn
+
+    brand_id = staging_data.get("brand_id")
+    if not brand_id or not rule:
+        return
+
+    active_h = heuristic_repo.get_active_heuristic(db, str(brand_id))
+    meta = getattr(active_h, "heuristic_metadata", None) or {}
+    current_rules = list(meta.get("rules") or [])
+    negatives = [list(p) for p in (meta.get("negative_constraints") or []) if len(p) == 2]
+
+    for existing_rec in staging_data.get("heuristic_reconciliations") or []:
+        if existing_rec.get("status") == "REJECTED":
+            for p in existing_rec.get("negative_pairs") or []:
+                if len(p) == 2 and p not in negatives and p[::-1] not in negatives:
+                    negatives.append(list(p))
+
+    new_rules = vcn.merge_rule(current_rules, rule)
+
+    db_blueprints = (
+        db.query(ArticleBlueprint)
+        .options(selectinload(ArticleBlueprint.articles), selectinload(ArticleBlueprint.photos))
+        .filter(ArticleBlueprint.brand_id == str(brand_id))
+        .all()
+    )
+    if not db_blueprints:
+        return
+
+    def _photo_url_for_articles(bp_obj: ArticleBlueprint, arts: list) -> Optional[str]:
+        cols = [
+            str(c).strip().lower()
+            for a in arts
+            for c in (a.colors or [])
+            if c and str(c).strip()
+        ]
+        for col in cols:
+            for p in (bp_obj.photos or []):
+                if (p.canonical_color_name or "").strip().lower() == col:
+                    return f"/api/v1/ingestion/photos/{p.id}"
+        if bp_obj.photos:
+            return f"/api/v1/ingestion/photos/{bp_obj.photos[0].id}"
+        return None
+
+    existing_recs = staging_data.setdefault("heuristic_reconciliations", [])
+    existing_split_keys = {
+        (str(r.get("source_blueprint_id")), str(r.get("split_normalized_code")))
+        for r in existing_recs
+        if r.get("kind") == "RETROACTIVE_SPLIT"
+    }
+    existing_merge_keys = {
+        tuple(sorted([str(r.get("merge_target_blueprint_id")), str(r.get("secondary_blueprint_id"))]))
+        for r in existing_recs
+        if r.get("kind") == "RETROACTIVE_MERGE"
+    }
+
+    bps_by_primary_norm: dict[str, list[tuple[ArticleBlueprint, list]]] = OrderedDict()
+
+    for bp in db_blueprints:
+        arts = [a for a in (bp.articles or []) if vcn.clean_code(a.supplier_code)]
+        if not arts:
+            continue
+
+        groups: dict[str, list] = OrderedDict()
+        for a in arts:
+            raw_c = vcn.clean_code(a.supplier_code)
+            norm_c = vcn.apply_rules(raw_c, new_rules) or raw_c
+            groups.setdefault(norm_c, []).append(a)
+
+        group_items = list(groups.items())
+        primary_norm, primary_arts = group_items[0]
+        bps_by_primary_norm.setdefault(primary_norm, []).append((bp, primary_arts))
+
+        # 1. Rilevamento Split Retroattivo (Multi-Norm dentro lo stesso blueprint storico)
+        if len(group_items) > 1:
+            prim_raw = vcn.clean_code(primary_arts[0].supplier_code)
+            prim_photo = _photo_url_for_articles(bp, primary_arts)
+            primary_view = {
+                "id": str(bp.id),
+                "article_name": bp.article_name,
+                "raw_vendor_code": prim_raw,
+                "normalized_vendor_code": primary_norm,
+                "photo_url": prim_photo,
+                "variants": [
+                    {"supplier_code": vcn.clean_code(a.supplier_code), "colors": list(a.colors or [])}
+                    for a in primary_arts
+                ],
+            }
+            for split_norm, split_arts in group_items[1:]:
+                s_key = (str(bp.id), split_norm)
+                if s_key in existing_split_keys:
+                    continue
+                existing_split_keys.add(s_key)
+                split_raw = vcn.clean_code(split_arts[0].supplier_code)
+                split_photo = _photo_url_for_articles(bp, split_arts)
+                split_view = {
+                    "item_id": str(split_arts[0].id),
+                    "article_name": bp.article_name,
+                    "vendor_code": split_raw,
+                    "raw_vendor_code": split_raw,
+                    "normalized_vendor_code": split_norm,
+                    "colors": list(split_arts[0].colors or []),
+                    "photo_url": split_photo,
+                }
+                existing_recs.append({
+                    "reconciliation_id": str(uuid.uuid4()),
+                    "kind": "RETROACTIVE_SPLIT",
+                    "origin": "RETROACTIVE",
+                    "status": "PENDING_USER_CONFIRMATION",
+                    "requires_confirmation": True,
+                    "source_blueprint_id": str(bp.id),
+                    "split_source_blueprint_id": str(bp.id),
+                    "merge_target_blueprint_id": str(bp.id),
+                    "primary_normalized_code": primary_norm,
+                    "split_normalized_code": split_norm,
+                    "split_article_ids": [str(a.id) for a in split_arts],
+                    "matched_db_blueprints": [primary_view],
+                    "incoming_items": [split_view],
+                    "rule_update": None,
+                })
+
+    # 2. Rilevamento Merge Retroattivo (Collisione sullo stesso codice normalizzato tra blueprint storici distinti)
+    for norm_key, bp_entries in bps_by_primary_norm.items():
+        if len(bp_entries) <= 1:
+            continue
+
+        # Privilegia come primario il target corrente del merge se presente
+        sorted_entries = sorted(
+            bp_entries,
+            key=lambda entry: 0 if str(entry[0].id) == str(target_bp_id) else 1,
+        )
+        bp_primary, prim_arts = sorted_entries[0]
+        prim_codes = {vcn.clean_code(a.supplier_code) for a in prim_arts if vcn.clean_code(a.supplier_code)}
+        prim_raw = vcn.clean_code(prim_arts[0].supplier_code)
+        prim_photo = _photo_url_for_articles(bp_primary, prim_arts)
+        primary_bp_view = {
+            "id": str(bp_primary.id),
+            "article_name": bp_primary.article_name,
+            "raw_vendor_code": prim_raw,
+            "normalized_vendor_code": norm_key,
+            "photo_url": prim_photo,
+            "variants": [
+                {"supplier_code": vcn.clean_code(a.supplier_code), "colors": list(a.colors or [])}
+                for a in prim_arts
+            ],
+        }
+
+        for bp_secondary, sec_arts in sorted_entries[1:]:
+            sec_codes = {vcn.clean_code(a.supplier_code) for a in sec_arts if vcn.clean_code(a.supplier_code)}
+            # Rispetta eventuali vincoli negativi espliciti già espressi dall'utente
+            violates_neg = any(
+                [ca, cb] in negatives or [cb, ca] in negatives
+                for ca in prim_codes
+                for cb in sec_codes
+            )
+            if violates_neg:
+                continue
+
+            m_key = tuple(sorted([str(bp_primary.id), str(bp_secondary.id)]))
+            if m_key in existing_merge_keys:
+                continue
+            existing_merge_keys.add(m_key)
+
+            sec_raw = vcn.clean_code(sec_arts[0].supplier_code)
+            sec_photo = _photo_url_for_articles(bp_secondary, sec_arts)
+            secondary_bp_view = {
+                "item_id": str(sec_arts[0].id),
+                "id": str(bp_secondary.id),
+                "article_name": bp_secondary.article_name,
+                "vendor_code": sec_raw,
+                "raw_vendor_code": sec_raw,
+                "normalized_vendor_code": norm_key,
+                "colors": list(sec_arts[0].colors or []),
+                "photo_url": sec_photo,
+                "variants": [
+                    {"supplier_code": vcn.clean_code(a.supplier_code), "colors": list(a.colors or [])}
+                    for a in sec_arts
+                ],
+            }
+            existing_recs.append({
+                "reconciliation_id": str(uuid.uuid4()),
+                "kind": "RETROACTIVE_MERGE",
+                "origin": "RETROACTIVE",
+                "status": "PENDING_USER_CONFIRMATION",
+                "requires_confirmation": True,
+                "merge_target_blueprint_id": str(bp_primary.id),
+                "secondary_blueprint_id": str(bp_secondary.id),
+                "merge_secondary_blueprint_id": str(bp_secondary.id),
+                "target_normalized_code": norm_key,
+                "matched_db_blueprints": [primary_bp_view],
+                "incoming_items": [secondary_bp_view],
+                "rule_update": None,
+            })
 
 
 def _apply_reject_heuristic_reconciliation(
@@ -589,7 +837,22 @@ def _apply_reject_heuristic_reconciliation(
     staging_bp_ids = set(rec.get("staging_blueprint_ids") or [])
     incoming_item_ids = {it.get("item_id") for it in (rec.get("incoming_items") or []) if it.get("item_id")}
 
-    # Caso Speciale: Rifiuto di MASK_UPDATE derivato da DISAMBIGUATION (origin == "DISAMBIGUATION")
+    # Caso Speciale 0a: Rifiuto di RETROACTIVE_SPLIT
+    # Il blueprint storico resta intatto così com'era; l'articolo in ingresso e la nuova maschera restano validi.
+    if kind == "RETROACTIVE_SPLIT":
+        rec["rule_update"] = None
+        rec["negative_pairs"] = []
+        return
+
+    # Caso Speciale 0b: Rifiuto di RETROACTIVE_MERGE
+    # I due blueprint storici restano separati e viene registrato il vincolo negativo tra loro;
+    # l'articolo in ingresso e la nuova maschera del brand restano validi.
+    if kind == "RETROACTIVE_MERGE":
+        rec["rule_update"] = None
+        _record_negative_constraints_on_rejection(rec)
+        return
+
+    # Caso Speciale 1: Rifiuto di MASK_UPDATE derivato da DISAMBIGUATION (origin == "DISAMBIGUATION")
     # Principio concordato: l'unione resta valida, l'utente rifiuta solo l'allargamento della maschera retroattiva.
     if origin == "DISAMBIGUATION":
         rec["rule_update"] = None
