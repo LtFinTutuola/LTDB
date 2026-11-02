@@ -288,9 +288,9 @@ class TestContrastiveSandboxValidation:
 
     def test_contrastive_validation_passes_valid_regex(self):
         norm_map = {
-            "HWVG870123BLA": "HWVG870123#",
-            "HWVG870123RED": "HWVG870123#",
-            "HWVG870999BLA": "HWVG870999#",
+            "HWVG870123BLA": "HWVG870123###",
+            "HWVG870123RED": "HWVG870123###",
+            "HWVG870999BLA": "HWVG870999###",
         }
         must_split = [["HWVG870123BLA", "HWVG870123RED"], ["HWVG870999BLA"]]
         must_merge = [["HWVG870123BLA", "HWVG870123RED"]]
@@ -348,16 +348,16 @@ class TestBlueprintRevisionEndToEnd:
             "regex": r"^[A-Z0-9]{10}(?P<color_code>[A-Z]{3})$",
             "explanation": "I primi 10 caratteri indicano il modello della borsa, mentre le ultime 3 lettere indicano il colore.",
             "examples": [
-                {"raw": "HWVG870123BLA", "normalized": "HWVG870123#"},
-                {"raw": "HWVG870999BLA", "normalized": "HWVG870999#"},
+                {"raw": "HWVG870123BLA", "normalized": "HWVG870123###"},
+                {"raw": "HWVG870999BLA", "normalized": "HWVG870999###"},
             ],
         }
         mock_deduction_corrected = {
             "regex": r"^HWVG87[0-9]{4}(?P<color_code>[A-Z]{3})$",
             "explanation": "Il prefisso HWVG87 seguito da 4 cifre identifica il modello; le ultime 3 lettere identificano la variante colore.",
             "examples": [
-                {"raw": "HWVG870123BLA", "normalized": "HWVG870123#"},
-                {"raw": "HWVG870999BLA", "normalized": "HWVG870999#"},
+                {"raw": "HWVG870123BLA", "normalized": "HWVG870123###"},
+                {"raw": "HWVG870999BLA", "normalized": "HWVG870999###"},
             ],
         }
 
@@ -482,7 +482,7 @@ class TestBlueprintRevisionEndToEnd:
 
 
         # Verify Database State after Atomic Commit:
-        # A) Old fused bp-merged-1 was replaced and deleted; a brand-new blueprint exists for HWVG870123#
+        # A) Old fused bp-merged-1 was replaced and deleted; a brand-new blueprint exists for HWVG870123###
         bp_old = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-merged-1").first()
         assert bp_old is None
 
@@ -490,7 +490,7 @@ class TestBlueprintRevisionEndToEnd:
             db_session.query(ArticleBlueprint)
             .filter(
                 ArticleBlueprint.brand_id == "brand-guess-1",
-                ArticleBlueprint.normalized_vendor_code == "HWVG870123#",
+                ArticleBlueprint.normalized_vendor_code == "HWVG870123###",
             )
             .first()
         )
@@ -501,12 +501,12 @@ class TestBlueprintRevisionEndToEnd:
         first_photos = db_session.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == bp_first_new.id).all()
         assert {p.canonical_color_name for p in first_photos} == {"nero", "rosso"}
 
-        # B) Second newly split blueprint exists with normalized code HWVG870999#, edited name, reassigned article, and cloned nero photo
+        # B) Second newly split blueprint exists with normalized code HWVG870999###, edited name, reassigned article, and cloned nero photo
         bp_second_new = (
             db_session.query(ArticleBlueprint)
             .filter(
                 ArticleBlueprint.brand_id == "brand-guess-1",
-                ArticleBlueprint.normalized_vendor_code == "HWVG870999#",
+                ArticleBlueprint.normalized_vendor_code == "HWVG870999###",
             )
             .first()
         )
@@ -524,10 +524,10 @@ class TestBlueprintRevisionEndToEnd:
         assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-dup-1").first() is not None
         assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-dup-2").first() is not None
 
-        # D) Aligned blueprint (bp-aligned-1) updated its normalized_vendor_code to HWVG870888#
+        # D) Aligned blueprint (bp-aligned-1) updated its normalized_vendor_code to HWVG870888###
         bp_al = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-aligned-1").first()
         assert bp_al is not None
-        assert bp_al.normalized_vendor_code == "HWVG870888#"
+        assert bp_al.normalized_vendor_code == "HWVG870888###"
 
         # E) BrandHeuristic record updated in brand_heuristics
         heur = db_session.query(BrandHeuristic).filter(BrandHeuristic.id == "heur-guess-1").first()
@@ -658,7 +658,7 @@ class TestBlueprintRevisionPhotoStagingAndPersistence:
         mock_deduction = {
             "regex": r"^[A-Z0-9]{10}(?P<color_code>[A-Z]{3})$",
             "explanation": "I primi 10 caratteri indicano il modello, gli ultimi 3 il colore.",
-            "examples": [{"raw": "HWVG870123BLA", "normalized": "HWVG870123#"}],
+            "examples": [{"raw": "HWVG870123BLA", "normalized": "HWVG870123###"}],
         }
         partitions_payload = [
             {
@@ -761,7 +761,7 @@ class TestManualAnomalyCorrectionAndFromScratchRecreation:
         mock_deduction = {
             "regex": r"^HWVG87[0-9]{4}(?P<color_code>[A-Z]{3})$",
             "explanation": "I primi 10 caratteri indicano il modello, gli ultimi 3 il colore.",
-            "examples": [{"raw": "HWVG870123BLA", "normalized": "HWVG870123#"}],
+            "examples": [{"raw": "HWVG870123BLA", "normalized": "HWVG870123###"}],
         }
         with patch("src.services.blueprint_revision_service.CodesDeductionAgent.aexecute", new_callable=AsyncMock, return_value=mock_deduction), \
              patch("src.services.blueprint_revision_service.LLMClient.call", new_callable=AsyncMock, return_value="Spiegazione per Guess"), \
@@ -889,12 +889,12 @@ class TestManualAnomalyCorrectionAndFromScratchRecreation:
         assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-extra-split-1").first() is None
         bp_555 = (
             db_session.query(ArticleBlueprint)
-            .filter(ArticleBlueprint.normalized_vendor_code == "HWVG870555#")
+            .filter(ArticleBlueprint.normalized_vendor_code == "HWVG870555###")
             .first()
         )
         bp_666 = (
             db_session.query(ArticleBlueprint)
-            .filter(ArticleBlueprint.normalized_vendor_code == "HWVG870666#")
+            .filter(ArticleBlueprint.normalized_vendor_code == "HWVG870666###")
             .first()
         )
         assert bp_555 is not None
@@ -946,7 +946,7 @@ class TestManualAnomalyCorrectionAndFromScratchRecreation:
         assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == "bp-dup-2").first() is None
         bp_777 = (
             db_session.query(ArticleBlueprint)
-            .filter(ArticleBlueprint.normalized_vendor_code == "HWVG870777#")
+            .filter(ArticleBlueprint.normalized_vendor_code == "HWVG870777###")
             .first()
         )
         assert bp_777 is not None
@@ -1272,7 +1272,7 @@ class TestAnomaliesGuardsAndManualClosure:
 
         # Verify normalized_vendor_code on blueprint was updated to verified root
         refreshed_bp = db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id == bp_ok.id).first()
-        assert refreshed_bp.normalized_vendor_code == "BAG100-#"
+        assert refreshed_bp.normalized_vendor_code == "BAG100-###"
 
         # Verify anomaly is gone and queue is empty
         res_after = client.get("/api/v1/brands/blueprint-revision/anomalies")
@@ -1540,7 +1540,7 @@ class TestAnomaliesGuardsAndManualClosure:
         mock_success_res = {
             "regex": r"^[A-Z0-9]{10}(?P<color_code>[A-Z]{3})$",
             "explanation": "Primi 10 caratteri modello, ultimi 3 colore.",
-            "examples": [{"raw": "HWVG870123BLA", "normalized": "HWVG870123#"}],
+            "examples": [{"raw": "HWVG870123BLA", "normalized": "HWVG870123###"}],
         }
         with patch(
             "src.services.blueprint_revision_service.CodesDeductionAgent.aexecute",

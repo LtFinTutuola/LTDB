@@ -92,7 +92,7 @@ def test_caso_a_supplier_code_no_match(db_session):
     brand = Brand(name="Test Brand")
     db_session.add(brand)
     db_session.commit()
-    bp = ArticleBlueprint(brand_id=brand.id, normalized_vendor_code="123##", article_name="Shirt", description="", extended_description="", tags=[])
+    bp = ArticleBlueprint(brand_id=brand.id, normalized_vendor_code="123#####", article_name="Shirt", description="", extended_description="", tags=[])
     db_session.add(bp)
     db_session.commit()
     

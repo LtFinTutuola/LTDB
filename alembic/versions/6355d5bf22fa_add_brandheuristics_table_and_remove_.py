@@ -35,10 +35,7 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_brand_heuristics_id'), ['id'], unique=False)
 
     with op.batch_alter_table('article_blueprints', schema=None) as batch_op:
-        batch_op.alter_column('dimensions',
-               existing_type=sa.TEXT(),
-               type_=sa.String(),
-               existing_nullable=True)
+        batch_op.add_column(sa.Column('dimensions', sa.String(), nullable=True))
 
     with op.batch_alter_table('brands', schema=None) as batch_op:
         batch_op.drop_column('brand_code_heuristic')
@@ -57,10 +54,7 @@ def downgrade() -> None:
         batch_op.add_column(sa.Column('brand_code_heuristic', sa.VARCHAR(), nullable=True))
 
     with op.batch_alter_table('article_blueprints', schema=None) as batch_op:
-        batch_op.alter_column('dimensions',
-               existing_type=sa.String(),
-               type_=sa.TEXT(),
-               existing_nullable=True)
+        batch_op.drop_column('dimensions')
 
     with op.batch_alter_table('brand_heuristics', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_brand_heuristics_id'))

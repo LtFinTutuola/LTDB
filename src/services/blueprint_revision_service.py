@@ -74,7 +74,7 @@ def _normalize_vendor_code(raw_code: str, compiled_regex: Optional[re.Pattern]) 
     if not match:
         return clean, False
     if "color_code" in match.groupdict() and match.group("color_code") is not None:
-        norm = clean[:match.start("color_code")] + "#" + clean[match.end("color_code"):]
+        norm = clean[:match.start("color_code")] + "#" * (match.end("color_code") - match.start("color_code")) + clean[match.end("color_code"):]
         return norm, True
     return clean, True
 

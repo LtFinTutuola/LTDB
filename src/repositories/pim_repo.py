@@ -1,7 +1,7 @@
 from typing import Optional
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
-from src.models.pim import ArticleBlueprint, Brand, Category, BrandHeuristic
+from src.models.pim import ArticleBlueprint, Brand, Category, BrandHeuristic, HeuristicMode
 from src.schemas.pim import ArticleBlueprintCreate, ArticleBlueprintResponse  # placeholder for update schema
 from src.repositories.base import BaseRepository
 from src.core.logger import get_logger
@@ -71,6 +71,39 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
             )
             .first()
         )
+
+    def get_brand_cohort(self, db: Session, brand_id: str) -> list[dict]:
+        """
+        Coorte completa dei blueprint di un brand (con varianti cromatiche e scheda prodotto),
+        usata dall'Oracolo di Equivalenza e dalla riconciliazione retroattiva delle euristiche.
+        """
+        from sqlalchemy.orm import selectinload
+        blueprints = (
+            db.query(ArticleBlueprint)
+            .options(selectinload(ArticleBlueprint.articles), joinedload(ArticleBlueprint.category))
+            .filter(ArticleBlueprint.brand_id == brand_id)
+            .all()
+        )
+        cohort = []
+        for bp in blueprints:
+            cohort.append({
+                "id": str(bp.id),
+                "normalized_vendor_code": bp.normalized_vendor_code,
+                "article_name": bp.article_name,
+                "description": bp.description,
+                "extended_description": bp.extended_description,
+                "dimensions": bp.dimensions,
+                "tags": list(bp.tags or []),
+                "materials": list(bp.materials or []),
+                "category_id": str(bp.category_id) if bp.category_id else None,
+                "category_name": bp.category.name if bp.category else None,
+                "embedding": bp.embedding,
+                "variants": [
+                    {"supplier_code": a.supplier_code, "colors": list(a.colors or [])}
+                    for a in bp.articles
+                ],
+            })
+        return cohort
 
     def get_all_embeddings(self, db: Session) -> list[dict]:
         """
@@ -218,7 +251,7 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
             for bp in wildcard_bps:
                 bp_code = (bp.normalized_vendor_code or "").strip()
                 # Construct regex replacing '#' with wildcard and '*' with literal '*'
-                regex_pattern = "^" + re.escape(bp_code).replace(r"\#", r"[a-zA-Z0-9]*") + "$"
+                regex_pattern = "^" + re.sub(r"(?:\\#)+", r"[a-zA-Z0-9]+", re.escape(bp_code)) + "$"
                 bp_base = bp_code.replace("#", "").strip("-* ")
                 bp_base_alnum = re.sub(r"[^a-zA-Z0-9]", "", bp_base).lower()
 
@@ -559,9 +592,33 @@ class CategoryRepository:
 
 
 class BrandHeuristicRepository:
-    def create_heuristic(self, db: Session, brand_id: str, pattern: str, explanation: str = None, commit_changes: bool = True) -> BrandHeuristic:
+    @staticmethod
+    def _derive_mode(pattern: str) -> str:
+        if not pattern:
+            return HeuristicMode.PENDING_COHORT
+        return HeuristicMode.COLOR_MASKED if "(?P<color_code>" in pattern else HeuristicMode.COLOR_AGNOSTIC
+
+    def create_heuristic(
+        self,
+        db: Session,
+        brand_id: str,
+        pattern: str = "",
+        explanation: str = None,
+        commit_changes: bool = True,
+        heuristic_mode: Optional[str] = None,
+        heuristic_confirmed: Optional[bool] = None,
+        heuristic_metadata: Optional[dict] = None,
+    ) -> BrandHeuristic:
         logger.log_execution("pim_repo", "create_brand_heuristic", "ok", brand_id=brand_id, pattern=pattern)
-        heuristic = BrandHeuristic(brand_id=brand_id, pattern=pattern, explanation=explanation)
+        mode = heuristic_mode or self._derive_mode(pattern)
+        heuristic = BrandHeuristic(
+            brand_id=brand_id,
+            pattern=pattern or "",
+            explanation=explanation,
+            heuristic_mode=mode,
+            heuristic_confirmed=bool(heuristic_confirmed) if heuristic_confirmed is not None else mode != HeuristicMode.PENDING_COHORT,
+            heuristic_metadata=heuristic_metadata,
+        )
         db.add(heuristic)
         if commit_changes:
             db.commit()
@@ -574,23 +631,43 @@ class BrandHeuristicRepository:
         self,
         db: Session,
         heuristic_id: str,
-        pattern: str,
+        pattern: Optional[str] = None,
         explanation: Optional[str] = None,
         commit_changes: bool = True,
+        heuristic_mode: Optional[str] = None,
+        heuristic_confirmed: Optional[bool] = None,
+        heuristic_metadata: Optional[dict] = None,
     ) -> Optional[BrandHeuristic]:
         heuristic = db.query(BrandHeuristic).filter(BrandHeuristic.id == heuristic_id).first()
         if not heuristic:
             return None
-        heuristic.pattern = pattern
+        if pattern is not None:
+            heuristic.pattern = pattern
+            if heuristic_mode is None:
+                heuristic.heuristic_mode = self._derive_mode(pattern)
+                heuristic.heuristic_confirmed = heuristic.heuristic_mode != HeuristicMode.PENDING_COHORT
         if explanation is not None:
             heuristic.explanation = explanation
+        if heuristic_mode is not None:
+            heuristic.heuristic_mode = heuristic_mode
+        if heuristic_confirmed is not None:
+            heuristic.heuristic_confirmed = heuristic_confirmed
+        if heuristic_metadata is not None:
+            heuristic.heuristic_metadata = heuristic_metadata
         if commit_changes:
             db.commit()
             db.refresh(heuristic)
         else:
             db.flush()
-        logger.log_execution("pim_repo", "update_brand_heuristic", "ok", heuristic_id=heuristic_id, pattern=pattern)
+        logger.log_execution("pim_repo", "update_brand_heuristic", "ok", heuristic_id=heuristic_id, pattern=heuristic.pattern)
         return heuristic
+
+    def get_active_heuristic(self, db: Session, brand_id: str) -> Optional[BrandHeuristic]:
+        """Euristica attiva del brand = la più recente."""
+        heuristics = self.get_heuristics_by_brand(db, brand_id)
+        if not heuristics:
+            return None
+        return sorted(heuristics, key=lambda h: h.created_at or 0)[-1] if all(h.created_at for h in heuristics) else heuristics[-1]
 
     def get_heuristics_by_brand(self, db: Session, brand_id: str) -> list[BrandHeuristic]:
         return db.query(BrandHeuristic).filter(BrandHeuristic.brand_id == brand_id).all()

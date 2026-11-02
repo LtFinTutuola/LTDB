@@ -108,6 +108,8 @@ function _render() {
         <div class="detail-panel__content" id="staging-content" style="flex:1;overflow-y:auto;">
     `;
 
+    html += _buildHeuristicReconciliationsSection(_stagingData?.heuristic_reconciliations || []);
+
     if (grouped.size === 0) {
         html += `<div class="empty-state"><span class="empty-state__icon">📋</span><p class="empty-state__text">Nessun elemento da rivedere</p></div>`;
     } else {
@@ -126,13 +128,19 @@ function _render() {
 
     html += '</div>';
 
+    const pendingHitlCount = (_stagingData?.heuristic_reconciliations || []).filter(
+        r => r.requires_confirmation && r.status === 'PENDING_USER_CONFIRMATION'
+    ).length;
     const hasChanges = _operationsQueue.length > 0;
-    const btnText = hasChanges ? 'Applica modifiche' : '✅ Conferma e importa';
+    const btnText = hasChanges
+        ? 'Applica modifiche'
+        : (pendingHitlCount > 0 ? `⚠️ Conferma varianti (${pendingHitlCount} in attesa)` : '✅ Conferma e importa');
     const btnClass = hasChanges ? 'btn-apply-changes' : 'btn-confirm-import';
+    const confirmDisabledAttr = (!hasChanges && pendingHitlCount > 0) ? 'disabled title="Conferma o rifiuta prima le proposte di revisione della maschera"' : '';
 
     html += `
         <div class="detail-panel__footer" style="padding: var(--space-md) var(--space-lg); display: flex; justify-content: flex-end;">
-            <button class="${btnClass} primary-btn" style="padding: 10px 20px; border-radius: var(--radius-pill); border: none; font-weight: 600; cursor: pointer; background: ${hasChanges ? 'var(--warning)' : 'var(--success)'}; color: #fff;">${btnText}</button>
+            <button class="${btnClass} primary-btn" ${confirmDisabledAttr} style="padding: 10px 20px; border-radius: var(--radius-pill); border: none; font-weight: 600; cursor: ${(!hasChanges && pendingHitlCount > 0) ? 'not-allowed' : 'pointer'}; opacity: ${(!hasChanges && pendingHitlCount > 0) ? '0.6' : '1'}; background: ${hasChanges ? 'var(--warning)' : 'var(--success)'}; color: #fff;">${btnText}</button>
         </div>
     `;
 
@@ -159,6 +167,13 @@ function _render() {
 
     const confirmBtn = panel.querySelector('.btn-confirm-import');
     if (confirmBtn) confirmBtn.addEventListener('click', _handleConfirm);
+
+    panel.querySelectorAll('.btn-hitl-confirm').forEach(btn => {
+        btn.addEventListener('click', () => _handleHeuristicDecision(btn.dataset.recId, 'confirm_heuristic_reconciliation'));
+    });
+    panel.querySelectorAll('.btn-hitl-reject').forEach(btn => {
+        btn.addEventListener('click', () => _handleHeuristicDecision(btn.dataset.recId, 'reject_heuristic_reconciliation'));
+    });
 
     _attachListeners();
 
@@ -1308,3 +1323,88 @@ async function _handleConfirm() {
         if (btn) btn.disabled = false;
     }
 }
+
+function _buildHeuristicReconciliationsSection(reconciliations) {
+    const actionable = (reconciliations || []).filter(r => r && r.requires_confirmation);
+    if (actionable.length === 0) return '';
+
+    let html = `<div class="hitl-reconciliations-box" style="margin: 12px 16px; display: flex; flex-direction: column; gap: 12px;">`;
+    for (const rec of actionable) {
+        const recId = _esc(rec.reconciliation_id || '');
+        const status = rec.status || 'PENDING_USER_CONFIRMATION';
+        const prop = rec.proposed_heuristic_update || {};
+        const incomingHtml = (rec.incoming_items || []).map(it => {
+            const cols = (it.colors || []).join(', ');
+            return `<li><strong>${_esc(it.vendor_code || '')}</strong> — ${_esc(it.article_name || '')} ${cols ? `(${_esc(cols)})` : ''}</li>`;
+        }).join('');
+
+        const dbBpsHtml = (rec.matched_db_blueprints || []).map(bp => {
+            const vars = (bp.variants || []).map(v => {
+                const cStr = (v.colors || []).join(', ');
+                return `<span style="display:inline-block;margin-right:8px;padding:2px 6px;background:rgba(0,0,0,0.05);border-radius:4px;font-size:12px;">${_esc(v.supplier_code || '')}${cStr ? ` (${_esc(cStr)})` : ''}</span>`;
+            }).join('');
+            return `
+                <div style="padding:8px;border:1px solid var(--border-color, #ddd);border-radius:6px;margin-top:6px;">
+                    <div style="font-weight:600;">${_esc(bp.article_name || 'Modello a catalogo')}</div>
+                    <div style="font-size:12px;color:var(--text-muted);">Codice modello: <code>${_esc(bp.normalized_vendor_code || '')}</code> → <code>${_esc(bp.new_normalized_vendor_code || prop.new_mask_preview || '')}</code></div>
+                    <div style="margin-top:4px;">Varianti in DB: ${vars || 'nessuna'}</div>
+                </div>
+            `;
+        }).join('');
+
+        let statusBadge = '';
+        let actionsHtml = '';
+        if (status === 'PENDING_USER_CONFIRMATION') {
+            statusBadge = `<span style="background:var(--warning, #d97706);color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">In attesa di conferma</span>`;
+            actionsHtml = `
+                <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                    <button type="button" class="btn-hitl-confirm" data-rec-id="${recId}" style="padding:7px 14px;border-radius:6px;border:none;background:var(--success, #16a34a);color:#fff;font-weight:600;cursor:pointer;">
+                        ✅ Sì, sono varianti cromatiche (aggiorna maschera)
+                    </button>
+                    <button type="button" class="btn-hitl-reject" data-rec-id="${recId}" style="padding:7px 14px;border-radius:6px;border:1px solid var(--danger, #dc2626);background:transparent;color:var(--danger, #dc2626);font-weight:600;cursor:pointer;">
+                        ❌ No, sono articoli diversi (mantieni separati)
+                    </button>
+                </div>
+            `;
+        } else if (status === 'ACCEPTED') {
+            statusBadge = `<span style="background:var(--success, #16a34a);color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">Confermato (varianti cromatiche)</span>`;
+        } else if (status === 'REJECTED') {
+            statusBadge = `<span style="background:var(--danger, #dc2626);color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">Rifiutato (articoli separati)</span>`;
+        }
+
+        html += `
+            <div class="hitl-reconciliation-card" data-rec-id="${recId}" style="padding:14px;border:2px solid var(--warning, #d97706);border-radius:10px;background:rgba(245, 158, 11, 0.06);">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                    <strong>Revisione retroattiva della maschera codice fornitore</strong>
+                    ${statusBadge}
+                </div>
+                <p style="margin:8px 0;font-size:13px;">
+                    Gli articoli individuati nel database sono effettivamente <strong>varianti cromatiche</strong> dell'articolo in ingresso e non articoli completamente diversi?
+                </p>
+                <div style="font-size:13px;">
+                    <div><strong>Articolo/i in ingresso:</strong></div>
+                    <ul style="margin:4px 0 8px 18px;padding:0;">${incomingHtml}</ul>
+                    <div><strong>Articoli individuati nel database:</strong></div>
+                    ${dbBpsHtml}
+                </div>
+                ${actionsHtml}
+            </div>
+        `;
+    }
+    html += `</div>`;
+    return html;
+}
+
+async function _handleHeuristicDecision(reconciliationId, opName) {
+    if (!reconciliationId) return;
+    try {
+        const ops = [..._operationsQueue, { op: opName, reconciliation_id: reconciliationId }];
+        const result = await api.submitRevisions(_jobId, ops);
+        _operationsQueue = [];
+        if (result?.data) _stagingData = result.data;
+        _render();
+    } catch (err) {
+        addMessage(`❌ Operazione fallita: ${err.message}`, 'error');
+    }
+}
+

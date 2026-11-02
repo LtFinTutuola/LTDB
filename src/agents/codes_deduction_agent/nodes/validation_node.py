@@ -118,7 +118,7 @@ def validation_node(state: CodesDeductionGraphState) -> dict:
         match = compiled.search(code)
         if match:
             if "color_code" in match.groupdict() and match.group("color_code") is not None:
-                normalized_code = code[:match.start("color_code")] + "#" + code[match.end("color_code"):]
+                normalized_code = code[:match.start("color_code")] + "#" * (match.end("color_code") - match.start("color_code")) + code[match.end("color_code"):]
             else:
                 normalized_code = code
             successes.append({"raw": code, "normalized": normalized_code})
@@ -133,7 +133,7 @@ def validation_node(state: CodesDeductionGraphState) -> dict:
                 m = compiled.search(c)
                 if m:
                     if "color_code" in m.groupdict() and m.group("color_code") is not None:
-                        norm_map[c] = c[:m.start("color_code")] + "#" + c[m.end("color_code"):]
+                        norm_map[c] = c[:m.start("color_code")] + "#" * (m.end("color_code") - m.start("color_code")) + c[m.end("color_code"):]
                     else:
                         norm_map[c] = c
                 else:

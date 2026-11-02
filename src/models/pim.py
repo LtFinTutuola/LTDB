@@ -6,12 +6,26 @@ from src.models.base import Base, UUIDMixin, TimestampMixin
 from src.models.types import LowercaseJSONList
 
 
+class HeuristicMode:
+    """Modalità operative della euristica di normalizzazione di un brand."""
+    PENDING_COHORT = "PENDING_COHORT"
+    COLOR_MASKED = "COLOR_MASKED"
+    COLOR_AGNOSTIC = "COLOR_AGNOSTIC"
+    UNRELIABLE_SKU = "UNRELIABLE_SKU"
+
+    ALL = (PENDING_COHORT, COLOR_MASKED, COLOR_AGNOSTIC, UNRELIABLE_SKU)
+
+
 class BrandHeuristic(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "brand_heuristics"
 
     brand_id: Mapped[str] = mapped_column(String(36), ForeignKey("brands.id", ondelete="CASCADE"), nullable=False)
-    pattern: Mapped[str] = mapped_column(String, nullable=False)
+    pattern: Mapped[str] = mapped_column(String, nullable=False, default="")
     explanation: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    heuristic_mode: Mapped[str] = mapped_column(String, nullable=False, default=HeuristicMode.PENDING_COHORT, server_default=HeuristicMode.PENDING_COHORT)
+    heuristic_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    # {"rules": [...], "negative_constraints": [[codeA, codeB], ...]}
+    heuristic_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     # Relationships
     brand: Mapped["Brand"] = relationship("Brand", back_populates="heuristics")

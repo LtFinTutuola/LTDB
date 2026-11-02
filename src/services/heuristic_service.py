@@ -24,6 +24,7 @@ from src.models.wms import Article
 from src.models.staging import JobStatus, JobType
 from src.repositories import staging_repo
 from src.core.logger import get_logger
+from src.utils.vendor_code_normalizer import normalize_with_regex
 
 logger = get_logger()
 
@@ -122,23 +123,14 @@ async def process_heuristic(job_id: str, brand_id: str, file_path: str) -> None:
 
             # Group the extracted items using the deduced regex
             regex_str = deduction_res.get("regex", "")
-            compiled_regex = re.compile(regex_str) if regex_str else None
             
             grouped_items = {}
             for item in extracted_items:
                 raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
                 raw_code = raw_code.strip().upper()
                 
-                key = raw_code
-                if compiled_regex:
-                    match = compiled_regex.search(raw_code)
-                    if match and "color_code" in match.groupdict() and match.group("color_code") is not None:
-                        key = raw_code[:match.start("color_code")] + "#" + raw_code[match.end("color_code"):]
-                    else:
-                        # If regex is provided but doesn't match color_code, it might be a valid non-colored variant
-                        # but we fallback to raw_code to be safe.
-                        pass
-                        
+                key = normalize_with_regex(raw_code, regex_str) or raw_code
+
                 if key not in grouped_items:
                     grouped_items[key] = []
                 # Ensure the item is serializable (it's typically a dict from extraction)
@@ -256,63 +248,6 @@ def confirm_heuristic(db: Session, job_id: str) -> None:
                          brand_id=target_brand_id, job_id=job_id)
 
 
-async def process_recalculation(brand_id: str, vendor_codes_corpus: List[str], previous_explanation: Optional[str]) -> None:
-    """
-    Background task: recalculates a brand's heuristic using the full historical
-    vendor code corpus plus new breaking codes.
-    Stages the result for operator confirmation.
-    """
-    with SessionLocal() as db:
-        try:
-            logger.log_execution("heuristic_service", "process_recalculation_start", "ok",
-                                 brand_id=brand_id, corpus_size=len(vendor_codes_corpus))
-
-            brand_obj = db.query(Brand).filter(Brand.id == brand_id).first()
-            if not brand_obj:
-                raise AgentException(f"Brand ID '{brand_id}' not found for recalculation.")
-
-            # Create staging job for the recalculation
-            job_id = str(uuid.uuid4())
-            staging_repo.create_job(
-                db, job_id=job_id,
-                job_type=JobType.HEURISTIC_DEDUCTION.value,
-            )
-
-            deduction_agent = CodesDeductionAgent()
-            deduction_res = await deduction_agent.aexecute({
-                "vendor_codes": vendor_codes_corpus,
-                "brand_name": brand_obj.name,
-                "previous_explanation": previous_explanation,
-            })
-
-            result = {
-                "regex": deduction_res["regex"],
-                "explanation": deduction_res["explanation"],
-                "examples": deduction_res["examples"],
-                "brand_id": brand_id,
-                "vendor_codes_analyzed": len(vendor_codes_corpus),
-                "is_recalculation": True,
-            }
-            staging_repo.update_job(
-                db, job_id=job_id,
-                status=JobStatus.COMPLETED.value,
-                data=result
-            )
-            logger.log_execution("heuristic_service", "process_recalculation_success", "ok",
-                                 brand_id=brand_id, job_id=job_id)
-
-        except AgentException as exc:
-            logger.log_execution("heuristic_service", "recalculation_exception", "err",
-                                 brand_id=brand_id, exc=exc)
-            if 'job_id' in dir():
-                staging_repo.update_job(
-                    db, job_id=job_id,
-                    status=JobStatus.ERROR.value,
-                    data={"error": str(exc), "output": exc.output},
-                )
-            raise
-
-
 def _extract_vendor_codes(items: list) -> List[str]:
     """Extract and deduplicate vendor codes from extracted items."""
     codes = []
@@ -324,80 +259,3 @@ def _extract_vendor_codes(items: list) -> List[str]:
             codes.append(code)
             seen.add(code)
     return codes
-
-
-async def process_single_shot_deduction(brand_id: str, raw_vendor_code: str, official_name: str) -> Optional[str]:
-    """
-    Background task: uses LLM to deduce the color-coding regex for a specific unmatched vendor code,
-    based on its official web name. Instantly creates a BrandHeuristic.
-    """
-    with SessionLocal() as db:
-        try:
-            logger.log_execution("heuristic_service", "single_shot_start", "ok", brand_id=brand_id, raw_code=raw_vendor_code)
-            brand_obj = db.query(Brand).filter(Brand.id == brand_id).first()
-            if not brand_obj:
-                return None
-
-            from src.agents.llm_client import LLMClient
-            import json
-            
-            client = LLMClient()
-            system_prompt = (
-                "Sei un esperto di codifiche di articoli per magazzini. "
-                "Il tuo scopo è analizzare un codice fornitore (vendor code) e il nome/descrizione ufficiale del prodotto "
-                "per capire se il codice contiene un'indicazione sul colore o sulla variante cromatica."
-            )
-            prompt = (
-                f"Sto processando il vendor code '{raw_vendor_code}' del brand '{brand_obj.name}'.\n"
-                f"Il nome/descrizione ufficiale trovato sul web per questo articolo è: '{official_name}'.\n\n"
-                f"Analizza queste due informazioni ed effettua una ricerca sul web se necessario, per rispondere alla seguente domanda:\n"
-                f"Ci sono dei caratteri all'interno del vendor code che indicano in modo specifico il colore o la variante cromatica del prodotto?\n\n"
-                f"Deduci SEMPRE una Regular Expression compatibile con Python (re) che validi l'intera struttura morfologica del codice fornitore (è consigliato usare `^` e `$`).\n"
-                f"1. Se C'E' una variante colore, il regex DEVE contenere un named capture group `(?P<color_code>...)` che catturi ESATTAMENTE E SOLO la parte di codice indicante il colore.\n"
-                f"2. Se NON c'è alcuna variante colore (il codice è univoco), il regex DEVE validare la struttura del codice ma SENZA alcun gruppo `color_code`.\n"
-                f"3. Usa classi generiche (es. `[A-Z]+[0-9]+`) piuttosto che lunghezze fisse strette (es. `[A-Z]{2}[0-9]{5}`) per la struttura base, al fine di evitare overfitting su questo singolo esempio.\n\n"
-                f"Esempio con colore: se il codice è 'ABC-123' e '123' indica il colore, la regex sarà `^(?P<model_code>[A-Z]+)-(?P<color_code>[0-9]+)$`.\n"
-                f"Esempio senza colore: se il codice è univoco 'XYZ987', la regex sarà `^[A-Z]+[0-9]+$`.\n\n"
-                f"RISPONDI ESATTAMENTE CON UN JSON CON IL SEGUENTE FORMATO E NESSUN ALTRO TESTO (non formattare come markdown):\n"
-                f"{{\n"
-                f"  \"has_color\": true o false,\n"
-                f"  \"regex\": \"la_regex_dedotta_strutturale\",\n"
-                f"  \"explanation\": \"Fornisci una spiegazione ASTRATTA e GENERICA della regola, valida per l'intero Brand. È SEVERAMENTE VIETATO menzionare il codice specifico o il colore specifico forniti in input. Descrivi solo la struttura generale.\"\n"
-                f"}}"
-            )
-            
-            raw_text = await client.call(
-                model_name="gemini-3.1-flash-lite",
-                system_prompt=system_prompt,
-                prompt=prompt,
-                pipeline_stage="Single Shot Deduction",
-                temperature=0.0
-            )
-            
-            match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-            if match:
-                res_dict = json.loads(match.group(0))
-                
-                has_color = res_dict.get("has_color", False)
-                pattern = res_dict.get("regex", "")
-                explanation = res_dict.get("explanation", "Spiegazione non fornita.")
-                
-                # If there's no color and pattern is missing, fallback to raw structural validation
-                if not has_color and not pattern:
-                    pattern = r"^[A-Z0-9\-\.\_]+$"
-                    explanation = "I vendor code di questo brand sono univoci per variante e non contengono suffissi o segmenti dedicati al colore."
-
-                log_event = "single_shot_success" if has_color else "single_shot_no_color"
-
-                from src.repositories.pim_repo import heuristic_repo
-                heuristic_repo.create_heuristic(db, brand_id=brand_id, pattern=pattern, explanation=explanation)
-                logger.log_execution("heuristic_service", log_event, "ok", brand_id=brand_id, pattern=pattern)
-                return pattern
-            else:
-                logger.log_execution("heuristic_service", "single_shot_failed_parse", "err", brand_id=brand_id, text=raw_text)
-
-        except Exception as exc:
-            logger.log_execution("heuristic_service", "single_shot_exception", "err", brand_id=brand_id, exc=str(exc))
-
-    return None
-

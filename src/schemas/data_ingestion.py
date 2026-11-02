@@ -137,7 +137,8 @@ class RevisionOperation(BaseModel):
     """A single revision operation to apply to staged data."""
     op: Literal[
         "update_item", "update_blueprint", "reassign_item",
-        "create_blueprint", "merge_blueprints", "split_blueprint", "delete_item"
+        "create_blueprint", "merge_blueprints", "split_blueprint", "delete_item",
+        "confirm_heuristic_reconciliation", "reject_heuristic_reconciliation",
     ]
     # Conditionally required fields (validated in service layer based on op type):
     item_id: Optional[str] = None
@@ -149,6 +150,7 @@ class RevisionOperation(BaseModel):
     source_blueprint_ids: Optional[List[str]] = None
     source_blueprint_id: Optional[str] = None
     blueprint_overrides: Optional[dict] = None
+    reconciliation_id: Optional[str] = None
 
 
 class StagingRevisionRequest(BaseModel):

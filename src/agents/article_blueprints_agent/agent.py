@@ -7,6 +7,7 @@ from src.agents.article_blueprints_agent.nodes.enrich_blueprints_node import enr
 from src.agents.article_blueprints_agent.nodes.format_output_node import format_output_node
 from src.agents.article_blueprints_agent.nodes.web_search_blueprints_node import web_search_blueprints_node
 from src.agents.article_blueprints_agent.nodes.color_photo_search_node import color_photo_search_node
+from src.agents.article_blueprints_agent.nodes.oracle_and_induction_node import oracle_and_induction_node
 
 
 def _route_after_start(state: BlueprintsGraphState) -> str:
@@ -21,6 +22,7 @@ def _build_graph() -> StateGraph:
     graph.add_node("web_search_blueprints_node", web_search_blueprints_node)
     graph.add_node("synthesize_blueprints_node", synthesize_blueprints_node)
     graph.add_node("enrich_blueprints_node", enrich_blueprints_node)
+    graph.add_node("oracle_and_induction_node", oracle_and_induction_node)
     graph.add_node("color_photo_search_node", color_photo_search_node)
     graph.add_node("format_output_node", format_output_node)
 
@@ -31,7 +33,8 @@ def _build_graph() -> StateGraph:
     
     graph.add_edge("web_search_blueprints_node", "synthesize_blueprints_node")
     graph.add_edge("synthesize_blueprints_node", "enrich_blueprints_node")
-    graph.add_edge("enrich_blueprints_node", "color_photo_search_node")
+    graph.add_edge("enrich_blueprints_node", "oracle_and_induction_node")
+    graph.add_edge("oracle_and_induction_node", "color_photo_search_node")
     
     graph.add_edge("color_photo_search_node", "format_output_node")
     graph.add_edge("format_output_node", END)
@@ -53,8 +56,11 @@ class ArticleBlueprintsAgent(BaseAgent):
                 new_blueprints=input_data.get("new_blueprints", []),
                 photo_only_items=input_data.get("photo_only_items", []),
                 categories=input_data.get("categories", {}),
+                brand_id=input_data.get("brand_id"),
                 brand_name=input_data.get("brand_name", ""),
                 resolved_blueprints=input_data.get("resolved_blueprints", {}),
+                brand_cohort=input_data.get("brand_cohort", []),
+                brand_heuristic=input_data.get("brand_heuristic", {}),
             )
         except Exception as exc:
             raise AgentException(
@@ -78,10 +84,12 @@ class ArticleBlueprintsAgent(BaseAgent):
         output_blueprints = final_state.get("output_blueprints", []) if isinstance(final_state, dict) else getattr(final_state, "output_blueprints", [])
         photo_proposals = final_state.get("photo_proposals", []) if isinstance(final_state, dict) else getattr(final_state, "photo_proposals", [])
         warnings = final_state.get("warnings", []) if isinstance(final_state, dict) else getattr(final_state, "warnings", [])
+        heuristic_reconciliations = final_state.get("heuristic_reconciliations", []) if isinstance(final_state, dict) else getattr(final_state, "heuristic_reconciliations", [])
 
         return {
             "items": output_items,
             "blueprints": output_blueprints,
             "photo_proposals": photo_proposals,
             "warnings": warnings,
+            "heuristic_reconciliations": heuristic_reconciliations,
         }

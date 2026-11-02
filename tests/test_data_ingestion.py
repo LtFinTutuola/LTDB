@@ -881,7 +881,7 @@ def test_resolve_items_with_photos_existing_blueprint_category_and_subcategory(d
 
     bp = ArticleBlueprint(
         brand_id=brand.id,
-        normalized_vendor_code="ART123##",
+        normalized_vendor_code="ART123#####",
         article_name="Bauletto Monogram",
         description="Borsa a bauletto",
         extended_description="Descrizione estesa",

@@ -112,6 +112,8 @@ def _dispatch_operation(
         "merge_blueprints": _apply_merge_blueprints,
         "split_blueprint": _apply_split_blueprint,
         "delete_item": _apply_delete_item,
+        "confirm_heuristic_reconciliation": _apply_confirm_heuristic_reconciliation,
+        "reject_heuristic_reconciliation": _apply_reject_heuristic_reconciliation,
     }
     handler = handlers.get(op.op)
     if not handler:
@@ -459,6 +461,101 @@ def _apply_delete_item(
     # Orphan cleanup
     if bp_id:
         _orphan_cleanup(staging_data, bp_id)
+
+
+def _find_reconciliation(staging_data: dict, rec_id: str, op_index: int, op_name: str) -> dict:
+    for rec in staging_data.get("heuristic_reconciliations", []) or []:
+        if rec.get("reconciliation_id") == rec_id:
+            return rec
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Operation {op_index} ({op_name}): reconciliation '{rec_id}' not found in staging data"
+    )
+
+
+def _apply_confirm_heuristic_reconciliation(
+    db: Session, staging_data: dict, op: RevisionOperation,
+    op_index: int, generated_ids: Dict[int, str],
+) -> None:
+    """Confirm a pending heuristic reconciliation proposal (HITL approval)."""
+    if not op.reconciliation_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Operation {op_index} (confirm_heuristic_reconciliation): 'reconciliation_id' is required"
+        )
+    rec = _find_reconciliation(staging_data, op.reconciliation_id, op_index, "confirm_heuristic_reconciliation")
+    rec["status"] = "ACCEPTED"
+
+    from src.utils import vendor_code_normalizer as vcn
+    rule = rec.get("rule_update")
+    target_bp_id = rec.get("merge_target_blueprint_id")
+    staging_bp_ids = set(rec.get("staging_blueprint_ids") or [])
+    incoming_item_ids = {it.get("item_id") for it in (rec.get("incoming_items") or []) if it.get("item_id")}
+
+    if target_bp_id:
+        # Ensure target DB blueprint is present in staging_data["blueprints"] with is_new=False
+        _resolve_blueprint_ref(target_bp_id, generated_ids, staging_data, db, op_index, "confirm_heuristic_reconciliation")
+
+    for item in staging_data.get("items", []):
+        if item.get("article_blueprint_id") in staging_bp_ids or item.get("item_id") in incoming_item_ids:
+            raw_code = item.get("vendor_code") or ""
+            if rule:
+                masked = vcn.apply_rule(raw_code, rule)
+                if masked:
+                    item["normalized_vendor_code"] = masked
+            if target_bp_id:
+                item["article_blueprint_id"] = target_bp_id
+
+    for old_bp_id in staging_bp_ids:
+        if target_bp_id and old_bp_id != target_bp_id:
+            _orphan_cleanup(staging_data, old_bp_id)
+
+
+def _apply_reject_heuristic_reconciliation(
+    db: Session, staging_data: dict, op: RevisionOperation,
+    op_index: int, generated_ids: Dict[int, str],
+) -> None:
+    """Reject a pending heuristic reconciliation proposal (HITL rejection: keep separate blueprint & record negative constraint)."""
+    if not op.reconciliation_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Operation {op_index} (reject_heuristic_reconciliation): 'reconciliation_id' is required"
+        )
+    rec = _find_reconciliation(staging_data, op.reconciliation_id, op_index, "reject_heuristic_reconciliation")
+    rec["status"] = "REJECTED"
+
+    from src.utils import vendor_code_normalizer as vcn
+    fallback_norm = rec.get("fallback_normalized_code")
+    staging_bp_ids = set(rec.get("staging_blueprint_ids") or [])
+    incoming_item_ids = {it.get("item_id") for it in (rec.get("incoming_items") or []) if it.get("item_id")}
+
+    for item in staging_data.get("items", []):
+        if item.get("article_blueprint_id") in staging_bp_ids or item.get("item_id") in incoming_item_ids:
+            if fallback_norm:
+                item["normalized_vendor_code"] = fallback_norm
+            else:
+                item["normalized_vendor_code"] = vcn.clean_code(item.get("vendor_code")) or item.get("normalized_vendor_code")
+
+    # Build negative pairs (Q3 must-split constraint) between incoming codes and matched DB blueprint variant codes
+    inc_codes = {
+        vcn.clean_code(it.get("vendor_code"))
+        for it in (rec.get("incoming_items") or [])
+        if vcn.clean_code(it.get("vendor_code"))
+    }
+    db_codes = {
+        vcn.clean_code(v.get("supplier_code"))
+        for bp in (rec.get("matched_db_blueprints") or [])
+        for v in (bp.get("variants") or [])
+        if vcn.clean_code(v.get("supplier_code"))
+    }
+    neg_pairs = list(rec.get("negative_pairs") or [])
+    for ic in sorted(inc_codes):
+        for dc in sorted(db_codes):
+            if ic != dc:
+                pair = sorted([ic, dc])
+                if pair not in neg_pairs and pair[::-1] not in neg_pairs:
+                    neg_pairs.append(pair)
+    rec["negative_pairs"] = neg_pairs
 
 
 # ---------------------------------------------------------------------------
