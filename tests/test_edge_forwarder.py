@@ -28,7 +28,10 @@ from scripts.excel_agent.ltdb_forwarder import (
     save_daily_state,
     read_excel_rows,
     push_batch_to_ltdb,
-    run_cycle
+    run_cycle,
+    FALLBACK_EXCEL_PATHS,
+    get_candidate_excel_paths,
+    resolve_excel_path
 )
 
 
@@ -325,3 +328,81 @@ def test_run_cycle_delta_and_ack(mock_push, agent_dir):
     mock_push.reset_mock()
     run_cycle(agent_dir, runtime_cfg, local_cfg, logger, last_push_time=time.time())
     assert not mock_push.called
+
+
+def test_fallback_excel_paths_constants():
+    assert "K:\\Stat € A.xlsx" in FALLBACK_EXCEL_PATHS
+    assert "K:\\Stat € B.xlsx" in FALLBACK_EXCEL_PATHS
+
+
+def test_get_candidate_excel_paths():
+    # 1. Configured custom path
+    candidates = get_candidate_excel_paths({"excel_file_path": "C:\\Custom\\Path.xlsx"})
+    assert candidates == [
+        Path("C:\\Custom\\Path.xlsx"),
+        Path("K:\\Stat € A.xlsx"),
+        Path("K:\\Stat € B.xlsx"),
+    ]
+
+    # 2. Empty or missing config -> still returns fallback paths
+    candidates_empty = get_candidate_excel_paths({})
+    assert candidates_empty == [
+        Path("K:\\Stat € A.xlsx"),
+        Path("K:\\Stat € B.xlsx"),
+    ]
+
+    # 3. Deduplication if configured is already one of the fallbacks
+    candidates_dup = get_candidate_excel_paths({"excel_file_path": "K:\\Stat € A.xlsx"})
+    assert candidates_dup == [
+        Path("K:\\Stat € A.xlsx"),
+        Path("K:\\Stat € B.xlsx"),
+    ]
+
+
+def test_resolve_excel_path_fallback(tmp_path):
+    file_a = tmp_path / "Stat € A.xlsx"
+    file_b = tmp_path / "Stat € B.xlsx"
+
+    with patch("scripts.excel_agent.ltdb_forwarder.FALLBACK_EXCEL_PATHS", [str(file_a), str(file_b)]):
+        # Case 1: Neither exists
+        assert resolve_excel_path({}) is None
+
+        # Case 2: Only file_b exists and is modified today
+        file_b.write_text("dummy", encoding="utf-8")
+        assert resolve_excel_path({}) == file_b
+
+        # Case 3: file_a also exists and is modified today -> file_a prioritized over file_b
+        file_a.write_text("dummy", encoding="utf-8")
+        assert resolve_excel_path({}) == file_a
+
+
+@patch("scripts.excel_agent.ltdb_forwarder.push_batch_to_ltdb")
+def test_run_cycle_uses_fallback_path(mock_push, agent_dir, tmp_path):
+    logger = setup_logging(agent_dir)
+    local_cfg = load_local_config(agent_dir)
+    # Config points to non-existent file
+    runtime_cfg = {
+        "excel_file_path": str(tmp_path / "non_existent.xlsx"),
+        "start_row": 2,
+        "excel_code_column": "N"
+    }
+
+    fallback_file = tmp_path / "Stat € B.xlsx"
+    wb = openpyxl.Workbook()
+    sheet = wb.active
+    sheet.cell(row=2, column=1, value=150.0)
+    sheet.cell(row=2, column=2, value=120.0)
+    wb.save(str(fallback_file))
+    wb.close()
+
+    mock_push.return_value = [2]
+
+    with patch("scripts.excel_agent.ltdb_forwarder.FALLBACK_EXCEL_PATHS", ["K:\\Stat € A.xlsx", str(fallback_file)]):
+        # run_cycle should ignore non_existent and K:\Stat € A.xlsx, and read from fallback_file
+        last_push = run_cycle(agent_dir, runtime_cfg, local_cfg, logger, last_push_time=0.0)
+        assert mock_push.called
+        sent_rows = mock_push.call_args[1]["rows"]
+        assert len(sent_rows) == 1
+        assert sent_rows[0]["starting_price"] == 150.0
+        assert sent_rows[0]["selling_price"] == 120.0
+

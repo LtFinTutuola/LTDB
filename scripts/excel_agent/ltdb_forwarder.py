@@ -27,6 +27,12 @@ except ImportError:
     openpyxl = None
 
 
+FALLBACK_EXCEL_PATHS = [
+    "K:\\Stat € A.xlsx",
+    "K:\\Stat € B.xlsx",
+]
+
+
 def setup_logging(base_dir: Path) -> logging.Logger:
     """Configures rotating daily file and console logging."""
     logs_dir = base_dir / "logs"
@@ -139,12 +145,18 @@ def cleanup_old_files(base_dir: Path, retention_days: int, logger: logging.Logge
                 pass
 
 
-def is_file_eligible_for_today(file_path: Path, logger: logging.Logger) -> bool:
+def is_file_eligible_for_today(file_path: Path, logger: Optional[logging.Logger] = None) -> bool:
     """
     Checks Level 1 (path existence) and Level 2 (mtime == today).
     """
-    if not file_path.exists():
-        logger.debug(f"Level 1: Target file does not exist at {file_path}")
+    try:
+        if not file_path.exists():
+            if logger:
+                logger.debug(f"Level 1: Target file does not exist at {file_path}")
+            return False
+    except OSError as exc:
+        if logger:
+            logger.debug(f"Level 1: Cannot access path {file_path}: {exc}")
         return False
 
     try:
@@ -152,14 +164,46 @@ def is_file_eligible_for_today(file_path: Path, logger: logging.Logger) -> bool:
         file_mtime_date = datetime.fromtimestamp(mtime_timestamp).date()
         today = date.today()
         if file_mtime_date != today:
-            logger.debug(
-                f"Level 2: File at {file_path} last modified on {file_mtime_date} != today ({today}). Skipping."
-            )
+            if logger:
+                logger.debug(
+                    f"Level 2: File at {file_path} last modified on {file_mtime_date} != today ({today}). Skipping."
+                )
             return False
         return True
     except Exception as exc:
-        logger.error(f"Error checking file mtime for {file_path}: {exc}")
+        if logger:
+            logger.error(f"Error checking file mtime for {file_path}: {exc}")
         return False
+
+
+def get_candidate_excel_paths(config: Dict[str, Any]) -> List[Path]:
+    """
+    Returns candidate Excel file paths to check.
+    Checks configured 'excel_file_path' first (if present),
+    followed by the fallback paths ("K:\\Stat € A.xlsx", "K:\\Stat € B.xlsx")
+    regardless of settings.
+    """
+    candidates: List[Path] = []
+    configured_str = (config.get("excel_file_path") or "").strip()
+    if configured_str:
+        candidates.append(Path(configured_str))
+
+    for fallback_str in FALLBACK_EXCEL_PATHS:
+        fallback_path = Path(fallback_str)
+        if fallback_path not in candidates:
+            candidates.append(fallback_path)
+
+    return candidates
+
+
+def resolve_excel_path(config: Dict[str, Any], logger: Optional[logging.Logger] = None) -> Optional[Path]:
+    """
+    Finds the first eligible Excel file path for today among candidate paths.
+    """
+    for candidate in get_candidate_excel_paths(config):
+        if is_file_eligible_for_today(candidate, logger):
+            return candidate
+    return None
 
 
 def compute_row_hash(row: Dict[str, Any]) -> str:
@@ -360,14 +404,8 @@ def run_cycle(
 ) -> float:
     """Executes a single polling iteration. Returns updated last_push_time."""
     today = date.today()
-    excel_path_str = config.get("excel_file_path", "")
-    if not excel_path_str:
-        logger.debug("No excel_file_path configured.")
-        return last_push_time
-
-    excel_path = Path(excel_path_str)
-    if not is_file_eligible_for_today(excel_path, logger):
-        return last_push_time
+    candidates = get_candidate_excel_paths(config)
+    configured_str = (config.get("excel_file_path") or "").strip()
 
     start_row = int(config.get("start_row", 2))
     code_col = str(config.get("excel_code_column", "N"))
@@ -377,10 +415,25 @@ def run_cycle(
     heartbeat_interval = local_config.get("heartbeat_interval_seconds", 180)
     state_dir = base_dir / "state"
 
-    try:
-        current_rows = read_excel_rows(excel_path, start_row=start_row, code_column=code_col, logger=logger)
-    except Exception as exc:
-        logger.error(f"Failed to read Excel file at {excel_path}: {exc}")
+    excel_path = None
+    current_rows = None
+
+    for candidate in candidates:
+        if not is_file_eligible_for_today(candidate, logger):
+            continue
+        try:
+            current_rows = read_excel_rows(candidate, start_row=start_row, code_column=code_col, logger=logger)
+            excel_path = candidate
+            if configured_str and candidate != Path(configured_str):
+                logger.info(
+                    f"Configured Excel file not active today; fallback reading from: {candidate}"
+                )
+            break
+        except Exception as exc:
+            logger.error(f"Failed to read Excel file at {candidate}: {exc}")
+            continue
+
+    if excel_path is None or current_rows is None:
         return last_push_time
 
     saved_hashes = load_daily_state(state_dir, today)
