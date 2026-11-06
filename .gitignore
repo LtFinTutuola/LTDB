@@ -1,5 +1,6 @@
 venv/
 data/
+docs/
 _working_files/
 __pycache__/
 .DS_Store
@@ -8,3 +9,4 @@ test_logs/
 src/agents/gemini.yaml
 scripts/excel_agent/logs/
 scripts/excel_agent/state/
+scripts/various/
