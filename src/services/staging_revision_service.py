@@ -625,6 +625,7 @@ def _apply_confirm_heuristic_reconciliation(
 
     # Caso 2: Conferma di MASK_UPDATE (diretto oppure origin == "DISAMBIGUATION")
     else:
+        target_masked_code = None
         for item in staging_data.get("items", []):
             if item.get("article_blueprint_id") in staging_bp_ids or item.get("item_id") in incoming_item_ids:
                 raw_code = item.get("vendor_code") or ""
@@ -632,8 +633,19 @@ def _apply_confirm_heuristic_reconciliation(
                     masked = vcn.apply_rule(raw_code, rule)
                     if masked:
                         item["normalized_vendor_code"] = masked
+                        if not target_masked_code:
+                            target_masked_code = masked
                 if target_bp_id:
                     item["article_blueprint_id"] = target_bp_id
+
+        if target_bp_id and rule:
+            for bp in staging_data.get("blueprints", []):
+                if str(bp.get("id")) == str(target_bp_id):
+                    raw_code = bp.get("raw_vendor_code") or bp.get("normalized_vendor_code") or ""
+                    masked = vcn.apply_rule(raw_code, rule) or target_masked_code
+                    if masked:
+                        bp["normalized_vendor_code"] = masked
+                        bp["skeleton_vendor_code"] = vcn.compute_skeleton_code(masked)
 
         for old_bp_id in staging_bp_ids:
             if target_bp_id and old_bp_id != target_bp_id:
@@ -723,13 +735,20 @@ def _generate_retroactive_db_reconciliations(
         if not arts:
             continue
 
+        applied_by_art = {
+            a.id: vcn.apply_rules(vcn.sterilize_separators(a.supplier_code), new_rules)
+            for a in arts
+        }
+        matched_norms = [nc for nc in applied_by_art.values() if nc is not None]
+        default_bp_norm = (
+            matched_norms[0]
+            if matched_norms
+            else (bp.normalized_vendor_code or vcn.sterilize_separators(arts[0].supplier_code))
+        )
+
         groups: dict[str, list] = OrderedDict()
         for a in arts:
-            raw_c = vcn.sterilize_separators(a.supplier_code)
-            norm_c = vcn.apply_rules(raw_c, new_rules)
-            if norm_c is None:
-                # Nessuna regola applicabile: stato invariato (evita falsi split retroattivi)
-                norm_c = bp.normalized_vendor_code or raw_c
+            norm_c = applied_by_art[a.id] or default_bp_norm
             groups.setdefault(norm_c, []).append(a)
 
         group_items = list(groups.items())

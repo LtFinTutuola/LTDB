@@ -731,6 +731,7 @@ async def evaluate_pair(
     verdict_rank = {CODE_IDENTICAL: 4, CODE_VERY_HIGH: 3, CODE_HIGH: 2, CODE_NEUTRAL: 1, CODE_CONFLICT: 0}
 
     if codes_a and codes_b:
+        best_code_verdict = CODE_CONFLICT
         for ca in codes_a:
             for cb in codes_b:
                 cv = calc_code_morphology(ca, cb, cfg)

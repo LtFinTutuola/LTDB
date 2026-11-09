@@ -5,11 +5,12 @@ Regressione per i bug del 2° ciclo di test manuali della pipeline di ingestion
 from datetime import date, datetime
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.orm import Session
 
 from src.models.pim import Brand, ArticleBlueprint, BrandHeuristic, HeuristicMode, CodeEmbedding
 from src.models.wms import Supplier, Batch, Article
-from src.services import staging_revision_service
+from src.services import data_ingestion_service, staging_revision_service
 from src.services.data_ingestion_service import _resolve_items_with_photos
 from src.utils import vendor_code_normalizer as vcn
 
@@ -243,4 +244,170 @@ def test_induce_mask_keeps_separator_agnostic_pair():
     assert res["status"] == vcn.OK
     assert res["rule"]["type"] == "ELASTIC"
     assert res["rule"]["prefix"] == "P10QMTZ4"
+
+
+# ---------------------------------------------------------------------------
+# Round 3 fixes: TC-12 MyWalit, TC-13 Guess, TC-20/21 Mandarina Duck Typo
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_oracle_evaluate_pair_propagates_code_conflict_penalty(monkeypatch):
+    from src.agents.article_blueprints_agent.nodes import model_equivalence_oracle as meo
+
+    async def _fake_judge(client, dim, cx, cy, cfg, sem, code_x="", code_y=""):
+        return meo.DimensionEvaluationResult(dimension=dim, relation="MATCH", confidence="HIGH", reasoning="ok")
+
+    monkeypatch.setattr(meo, "_judge_dimension", _fake_judge)
+
+    item_a = {
+        "vendor_code": "231-4",
+        "article_name": "Mywalit Medium Tri-fold Wallet",
+        "description": "Portafoglio medio tri-fold in pelle",
+        "extended_description": "Portafoglio in pelle morbida",
+        "colors": ["green"],
+    }
+    item_b = {
+        "normalized_vendor_code": "106-#",
+        "article_name": "Mywalit Medium Tri-fold Wallet",
+        "description": "Portafoglio medio tri-fold in pelle",
+        "extended_description": "Portafoglio in pelle morbida",
+        "variants": [{"supplier_code": "106-75", "colors": ["green"]}],
+    }
+    res = await meo.evaluate_pair(client=None, a_item=item_a, b_item=item_b)
+    assert res.code_verdict == meo.CODE_CONFLICT
+
+
+@pytest.mark.asyncio
+async def test_oracle_node_prioritizes_morphological_code_match_over_conflicting_code(monkeypatch):
+    from src.agents.article_blueprints_agent.nodes import oracle_and_induction_node as oin
+    from src.agents.article_blueprints_agent.nodes import model_equivalence_oracle as meo
+    from src.agents.article_blueprints_agent.state import BlueprintsGraphState
+
+    async def _fake_embed(cluster, client):
+        return [0.1, 0.2, 0.3]
+
+    cand_231 = {
+        "id": "bp-231",
+        "article_name": "Mywalit Ladies Medium Wallet",
+        "description": "Portafoglio medio",
+        "normalized_vendor_code": "231-#",
+        "variants": [{"supplier_code": "231-58", "colors": ["blue"]}],
+    }
+    cand_106 = {
+        "id": "bp-106",
+        "article_name": "Mywalit Medium Tri-fold Wallet",
+        "description": "Portafoglio medio tri-fold",
+        "normalized_vendor_code": "106-#",
+        "variants": [{"supplier_code": "106-75", "colors": ["green"]}],
+    }
+
+    async def _fake_eval(client, cluster, cand):
+        if cand["id"] == "bp-231":
+            return meo.OracleEvaluationResult(
+                verdict=meo.SAME_MODEL,
+                final_score=91.0,
+                raw_score=91.0,
+                code_verdict=meo.CODE_VERY_HIGH,
+                color_relation="DIFFERENT",
+                dimensions={},
+                reasoning="Match morfologico codice 231",
+            )
+        return meo.OracleEvaluationResult(
+            verdict=meo.SAME_MODEL,
+            final_score=95.0,
+            raw_score=95.0,
+            code_verdict=meo.CODE_CONFLICT,
+            color_relation="SAME",
+            dimensions={},
+            reasoning="Match testuale ma codice 106 in conflitto",
+        )
+
+    monkeypatch.setattr(oin, "embed_entity", _fake_embed)
+    monkeypatch.setattr(oin, "select_candidates", lambda codes, emb, cohort, top_k=3: [cand_106, cand_231])
+    monkeypatch.setattr(oin, "evaluate_pair", _fake_eval)
+
+    state = BlueprintsGraphState(
+        brand_id="brand-mywalit",
+        brand_name="Mywalit",
+        new_blueprints=[{
+            "id": "staged-231-4",
+            "is_new": True,
+            "article_name": "Mywalit Medium Tri-fold Wallet",
+            "cluster_items": [{"item_id": "it-1", "vendor_code": "231-4", "colors": ["green"]}],
+        }],
+        brand_cohort=[cand_106, cand_231],
+        brand_heuristic={"mode": "PENDING_COHORT", "rules": [], "negative_constraints": []},
+    )
+    out = await oin.oracle_and_induction_node(state)
+    recs = out.get("heuristic_reconciliations") or []
+    assert recs and recs[0]["merge_target_blueprint_id"] == "bp-231"
+
+
+def test_guess_tc13_bare_root_plus_delimited_induction_and_no_false_retroactive_split(db_session: Session):
+    # 1. Induzione tra radice nuda 'AW5647WOL03' e codice delimitato 'AW5647WOL03-BLA'
+    res = vcn.induce_positional_mask(["AW5647WOL03", "AW5647WOL03-BLA"])
+    assert res["status"] == vcn.OK
+    rule = res["rule"]
+    assert rule["type"] == "DELIMITED"
+    assert rule["num_segments"] == 2
+    assert rule["color_segment_index"] == 1
+    assert rule["heuristic_mode"] == "COLOR_MASKED_DELIMITED"
+
+    # 2. Nessun falso RETROACTIVE_SPLIT quando il blueprint contiene varianti storiche senza suffisso colore
+    brand = _brand(db_session, "Guess")
+    h = _heuristic(db_session, brand, HeuristicMode.PENDING_COHORT)
+    batch = _batch(db_session)
+    bp = _bp(db_session, brand, "AW5647#", "AW5647", "Frances Knitted Scarf", h)
+    _art(db_session, bp, batch, "AW5647WOL03", "black")
+    _art(db_session, bp, batch, "AW5647WOLL03", "grey")
+    _art(db_session, bp, batch, "AW5647WOL03-BLA", "black")
+    db_session.refresh(bp)
+
+    staging = {"brand_id": str(brand.id), "heuristic_reconciliations": [], "items": [], "blueprints": []}
+    staging_revision_service._generate_retroactive_db_reconciliations(db_session, staging, rule, str(bp.id))
+    splits = [r for r in staging["heuristic_reconciliations"] if r.get("kind") == "RETROACTIVE_SPLIT"]
+    assert splits == []
+
+    # 3. _apply_reconciliations_and_realign aggiorna il blueprint a 'AW5647WOL03@#' (non resta 'AW5647#')
+    rec = {
+        "reconciliation_id": "rec-guess-1",
+        "kind": "MASK_UPDATE",
+        "status": "ACCEPTED",
+        "requires_confirmation": True,
+        "rule_update": rule,
+        "mode_update": "COLOR_MASKED_DELIMITED",
+        "color_segment_index": 1,
+        "merge_target_blueprint_id": str(bp.id),
+    }
+    data_ingestion_service._apply_reconciliations_and_realign(db_session, str(brand.id), [rec], [])
+    db_session.refresh(bp)
+    assert bp.normalized_vendor_code == "AW5647WOL03@#"
+    assert bp.skeleton_vendor_code == "AW5647WOL03"
+
+
+def test_typo_detector_prioritizes_exact_root_match_over_shorter_root_prefix(db_session: Session):
+    brand, h, bp_md20, emb = _masked_md_world(db_session)
+    batch = _batch(db_session)
+    # Blueprint con radice più corta di 7 caratteri ('P10QMTX#') posizionato PRIMA di 'P10QMTZ4#'
+    bp_crossover = _bp(db_session, brand, "P10QMTX#", "P10QMTX", "Mandarina Duck MD20 Crossover Bag", h)
+    _art(db_session, bp_crossover, batch, "P10QMTX-651", "black")
+    db_session.refresh(bp_crossover)
+    db_session.refresh(bp_md20)
+
+    bps = [bp_crossover, bp_md20]
+
+    # TC-20: P10QMTZA812 -> TYPE_B_PATTERN_VIOLATION su P10QMTZ4# (non TYPE_A su P10QMTX#)
+    res_b = vcn.detect_typo_anomaly("P10QMTZA812", [emb], bps)
+    assert res_b is not None
+    assert res_b["anomaly_type"] == "TYPE_B_PATTERN_VIOLATION"
+    assert res_b["blueprint_id"] == bp_md20.id
+    assert res_b["suggested_match"] == "P10QMTZ4#"
+
+    # TC-21: P10QMT4Z812 -> TYPE_C_TRANSPOSITION su P10QMTZ4# (non TYPE_A su P10QMTX#)
+    res_c = vcn.detect_typo_anomaly("P10QMT4Z812", [emb], bps)
+    assert res_c is not None
+    assert res_c["anomaly_type"] == "TYPE_C_TRANSPOSITION"
+    assert res_c["blueprint_id"] == bp_md20.id
+    assert res_c["suggested_match"] == "P10QMTZ4#"
+
 

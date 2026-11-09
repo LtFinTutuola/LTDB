@@ -431,19 +431,65 @@ def detect_typo_anomaly(
                 if nearest == 1:
                     return _payload(bp, sk, "TYPE_A_LENGTH_VARIANCE", "variazione di lunghezza del colore (+/- 1 carattere)")
 
-    # 3. Confronto con radici/codici completi noti
-    for sk, kind, bp in refs:
+    def _rem_color_valid(bp_obj: Any, sk_len: int, rem_len: int) -> bool:
+        if rem_len == 0:
+            return True
+        bp_col_lens = {
+            len(compute_skeleton_code(getattr(a, "supplier_code", None))) - sk_len
+            for a in (getattr(bp_obj, "articles", None) or [])
+            if len(compute_skeleton_code(getattr(a, "supplier_code", None))) > sk_len
+        }
+        if bp_col_lens and rem_len in bp_col_lens:
+            return True
+        if embeddings:
+            return color_length_in_range(rem_len, embeddings)
+        if bp_col_lens:
+            return False
+        return 1 <= rem_len <= 5
+
+    # 3A. Confronto prioritario a finestra esatta (delta = 0) su tutti i riferimenti (dai più specifici/lunghi)
+    sterilized_raw = sterilize_separators(raw_code)
+    exact_len_type_a_hit: Optional[dict[str, Any]] = None
+    for sk, kind, bp in sorted(refs, key=lambda r: len(r[0]), reverse=True):
         if kind == "FULL":
-            candidates = [clean]
+            cand = clean
         else:
-            candidates = []
-            if len(clean) >= len(sk):
-                candidates.append(clean[:len(sk)])
-            for delta in (-1, 1):
-                w = len(sk) + delta
-                if w >= 3 and len(clean) > w:
-                    candidates.append(clean[:w])
-        for cand in candidates:
+            if len(clean) < len(sk) or not _rem_color_valid(bp, len(sk), len(clean) - len(sk)):
+                continue
+            cand = clean[:len(sk)]
+        if not cand:
+            continue
+        hit = _typo_pair(cand, sk)
+        if hit:
+            if hit[0] in ("TYPE_B_PATTERN_VIOLATION", "TYPE_C_TRANSPOSITION"):
+                return _payload(bp, sk, hit[0], hit[1])
+            if exact_len_type_a_hit is None:
+                exact_len_type_a_hit = _payload(bp, sk, hit[0], hit[1])
+    if exact_len_type_a_hit is not None:
+        return exact_len_type_a_hit
+
+    # 3B. Confronto radici con scarto di lunghezza (+/- 1) compatibile con il suffisso colore
+    for sk, kind, bp in refs:
+        if kind != "ROOT":
+            continue
+        for delta in (-1, 1):
+            w = len(sk) + delta
+            if w < 3 or len(clean) <= w:
+                continue
+            rem_col_len = len(clean) - w
+            if not _rem_color_valid(bp, len(sk), rem_col_len):
+                continue
+
+            cand = clean[:w]
+            # Se la presunta omissione cade esattamente sull'ultimo carattere della radice (sk[-1]),
+            # accetta solo se c'è un separatore esplicito dopo cand o se il carattere successivo
+            # cambia classe alfanumerica rispetto a sk[-1] (evita falsi match di prefisso su radici più corte).
+            if delta == -1 and cand == sk[:-1]:
+                has_sep_at_boundary = sterilized_raw.startswith(cand + "@")
+                class_changed = clean[w].isalpha() != sk[-1].isalpha()
+                if not (has_sep_at_boundary or class_changed):
+                    continue
+
             hit = _typo_pair(cand, sk)
             if hit:
                 return _payload(bp, sk, hit[0], hit[1])
@@ -532,10 +578,15 @@ def apply_rule(raw: str, rule: dict[str, Any]) -> Optional[str]:
 
 
 def apply_rules(raw: str, rules: list[dict[str, Any]]) -> Optional[str]:
+    sterilized = sterilize_separators(raw)
     for rule in rules or []:
         out = apply_rule(raw, rule)
         if out is not None:
             return out
+        if sterilized and sterilized != raw:
+            out = apply_rule(sterilized, rule)
+            if out is not None:
+                return out
     return None
 
 
@@ -683,6 +734,26 @@ def induce_positional_mask(
         if _violates_negative(rule, negative_pairs or []):
             return _fail(NEGATIVE_CONSTRAINT_VIOLATION, "la regola collasserebbe un'esclusione nota")
         return {"status": OK, "rule": rule, "detail": ""}
+
+    # Caso A2: Radice nuda senza suffisso colore + variante delimitata a 2 segmenti (es. AW5647WOL03 + AW5647WOL03@BLA)
+    bare_codes = [c for c in distinct_sterilized if "@" not in c and MASK_CHAR not in c]
+    delim_codes = [c for c in distinct_sterilized if "@" in c and MASK_CHAR not in c]
+    if len(bare_codes) == 1 and delim_codes and len(bare_codes) + len(delim_codes) == len([c for c in distinct_sterilized if MASK_CHAR not in c]):
+        bare_root = bare_codes[0]
+        delim_segs = [c.split("@") for c in delim_codes]
+        if (
+            len(bare_root) >= MIN_PROTECTED_CHARS
+            and all(len(s) == 2 and s[0] == bare_root and 1 <= len(s[1]) <= 5 and s[1].isalnum() for s in delim_segs)
+        ):
+            rule = {
+                "type": "DELIMITED",
+                "num_segments": 2,
+                "color_segment_index": 1,
+                "heuristic_mode": "COLOR_MASKED_DELIMITED",
+            }
+            if _violates_negative(rule, negative_pairs or []):
+                return _fail(NEGATIVE_CONSTRAINT_VIOLATION, "la regola collasserebbe un'esclusione nota")
+            return {"status": OK, "rule": rule, "detail": ""}
 
     # Caso B: Codici Compatti (o privi di '@' in almeno un codice)
     distinct = distinct_sterilized

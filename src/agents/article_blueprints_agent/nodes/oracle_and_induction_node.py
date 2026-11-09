@@ -85,14 +85,20 @@ def _induce_mask_for_candidate(
     all_codes = sorted(set(codes) | set(cand_codes))
     if len(cand_codes) > 1 and codes:
         ref = codes[0]
-        best_cand = min(
-            sorted(cand_codes),
-            key=lambda cc: (
-                abs(len(cc) - len(ref)) + sum(1 for x, y in zip(cc, ref) if x != y)
-                if len(cc) == len(ref)
-                else 999
-            ),
-        )
+
+        def _cand_dist(cc: str) -> tuple[int, int, int, int]:
+            has_mask = 1 if vcn.MASK_CHAR in cc else 0
+            same_len_penalty = 0 if len(cc) == len(ref) else 1
+            common_pref = 0
+            for x, y in zip(cc, ref):
+                if x == y:
+                    common_pref += 1
+                else:
+                    break
+            diff_chars = abs(len(cc) - len(ref)) + sum(1 for x, y in zip(cc, ref) if x != y)
+            return (has_mask, same_len_penalty, -common_pref, diff_chars)
+
+        best_cand = min(sorted(cand_codes), key=_cand_dist)
         pair_res = vcn.induce_positional_mask(sorted(set(codes) | {best_cand}), existing_rule, negatives)
         full_res = vcn.induce_positional_mask(all_codes, existing_rule, negatives)
         if full_res["status"] != vcn.OK and pair_res["status"] == vcn.OK:
@@ -273,6 +279,18 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                 return float(r.get("final_score", 100.0))
             return 100.0
 
+        def _get_code_rank(r: Any) -> int:
+            cv = getattr(r, "code_verdict", "NEUTRAL") if hasattr(r, "code_verdict") else (
+                r.get("code_verdict", "NEUTRAL") if isinstance(r, dict) else "NEUTRAL"
+            )
+            return {"IDENTICAL": 4, "VERY_HIGH": 3, "HIGH": 2, "NEUTRAL": 1, "CONFLICT": 0}.get(str(cv), 1)
+
+        def _cand_sort_key(t: tuple[Any, dict]) -> tuple[int, float, int]:
+            r = t[0]
+            cr = _get_code_rank(r)
+            tier = 1 if cr >= 2 else (0 if cr == 1 else -1)
+            return (tier, _get_score(r), cr)
+
         def _get_relation(r: Any) -> str:
             rel = getattr(r, "color_relation", "UNKNOWN") if hasattr(r, "color_relation") else (
                 r.get("color_relation", "UNKNOWN") if isinstance(r, dict) else "UNKNOWN"
@@ -289,9 +307,9 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
 
         handled = False
 
-        # Caso 1: Almeno un candidato ha verdetto SAME_MODEL (H4: vince punteggio più alto)
+        # Caso 1: Almeno un candidato ha verdetto SAME_MODEL (H4: vince compatibilità codice + punteggio più alto)
         if same_cands:
-            same_cands.sort(key=lambda t: _get_score(t[0]), reverse=True)
+            same_cands.sort(key=_cand_sort_key, reverse=True)
             if len(same_cands) > 1:
                 warnings.append(
                     f"oracle: molteplici candidati DB con verdetto SAME_MODEL per '{codes[0]}'. "
@@ -442,6 +460,8 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                         },
                         proposed_heuristic_update=_proposal(rules, proposed_rule, codes[0], explanation) if proposed_rule else None,
                         rule_update=proposed_rule,
+                        mode_update=proposed_rule.get("heuristic_mode", "COLOR_MASKED") if proposed_rule else None,
+                        color_segment_index=proposed_rule.get("color_segment_index") if proposed_rule else None,
                     )
                     cluster["_heuristic_reconciliation_id"] = rec["reconciliation_id"]
                     records.append(rec)
@@ -450,7 +470,7 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
 
         # Caso 2: Nessun SAME_MODEL, ma presente almeno un AMBIGUOUS
         elif ambig_cands:
-            ambig_cands.sort(key=lambda t: _get_score(t[0]), reverse=True)
+            ambig_cands.sort(key=_cand_sort_key, reverse=True)
             best_res, cand = ambig_cands[0]
             cand_codes = {vcn.sterilize_separators(v.get("supplier_code")) for v in cand.get("variants", []) if v.get("supplier_code")}
             if cand.get("normalized_vendor_code"):

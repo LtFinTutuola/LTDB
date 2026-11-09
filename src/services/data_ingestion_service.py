@@ -88,7 +88,18 @@ def _resolve_items_with_photos(db: Session, brand_id: str, extracted_items: list
     heuristic_warnings = []
     photo_only_items = []
 
-    active_h = heuristics[-1] if heuristics else None
+    def _select_active_heuristic(h_list: list):
+        if not h_list:
+            return None
+        confirmed_or_masked = [
+            h for h in h_list
+            if getattr(h, "heuristic_confirmed", False)
+            or (getattr(h, "heuristic_mode", None) not in (None, HeuristicMode.PENDING_COHORT))
+        ]
+        pool = confirmed_or_masked if confirmed_or_masked else h_list
+        return sorted(pool, key=lambda h: getattr(h, "created_at", None) or 0)[-1] if all(getattr(h, "created_at", None) for h in pool) else pool[-1]
+
+    active_h = _select_active_heuristic(heuristics)
     active_mode = getattr(active_h, "heuristic_mode", None) or HeuristicMode.PENDING_COHORT
     brand_embeddings = heuristic_repo.get_embeddings_by_brand(db, brand_id)
     from src.models.pim import BrandHeuristic
@@ -235,7 +246,13 @@ def _resolve_items_with_photos(db: Session, brand_id: str, extracted_items: list
 def _build_heuristic_context(heuristics: list) -> dict:
     if not heuristics:
         return {"mode": HeuristicMode.PENDING_COHORT, "rules": [], "negative_constraints": []}
-    h = heuristics[-1]
+    confirmed_or_masked = [
+        h for h in heuristics
+        if getattr(h, "heuristic_confirmed", False)
+        or (getattr(h, "heuristic_mode", None) not in (None, HeuristicMode.PENDING_COHORT))
+    ]
+    pool = confirmed_or_masked if confirmed_or_masked else heuristics
+    h = sorted(pool, key=lambda x: getattr(x, "created_at", None) or 0)[-1] if all(getattr(x, "created_at", None) for x in pool) else pool[-1]
     meta = getattr(h, "heuristic_metadata", None) or {}
     return {
         "mode": getattr(h, "heuristic_mode", None) or HeuristicMode.PENDING_COHORT,
@@ -931,16 +948,28 @@ def _apply_reconciliations_and_realign(
             for a in (bp.articles or [])
             if a.supplier_code and str(a.article_blueprint_id) == bp_id_str
         ]
-        if not var_codes:
+        incoming_bp_codes = [
+            vcn.sterilize_separators(it.vendor_code)
+            for it in (items or [])
+            if getattr(it, "vendor_code", None) and str(getattr(it, "blueprint_group_id", "")) == bp_id_str
+        ]
+        all_bp_codes = var_codes + [c for c in incoming_bp_codes if c and c not in var_codes]
+        if not all_bp_codes:
             fallback = orig_norm if (orig_norm and orig_norm not in occupied_final) else f"__EMPTY__{bp.id}"
             bp.normalized_vendor_code = fallback
             bp.skeleton_vendor_code = vcn.compute_skeleton_code(fallback)
             occupied_final.add(fallback)
             continue
 
-        # Codici non coperti da alcuna regola: stato corrente del blueprint, non il codice grezzo
-        new_norms = sorted({vcn.apply_rules(c, rules) or (orig_norm or c) for c in var_codes})
-        target_norm = new_norms[0]
+        # Privilegia i codici effettivamente mascherati dalle regole attive rispetto al fallback storico
+        matched_norms = sorted({
+            nc for c in all_bp_codes
+            if (nc := vcn.apply_rules(c, rules)) is not None
+        })
+        if matched_norms:
+            target_norm = matched_norms[0]
+        else:
+            target_norm = orig_norm or all_bp_codes[0]
         if target_norm in occupied_final:
             # Collisione (es. merge retroattivo rifiutato dall'utente o vincolo negativo):
             # preserva il codice originario non collidente o il codice fornitore grezzo

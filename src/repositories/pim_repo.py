@@ -896,11 +896,17 @@ class BrandHeuristicRepository:
         return updated_embeddings
 
     def get_active_heuristic(self, db: Session, brand_id: str) -> Optional[BrandHeuristic]:
-        """Euristica attiva del brand = la più recente."""
+        """Euristica attiva del brand = la più recente confermata/attiva (o altrimenti l'ultima inserita)."""
         heuristics = self.get_heuristics_by_brand(db, brand_id)
         if not heuristics:
             return None
-        return sorted(heuristics, key=lambda h: h.created_at or 0)[-1] if all(h.created_at for h in heuristics) else heuristics[-1]
+        confirmed_or_masked = [
+            h for h in heuristics
+            if getattr(h, "heuristic_confirmed", False)
+            or (getattr(h, "heuristic_mode", None) not in (None, "PENDING_COHORT"))
+        ]
+        pool = confirmed_or_masked if confirmed_or_masked else heuristics
+        return sorted(pool, key=lambda h: h.created_at or 0)[-1] if all(h.created_at for h in pool) else pool[-1]
 
     def get_heuristics_by_brand(self, db: Session, brand_id: str) -> list[BrandHeuristic]:
         return db.query(BrandHeuristic).filter(BrandHeuristic.brand_id == brand_id).all()
