@@ -726,7 +726,10 @@ def _generate_retroactive_db_reconciliations(
         groups: dict[str, list] = OrderedDict()
         for a in arts:
             raw_c = vcn.sterilize_separators(a.supplier_code)
-            norm_c = vcn.apply_rules(raw_c, new_rules) or raw_c
+            norm_c = vcn.apply_rules(raw_c, new_rules)
+            if norm_c is None:
+                # Nessuna regola applicabile: stato invariato (evita falsi split retroattivi)
+                norm_c = bp.normalized_vendor_code or raw_c
             groups.setdefault(norm_c, []).append(a)
 
         group_items = list(groups.items())

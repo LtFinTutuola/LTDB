@@ -106,13 +106,14 @@ def _resolve_items_with_photos(db: Session, brand_id: str, extracted_items: list
         matched_heuristic_id = None
 
         # Pre-calcolo codice normalizzato tramite euristiche del brand o embedding
-        for h in reversed(heuristics or []):
-            cand = vcn.normalize_code(clean_raw, h)
+        # Solo l'euristica ATTIVA: le euristiche storiche non devono mascherare.
+        # (normalize_code ignora i pattern regex delle euristiche PENDING_COHORT.)
+        if active_h is not None:
+            cand = vcn.normalize_code(clean_raw, active_h)
             if cand != clean_raw and cand != sterilized_code:
                 normalized_code = cand
                 color_masked = True
-                matched_heuristic_id = getattr(h, "id", None)
-                break
+                matched_heuristic_id = getattr(active_h, "id", None)
 
         if not color_masked and sterilized_code:
             for emb in brand_embeddings:
@@ -123,6 +124,18 @@ def _resolve_items_with_photos(db: Session, brand_id: str, extracted_items: list
                     color_masked = True
                     matched_heuristic_id = emb.heuristic_id
                     break
+
+        # Gate sulla lunghezza del colore: fuori range degli embedding ⇒ nessuna maschera silenziosa
+        if color_masked and sterilized_code and brand_embeddings:
+            h_id = matched_heuristic_id or getattr(active_h, "id", None)
+            emb_scope = [e for e in brand_embeddings if e.heuristic_id == h_id] or list(brand_embeddings)
+            gate_h = active_h if getattr(active_h, "id", None) == h_id else None
+            col_len = vcn.color_segment_length(sterilized_code, emb_scope[0], gate_h)
+            if not vcn.color_length_in_range(col_len, emb_scope):
+                normalized_code = sterilized_code
+                color_masked = False
+                matched_heuristic_id = None
+                item["_color_length_anomaly"] = True
 
         # --- Stadio 1: Exact Match (WMS Articles & Static Blueprints) ---
         existing_article = None
@@ -925,7 +938,8 @@ def _apply_reconciliations_and_realign(
             occupied_final.add(fallback)
             continue
 
-        new_norms = sorted({vcn.apply_rules(c, rules) or c for c in var_codes})
+        # Codici non coperti da alcuna regola: stato corrente del blueprint, non il codice grezzo
+        new_norms = sorted({vcn.apply_rules(c, rules) or (orig_norm or c) for c in var_codes})
         target_norm = new_norms[0]
         if target_norm in occupied_final:
             # Collisione (es. merge retroattivo rifiutato dall'utente o vincolo negativo):
@@ -1203,7 +1217,13 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
                 )
                 if unresolved_items:
                     brand_embeddings = heuristic_repo.get_embeddings_by_brand(db, request.brand_id)
-                    brand_blueprints = db.query(ArticleBlueprint).filter(ArticleBlueprint.brand_id == request.brand_id).all()
+                    from sqlalchemy.orm import selectinload
+                    brand_blueprints = (
+                        db.query(ArticleBlueprint)
+                        .options(selectinload(ArticleBlueprint.articles))
+                        .filter(ArticleBlueprint.brand_id == request.brand_id)
+                        .all()
+                    )
                     typo_info = vcn.detect_typo_anomaly(request.vendor_code, brand_embeddings, brand_blueprints)
                     if typo_info:
                         staging_repo.update_job(

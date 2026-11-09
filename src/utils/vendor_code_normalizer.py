@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 MASK_CHAR = "#"
 MIN_PROTECTED_CHARS = 2
+_MASKED_MODES = ("COLOR_MASKED", "COLOR_MASKED_COMPACT", "COLOR_MASKED_DELIMITED", "DELIMITED")
 
 # Status di induzione
 OK = "OK"
@@ -324,6 +325,50 @@ def score_embedding_compatibility(
 # Guardrail Anti-Typo Interattivo (Stadio 3)
 # ---------------------------------------------------------------------------
 
+def color_segment_length(sterilized: str, embedding: Any, heuristic: Any = None) -> int:
+    """Lunghezza (alfanumerica) del segmento colore estratto secondo embedding/euristica."""
+    mode = getattr(heuristic, "heuristic_mode", None) if heuristic else None
+    mode = mode if mode in _MASKED_MODES else "COLOR_MASKED_COMPACT"
+    c_idx = getattr(heuristic, "color_segment_index", None) if heuristic else None
+    _, _, col = extract_root_and_color(
+        sterilized,
+        heuristic_mode=mode,
+        color_segment_index=c_idx,
+        root_length=getattr(embedding, "root_length", None),
+    )
+    return len(compute_skeleton_code(col))
+
+
+def color_length_in_range(color_len: int, embeddings: list[Any]) -> bool:
+    """True se la lunghezza colore rientra nel range di almeno un embedding (o se non c'è dato)."""
+    if not embeddings or color_len <= 0:
+        return True
+    return any(e.color_length_min <= color_len <= e.color_length_max for e in embeddings)
+
+
+def _typo_pair(candidate: str, ref: str) -> Optional[tuple[str, str]]:
+    """Classifica la distanza tra due scheletri. Ritorna (anomaly_type, dettaglio) o None."""
+    if not candidate or not ref or candidate == ref:
+        return None
+    len_diff = abs(len(candidate) - len(ref))
+    if len_diff == 1:
+        if levenshtein_distance(candidate, ref) == 1:
+            return ("TYPE_A_LENGTH_VARIANCE", "variazione di lunghezza (+/- 1 carattere)")
+        return None
+    if len_diff == 0:
+        d_dam = damerau_levenshtein_distance(candidate, ref)
+        d_lev = levenshtein_distance(candidate, ref)
+        if d_dam == 1 and d_lev == 2:
+            return ("TYPE_C_TRANSPOSITION", "inversione di caratteri adiacenti")
+        if d_lev == 1:
+            idx = [i for i in range(len(candidate)) if candidate[i] != ref[i]]
+            if len(idx) == 1:
+                c1, c2 = candidate[idx[0]], ref[idx[0]]
+                if (c1.isalpha() and c2.isdigit()) or (c1.isdigit() and c2.isalpha()):
+                    return ("TYPE_B_PATTERN_VIOLATION", f"sostituzione carattere '{c1}' <-> '{c2}' (lettera/cifra)")
+    return None
+
+
 def detect_typo_anomaly(
     raw_code: str,
     embeddings: list[Any],
@@ -331,104 +376,98 @@ def detect_typo_anomaly(
 ) -> Optional[dict[str, Any]]:
     """
     Verifica se un vendor code non matchato presenta una delle 3 anomalie typo:
-    - Tipo A: DeltaLength = +/- 1 e Levenshtein = 1 sulla radice/scheletro (edit distance 1)
-    - Tipo B: DeltaLength = 0 e violazione del pattern [ALPHA]/[NUM] (lettera <-> cifra a edit distance 1)
+    - Tipo A: DeltaLength = +/- 1 e Levenshtein = 1 (sul codice completo, sulla radice o sulla
+      lunghezza del colore rispetto al range degli embedding)
+    - Tipo B: DeltaLength = 0 e sostituzione lettera <-> cifra a edit distance 1
     - Tipo C: Trasposizione di caratteri adiacenti (Damerau = 1, Levenshtein = 2)
+
+    I blueprint mascherati ('#') hanno uno scheletro che contiene SOLO la radice: il codice
+    in ingresso viene quindi confrontato con la finestra di radice corrispondente, mentre i
+    blueprint non mascherati e i supplier_code delle varianti vengono confrontati per intero.
     """
-    sterilized = sterilize_separators(raw_code)
-    clean = compute_skeleton_code(sterilized)
+    clean = compute_skeleton_code(sterilize_separators(raw_code))
     if len(clean) < 3:
         return None
+    embeddings = list(embeddings or [])
 
-    # Confronta con gli scheletri dei Blueprint del brand
+    # Riferimenti: (scheletro, "ROOT"|"FULL", blueprint)
+    refs: list[tuple[str, str, Any]] = []
     for bp in blueprints or []:
         bp_norm = getattr(bp, "normalized_vendor_code", "") or ""
-        target_skeleton = getattr(bp, "skeleton_vendor_code", None) or compute_skeleton_code(bp_norm)
-        if not target_skeleton or target_skeleton == clean:
-            continue
+        sk = getattr(bp, "skeleton_vendor_code", None) or compute_skeleton_code(bp_norm)
+        if sk:
+            refs.append((sk, "ROOT" if MASK_CHAR in bp_norm else "FULL", bp))
+        for art in (getattr(bp, "articles", None) or []):
+            ask = compute_skeleton_code(getattr(art, "supplier_code", None))
+            if ask:
+                refs.append((ask, "FULL", bp))
 
-        len_diff = abs(len(clean) - len(target_skeleton))
+    def _payload(bp: Any, sk: str, anomaly: str, detail: str) -> dict[str, Any]:
+        name = getattr(bp, "article_name", "Unknown")
+        return {
+            "typo_warning": True,
+            "suspect_code": raw_code,
+            "suggested_match": (getattr(bp, "normalized_vendor_code", "") or sk),
+            "blueprint_id": bp.id,
+            "blueprint_name": name,
+            "anomaly_type": anomaly,
+            "reason": f"Possibile {detail} rispetto al modello '{name}' ({sk}).",
+        }
 
-        # --- Tipo A: DeltaLength = +/- 1 e Levenshtein = 1 ---
-        if len_diff == 1:
-            d_lev = levenshtein_distance(clean, target_skeleton)
-            if d_lev == 1:
-                return {
-                    "typo_warning": True,
-                    "suspect_code": raw_code,
-                    "suggested_match": bp_norm or target_skeleton,
-                    "blueprint_id": bp.id,
-                    "blueprint_name": getattr(bp, "article_name", "Unknown"),
-                    "anomaly_type": "TYPE_A_LENGTH_VARIANCE",
-                    "reason": (
-                        f"Possibile variazione di lunghezza (+/- 1 carattere) rispetto al modello "
-                        f"'{getattr(bp, 'article_name', 'Unknown')}' ({target_skeleton})."
-                    ),
-                }
+    # 1. Codice già noto (nessun refuso)
+    for sk, kind, _bp in refs:
+        if kind == "FULL" and sk == clean:
+            return None
+        if kind == "ROOT" and len(clean) >= len(sk) and clean[:len(sk)] == sk \
+                and color_length_in_range(len(clean) - len(sk), embeddings):
+            return None
 
-        # --- Tipo B & Tipo C: DeltaLength = 0 ---
-        if len_diff == 0:
-            d_dam = damerau_levenshtein_distance(clean, target_skeleton)
-            d_lev = levenshtein_distance(clean, target_skeleton)
+    # 2. Tipo A sul colore: radice nota ma lunghezza colore fuori range di esattamente 1
+    if embeddings:
+        for sk, kind, bp in refs:
+            if kind == "ROOT" and len(clean) > len(sk) and clean[:len(sk)] == sk:
+                col_len = len(clean) - len(sk)
+                nearest = min(min(abs(col_len - e.color_length_min), abs(col_len - e.color_length_max)) for e in embeddings)
+                if nearest == 1:
+                    return _payload(bp, sk, "TYPE_A_LENGTH_VARIANCE", "variazione di lunghezza del colore (+/- 1 carattere)")
 
-            # Tipo C: Trasposizione adiacente
-            if d_dam == 1 and d_lev == 2:
-                return {
-                    "typo_warning": True,
-                    "suspect_code": raw_code,
-                    "suggested_match": bp_norm or target_skeleton,
-                    "blueprint_id": bp.id,
-                    "blueprint_name": getattr(bp, "article_name", "Unknown"),
-                    "anomaly_type": "TYPE_C_TRANSPOSITION",
-                    "reason": (
-                        f"Possibile inversione di caratteri adiacenti rispetto al modello "
-                        f"'{getattr(bp, 'article_name', 'Unknown')}' ({target_skeleton})."
-                    ),
-                }
+    # 3. Confronto con radici/codici completi noti
+    for sk, kind, bp in refs:
+        if kind == "FULL":
+            candidates = [clean]
+        else:
+            candidates = []
+            if len(clean) >= len(sk):
+                candidates.append(clean[:len(sk)])
+            for delta in (-1, 1):
+                w = len(sk) + delta
+                if w >= 3 and len(clean) > w:
+                    candidates.append(clean[:w])
+        for cand in candidates:
+            hit = _typo_pair(cand, sk)
+            if hit:
+                return _payload(bp, sk, hit[0], hit[1])
 
-            # Tipo B: Violazione pattern alfanumerico (sostituzione lettera <-> cifra)
-            if d_lev == 1:
-                diff_indices = [i for i in range(len(clean)) if clean[i] != target_skeleton[i]]
-                if len(diff_indices) == 1:
-                    idx = diff_indices[0]
-                    c1 = clean[idx]
-                    c2 = target_skeleton[idx]
-                    if (c1.isalpha() and c2.isdigit()) or (c1.isdigit() and c2.isalpha()):
-                        return {
-                            "typo_warning": True,
-                            "suspect_code": raw_code,
-                            "suggested_match": bp_norm or target_skeleton,
-                            "blueprint_id": bp.id,
-                            "blueprint_name": getattr(bp, "article_name", "Unknown"),
-                            "anomaly_type": "TYPE_B_PATTERN_VIOLATION",
-                            "reason": (
-                                f"Possibile sostituzione carattere '{c1}' <-> '{c2}' (lettera/cifra) rispetto a "
-                                f"'{getattr(bp, 'article_name', 'Unknown')}' ({target_skeleton})."
-                            ),
-                        }
-
-    # Confronta anche con le ancore dei code_embeddings del brand
-    for emb in embeddings or []:
+    # 4. Ancore dei code_embeddings (prefisso serie), solo se non è l'ancora di un'altra serie nota
+    anchors = {getattr(e, "root_prefix_anchor", "") for e in embeddings}
+    for emb in embeddings:
         anchor = getattr(emb, "root_prefix_anchor", "")
-        exp_root_len = getattr(emb, "root_length", 0)
-        if not anchor or not exp_root_len:
+        if not anchor or not getattr(emb, "root_length", 0) or len(clean) < len(anchor):
             continue
-        # Se la radice differisce per un solo carattere sull'ancora (es. O vs 0 o I vs 1)
-        if len(clean) >= len(anchor):
-            clean_anchor = clean[:len(anchor)]
-            if clean_anchor != anchor and levenshtein_distance(clean_anchor, anchor) == 1:
-                diff_idx = [i for i in range(len(anchor)) if clean_anchor[i] != anchor[i]][0]
-                if (clean_anchor[diff_idx].isalpha() and anchor[diff_idx].isdigit()) or \
-                   (clean_anchor[diff_idx].isdigit() and anchor[diff_idx].isalpha()):
-                    return {
-                        "typo_warning": True,
-                        "suspect_code": raw_code,
-                        "suggested_match": anchor,
-                        "blueprint_id": None,
-                        "blueprint_name": None,
-                        "anomaly_type": "TYPE_B_PATTERN_VIOLATION",
-                        "reason": f"Possibile refuso nel prefisso serie '{clean_anchor}' (atteso '{anchor}').",
-                    }
+        clean_anchor = clean[:len(anchor)]
+        if clean_anchor in anchors:
+            continue
+        hit = _typo_pair(clean_anchor, anchor)
+        if hit and hit[0] in ("TYPE_B_PATTERN_VIOLATION", "TYPE_C_TRANSPOSITION"):
+            return {
+                "typo_warning": True,
+                "suspect_code": raw_code,
+                "suggested_match": anchor,
+                "blueprint_id": None,
+                "blueprint_name": None,
+                "anomaly_type": hit[0],
+                "reason": f"Possibile refuso nel prefisso serie '{clean_anchor}' (atteso '{anchor}').",
+            }
 
     return None
 
@@ -567,14 +606,16 @@ def normalize_code(raw: str, heuristic: Any = None) -> str:
                     return f"{root}@{MASK_CHAR * len(col)}"
                 return f"{root}{MASK_CHAR * len(col)}"
 
-    # 4. Regex fallback
-    pattern = getattr(heuristic, "pattern", "") or ""
-    out = normalize_with_regex(raw, pattern)
-    if out is not None:
-        return out
-    out = normalize_with_regex(sterilized, pattern)
-    if out is not None:
-        return out
+    # 4. Regex fallback: non per euristiche esplicitamente PENDING_COHORT, i cui pattern storici
+    # possono essere greedy su codici compatti (es. P10QMTZ4551 -> P10QMTZ####).
+    if mode != "PENDING_COHORT":
+        pattern = getattr(heuristic, "pattern", "") or ""
+        out = normalize_with_regex(raw, pattern)
+        if out is not None:
+            return out
+        out = normalize_with_regex(sterilized, pattern)
+        if out is not None:
+            return out
 
     return sterilized
 
@@ -689,6 +730,16 @@ def induce_positional_mask(
                 suffix = suffix[len(suffix) - i:] if i else ""
         if len(prefix) + len(suffix) < MIN_PROTECTED_CHARS:
             return _fail(INSUFFICIENT_ANCHOR)
+        # La porzione variabile (colore) di ogni codice deve essere non vuota e un unico token
+        # alfanumerico (al più un '@' di confine iniziale): evita regole su codici troncati
+        # o che attraversano più segmenti.
+        for c in distinct:
+            var = c[len(prefix): len(c) - len(suffix)] if suffix else c[len(prefix):]
+            var = var[1:] if var.startswith("@") else var
+            if not var:
+                return _fail(NO_VARIANCE, "porzione variabile vuota (codice troncato)")
+            if "@" in var:
+                return _fail(SIGNATURE_MISMATCH, "la porzione variabile attraversa più segmenti")
         rule = {
             "type": "ELASTIC",
             "prefix": prefix,

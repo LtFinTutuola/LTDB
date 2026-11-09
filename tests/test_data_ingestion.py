@@ -874,7 +874,9 @@ def test_resolve_items_with_photos_existing_blueprint_category_and_subcategory(d
     heuristic = BrandHeuristic(
         brand_id=brand.id,
         pattern=r"^(?P<model_code>[A-Z0-9]+)#(?P<color_code>[A-Z0-9]+)$",
-        explanation="Test pattern"
+        explanation="Test pattern",
+        heuristic_mode="COLOR_MASKED",
+        heuristic_confirmed=True,
     )
     db_session.add(heuristic)
     db_session.commit()

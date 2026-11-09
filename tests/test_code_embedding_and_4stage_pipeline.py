@@ -144,7 +144,11 @@ def test_stage2_fast_path_and_skeleton_lookup(db_session: Session):
     embs = heuristic_repo.recalculate_embeddings_for_heuristic(db_session, str(brand.id), str(h.id))
     assert len(embs) == 1
     assert embs[0].root_length == 8
-
+    # Il blueprint di fixture non ha articoli: il range colore dedotto dal codice mascherato non è
+    # significativo, quindi lo si imposta esplicitamente (il gate BUG-C lo applica ai nuovi codici).
+    embs[0].color_length_min = 1
+    embs[0].color_length_max = 5
+    db_session.commit()
     # Fast-Path Stage 2B resolution with separator-agnostic input "P10FZP61-B01"
     items = [{"vendor_code": "P10FZP61-B01", "colors": ["blu"]}]
     resolved, unresolved, resolved_bps, _, _ = data_ingestion_service._resolve_items_with_photos(
