@@ -782,7 +782,7 @@ def test_single_item_request_whitespace_stripping():
         quantity=2,
         colors=[" Rosso ", " Blu Notte "]
     )
-    assert req.vendor_code == "HWVG871234"
+    assert req.vendor_code == "HWVG 871 234"
     assert req.barcode == "800000000017"
     assert req.colors == ["rosso", "blu notte"]
 

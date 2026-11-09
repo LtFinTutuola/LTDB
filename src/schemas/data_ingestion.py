@@ -89,12 +89,14 @@ class SingleItemIngestionRequest(BaseModel):
     barcode: Optional[str] = Field(default=None, description="Barcode or EAN")
     quantity: Optional[int] = Field(default=1, description="Item quantity")
     colors: NormalizedStringList = Field(..., description="Article colors hint for web search")
+    typo_warning_confirmed: bool = Field(default=False, description="Se True, bypassa il guardrail anti-typo dello Stadio 3 dopo conferma esplicita dell'utente")
 
     @field_validator("vendor_code", mode="before")
     @classmethod
     def clean_vendor_code_whitespace(cls, v: Any) -> Any:
         if isinstance(v, str):
-            return "".join(v.split()).upper()
+            import re
+            return re.sub(r"\s+", " ", v.strip()).upper()
         return v
 
     @field_validator("barcode", mode="before")

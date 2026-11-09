@@ -32,7 +32,9 @@ class CategoryResponse(BaseSchemaWithAudit):
 class ArticleBlueprintCreate(BaseModel):
     brand_id: str
     category_id: Optional[str] = None
+    heuristic_id: Optional[str] = None
     normalized_vendor_code: Optional[str] = None
+    skeleton_vendor_code: Optional[str] = None
     article_name: str = "Unknown"
     description: str
     extended_description: str
@@ -40,10 +42,25 @@ class ArticleBlueprintCreate(BaseModel):
     materials: Optional[List[str]] = None
     dimensions: Optional[str] = None
 
+class ArticleBlueprintUpdate(BaseModel):
+    brand_id: Optional[str] = None
+    category_id: Optional[str] = None
+    heuristic_id: Optional[str] = None
+    normalized_vendor_code: Optional[str] = None
+    skeleton_vendor_code: Optional[str] = None
+    article_name: Optional[str] = None
+    description: Optional[str] = None
+    extended_description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    materials: Optional[List[str]] = None
+    dimensions: Optional[str] = None
+
 class ArticleBlueprintResponse(BaseSchemaWithAudit):
     brand_id: str
     category_id: Optional[str]
+    heuristic_id: Optional[str] = None
     normalized_vendor_code: Optional[str]
+    skeleton_vendor_code: Optional[str] = None
     article_name: str
     description: str
     extended_description: str

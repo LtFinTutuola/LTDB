@@ -1,15 +1,12 @@
 """
 Normalizzatore deterministico dei vendor code (nessuna dipendenza da LLM).
 
-Implementa lo Slicing Posizionale carattere-per-carattere con Strict Minimal Masking:
-un carattere diventa ``#`` solo se osservato variare tra due articoli certificati come
-STESSO MODELLO con colori diversi.
-
-Regole supportate (salvate in ``BrandHeuristic.heuristic_metadata["rules"]``):
-  - FIXED   : codici di pari lunghezza e pari firma separatori -> posizioni mascherate
-              (``#`` ripetuto per ogni posizione mascherata, es. ``ABCDEF12###``).
-  - ELASTIC : codici di lunghezza diversa -> ancore prefisso/suffisso, span variabile
-              sostituito da un singolo ``#`` (es. ``BAG100-#``).
+Implementa:
+- Step 0: Sterilizzazione dei separatori contigui in '@' e calcolo dello scheletro alfanumerico puro
+- Slicing Posizionale e Segment-Aware a 3 rami (DELIMITED, COMPACT, AGNOSTIC)
+- Profilazione morfologica (CodeEmbedding)
+- Motore di similarità bimodale (S_morph + S_trigram Sørensen-Dice + Damerau-Levenshtein)
+- Guardrail Anti-Typo interattivo (Tipi A, B, C)
 """
 from __future__ import annotations
 
@@ -29,25 +26,449 @@ SIGNATURE_MISMATCH = "SIGNATURE_MISMATCH"
 NEGATIVE_CONSTRAINT_VIOLATION = "NEGATIVE_CONSTRAINT_VIOLATION"
 
 
+# ---------------------------------------------------------------------------
+# Step 0: Pulizia, Sterilizzazione Separatori e Scheletro Alfanumerico
+# ---------------------------------------------------------------------------
+
 def clean_code(raw: Optional[str]) -> str:
+    """Pulizia di base: strip e maiuscolo."""
     return (raw or "").strip().upper()
 
+
+def sterilize_separators(raw: Optional[str]) -> str:
+    """
+    Step 0: Converte qualsiasi sequenza contigua di separatori
+    (-, --, spazio, /, //, \\, \\\\, |, ., _, __, *) in un singolo '@' canonico.
+    Rimuove eventuali '@' iniziali e finali.
+    """
+    if not raw:
+        return ""
+    code = raw.strip().upper()
+    code = re.sub(r"[\s\-/\\|._*]+", "@", code)
+    return code.strip("@")
+
+
+def compute_skeleton_code(code: Optional[str]) -> str:
+    """
+    Ritorna lo scheletro alfanumerico puro del codice, depurato da '@', '#'
+    e da qualsiasi separatore residuo.
+    """
+    if not code:
+        return ""
+    return re.sub(r"[@#\s\-/\\|._*]+", "", code.strip().upper())
+
+
+# ---------------------------------------------------------------------------
+# Profilazione Morfologica (CodeEmbedding)
+# ---------------------------------------------------------------------------
+
+def compute_root_blocks_pattern(root_str: str) -> str:
+    """
+    Converte una stringa radice in pattern di blocchi preservando '@'.
+    Es. '140879@1IDU' -> '[NUM:6]@[NUM:1][ALPHA:3]'
+        'P10FZP61' -> '[ALPHA:1][NUM:2][ALPHA:4][NUM:1]'
+        '04704@081' -> '[NUM:5]@[NUM:3]'
+    """
+    if not root_str:
+        return ""
+    tokens = []
+    pattern = re.compile(r"([A-Z]+|[0-9]+|@|[^A-Z0-9@]+)")
+    for match in pattern.finditer(root_str.upper()):
+        part = match.group(0)
+        if part == "@":
+            tokens.append("@")
+        elif part.isalpha():
+            tokens.append(f"[ALPHA:{len(part)}]")
+        elif part.isdigit():
+            tokens.append(f"[NUM:{len(part)}]")
+        else:
+            tokens.append(part)
+    return "".join(tokens)
+
+
+def compute_root_prefix_anchor(root_str: str) -> str:
+    """
+    Estrae l'ancora iniziale del codice/radice (fino a max 4 caratteri).
+    Es. 'P10FZP61' -> 'P10', 'AW5646WOL01' -> 'AW', '1408791IDU' -> '1408'.
+    """
+    if not root_str:
+        return ""
+    clean = root_str.replace("@", "")
+    if len(clean) <= 4:
+        return clean
+    m = re.match(r"^([A-Z]+[0-9]*|[0-9]+[A-Z]*)", clean)
+    if m and 2 <= len(m.group(1)) <= 4:
+        return m.group(1)
+    return clean[:4]
+
+
+def extract_root_and_color(
+    raw_code: str,
+    heuristic_mode: str = "COLOR_MASKED_COMPACT",
+    color_segment_index: Optional[int] = None,
+    root_length: Optional[int] = None,
+    color_length: Optional[int] = None,
+    rules: Optional[list[dict[str, Any]]] = None,
+) -> tuple[str, str, str]:
+    """
+    Estrae (sterilized_code, root_str, color_segment) secondo 3 rami:
+    - COLOR_AGNOSTIC: root_str = sterilized_code, color = ""
+    - COLOR_MASKED_COMPACT: ancoraggio per root_length (o color_length)
+      con fallback Separator-Agnostic se c'è un '@' al confine
+    - COLOR_MASKED_DELIMITED: split su '@', guardia len(segments) >= 2,
+      estrazione di segments[color_segment_index] e ricomposizione di root_str con '@'
+    """
+    sterilized = sterilize_separators(raw_code)
+    if not sterilized:
+        return ("", "", "")
+
+    # Deduzione automatica da rules se fornito
+    if rules:
+        for r in rules:
+            if r.get("type") == "DELIMITED":
+                heuristic_mode = "COLOR_MASKED_DELIMITED"
+                if color_segment_index is None:
+                    color_segment_index = r.get("color_segment_index")
+                break
+            elif r.get("type") == "FIXED" and root_length is None:
+                m_pos = r.get("masked_positions", [])
+                if m_pos:
+                    root_length = m_pos[0]
+            elif r.get("type") == "ELASTIC" and root_length is None:
+                pfx = r.get("prefix", "")
+                root_length = len(pfx.replace("@", ""))
+
+    mode = (heuristic_mode or "").upper()
+    if mode == "COLOR_AGNOSTIC":
+        return (sterilized, sterilized, "")
+
+    if mode in ("COLOR_MASKED_DELIMITED", "DELIMITED") or ("@" in sterilized and mode == "COLOR_MASKED" and color_segment_index is not None):
+        segments = sterilized.split("@")
+        c_idx = -1 if color_segment_index is None else color_segment_index
+        # Rettifica 2.A: guardia contro IndexError e segmenti insufficienti
+        if len(segments) < 2:
+            return (sterilized, sterilized, "")
+        if c_idx >= len(segments) or c_idx < -len(segments):
+            return (sterilized, sterilized, "")
+        norm_idx = c_idx if c_idx >= 0 else len(segments) + c_idx
+        color_segment = segments[norm_idx]
+        root_segments = [s for i, s in enumerate(segments) if i != norm_idx]
+        root_str = "@".join(root_segments)
+        return (sterilized, root_str, color_segment)
+
+    # COLOR_MASKED_COMPACT o fallback
+    clean = compute_skeleton_code(sterilized)
+    if root_length is not None and root_length > 0:
+        # Fallback Separator-Agnostic: es. 'P10FZP61@B01' con root_length=8
+        if len(sterilized) > root_length and sterilized[root_length] == "@":
+            root_str = sterilized[:root_length]
+            color_segment = sterilized[root_length + 1:]
+            return (sterilized, root_str, color_segment)
+        if len(clean) >= root_length:
+            root_str = clean[:root_length]
+            color_segment = clean[root_length:]
+            return (sterilized, root_str, color_segment)
+    elif color_length is not None and color_length > 0:
+        if len(clean) > color_length:
+            root_str = clean[:-color_length]
+            color_segment = clean[-color_length:]
+            return (sterilized, root_str, color_segment)
+
+    return (sterilized, clean, "")
+
+
+# ---------------------------------------------------------------------------
+# Metriche di Distanza e Similarità Bimodale
+# ---------------------------------------------------------------------------
+
+def damerau_levenshtein_distance(s1: str, s2: str) -> int:
+    """Distanza di Damerau-Levenshtein (supporta trasposizione adiacente)."""
+    d: dict[tuple[int, int], int] = {}
+    len1, len2 = len(s1), len(s2)
+    for i in range(-1, len1 + 1):
+        d[(i, -1)] = i + 1
+    for j in range(-1, len2 + 1):
+        d[(-1, j)] = j + 1
+
+    for i in range(len1):
+        for j in range(len2):
+            cost = 0 if s1[i] == s2[j] else 1
+            d[(i, j)] = min(
+                d[(i - 1, j)] + 1,        # deletion
+                d[(i, j - 1)] + 1,        # insertion
+                d[(i - 1, j - 1)] + cost  # substitution
+            )
+            if i > 0 and j > 0 and s1[i] == s2[j - 1] and s1[i - 1] == s2[j]:
+                d[(i, j)] = min(d[(i, j)], d[(i - 2, j - 2)] + 1)  # transposition
+
+    return d[(len1 - 1, len2 - 1)]
+
+
+def levenshtein_distance(s1: str, s2: str) -> int:
+    """Distanza di Levenshtein standard."""
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    prev = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        curr = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = prev[j + 1] + 1
+            deletions = curr[j] + 1
+            substitutions = prev[j] + (c1 != c2)
+            curr.append(min(insertions, deletions, substitutions))
+        prev = curr
+    return prev[-1]
+
+
+def trigram_dice_similarity(s1: str, s2: str) -> float:
+    """Coefficiente di Sørensen-Dice su trigrammi con padding '$$...$$'."""
+    if not s1 or not s2:
+        return 0.0
+    padded1 = f"$${s1.upper()}$$"
+    padded2 = f"$${s2.upper()}$$"
+    tri1 = [padded1[i:i+3] for i in range(len(padded1) - 2)]
+    tri2 = [padded2[i:i+3] for i in range(len(padded2) - 2)]
+    set1, set2 = set(tri1), set(tri2)
+    intersection = len(set1 & set2)
+    total = len(set1) + len(set2)
+    if total == 0:
+        return 1.0
+    return (2.0 * intersection) / float(total)
+
+
+def score_embedding_compatibility(
+    sterilized_code: str,
+    embedding: Any,
+    heuristic: Any = None,
+) -> tuple[float, Optional[str], Optional[str]]:
+    """
+    Calcola il punteggio di compatibilità morfologica S_morph in [0, 1].
+    Ritorna (score, extracted_root, masked_code).
+    """
+    mode = getattr(heuristic, "heuristic_mode", "COLOR_MASKED_COMPACT") if heuristic else "COLOR_MASKED_COMPACT"
+    c_idx = getattr(heuristic, "color_segment_index", None) if heuristic else None
+
+    # Estrazione radice e colore secondo la configurazione dell'embedding
+    _, root_str, color_segment = extract_root_and_color(
+        sterilized_code,
+        heuristic_mode=mode,
+        color_segment_index=c_idx,
+        root_length=getattr(embedding, "root_length", None),
+    )
+
+    clean_code_val = compute_skeleton_code(sterilized_code)
+    clean_root = compute_skeleton_code(root_str)
+    root_len = len(clean_root)
+    color_len = len(compute_skeleton_code(color_segment))
+    total_len = len(clean_code_val)
+
+    score = 0.0
+
+    # 1. Separator count check (con tolleranza separator-agnostic)
+    code_segs = sterilized_code.split("@")
+    code_sep_count = len(code_segs) - 1
+    exp_sep_count = getattr(embedding, "separator_count", 0)
+
+    if code_sep_count == exp_sep_count:
+        score += 0.25
+    elif mode == "COLOR_MASKED_COMPACT" and exp_sep_count == 0 and code_sep_count == 1:
+        # Fallback Separator-Agnostic accettato
+        score += 0.20
+
+    # 2. Root length check
+    exp_root_len = getattr(embedding, "root_length", 0)
+    if exp_root_len and root_len == exp_root_len:
+        score += 0.35
+    elif exp_root_len and abs(root_len - exp_root_len) == 1:
+        score += 0.15
+
+    # 3. Root blocks pattern check
+    curr_pattern = compute_root_blocks_pattern(root_str)
+    exp_pattern = getattr(embedding, "root_blocks_pattern", "")
+    if exp_pattern and curr_pattern == exp_pattern:
+        score += 0.25
+    elif exp_pattern and compute_root_prefix_anchor(root_str) == getattr(embedding, "root_prefix_anchor", ""):
+        score += 0.15
+
+    # 4. Color length range check
+    c_min = getattr(embedding, "color_length_min", 1)
+    c_max = getattr(embedding, "color_length_max", 5)
+    if color_len > 0 and (c_min <= color_len <= c_max):
+        score += 0.15
+    elif color_len > 0 and (abs(color_len - c_min) <= 1 or abs(color_len - c_max) <= 1):
+        score += 0.05
+
+    score = min(1.0, score)
+
+    # Costruzione codice mascherato
+    masked_code = None
+    if score >= 0.70 and color_len > 0:
+        if mode in ("COLOR_MASKED_DELIMITED", "DELIMITED"):
+            segs = sterilized_code.split("@")
+            norm_idx = -1 if c_idx is None else (c_idx if c_idx >= 0 else len(segs) + c_idx)
+            if 0 <= norm_idx < len(segs):
+                segs[norm_idx] = MASK_CHAR
+                masked_code = "@".join(segs)
+        else:
+            if "@" in sterilized_code and sterilized_code.startswith(root_str + "@"):
+                masked_code = f"{root_str}@{MASK_CHAR * color_len}"
+            else:
+                masked_code = f"{root_str}{MASK_CHAR * color_len}"
+
+    return (score, root_str, masked_code)
+
+
+# ---------------------------------------------------------------------------
+# Guardrail Anti-Typo Interattivo (Stadio 3)
+# ---------------------------------------------------------------------------
+
+def detect_typo_anomaly(
+    raw_code: str,
+    embeddings: list[Any],
+    blueprints: list[Any],
+) -> Optional[dict[str, Any]]:
+    """
+    Verifica se un vendor code non matchato presenta una delle 3 anomalie typo:
+    - Tipo A: DeltaLength = +/- 1 e Levenshtein = 1 sulla radice/scheletro (edit distance 1)
+    - Tipo B: DeltaLength = 0 e violazione del pattern [ALPHA]/[NUM] (lettera <-> cifra a edit distance 1)
+    - Tipo C: Trasposizione di caratteri adiacenti (Damerau = 1, Levenshtein = 2)
+    """
+    sterilized = sterilize_separators(raw_code)
+    clean = compute_skeleton_code(sterilized)
+    if len(clean) < 3:
+        return None
+
+    # Confronta con gli scheletri dei Blueprint del brand
+    for bp in blueprints or []:
+        bp_norm = getattr(bp, "normalized_vendor_code", "") or ""
+        target_skeleton = getattr(bp, "skeleton_vendor_code", None) or compute_skeleton_code(bp_norm)
+        if not target_skeleton or target_skeleton == clean:
+            continue
+
+        len_diff = abs(len(clean) - len(target_skeleton))
+
+        # --- Tipo A: DeltaLength = +/- 1 e Levenshtein = 1 ---
+        if len_diff == 1:
+            d_lev = levenshtein_distance(clean, target_skeleton)
+            if d_lev == 1:
+                return {
+                    "typo_warning": True,
+                    "suspect_code": raw_code,
+                    "suggested_match": bp_norm or target_skeleton,
+                    "blueprint_id": bp.id,
+                    "blueprint_name": getattr(bp, "article_name", "Unknown"),
+                    "anomaly_type": "TYPE_A_LENGTH_VARIANCE",
+                    "reason": (
+                        f"Possibile variazione di lunghezza (+/- 1 carattere) rispetto al modello "
+                        f"'{getattr(bp, 'article_name', 'Unknown')}' ({target_skeleton})."
+                    ),
+                }
+
+        # --- Tipo B & Tipo C: DeltaLength = 0 ---
+        if len_diff == 0:
+            d_dam = damerau_levenshtein_distance(clean, target_skeleton)
+            d_lev = levenshtein_distance(clean, target_skeleton)
+
+            # Tipo C: Trasposizione adiacente
+            if d_dam == 1 and d_lev == 2:
+                return {
+                    "typo_warning": True,
+                    "suspect_code": raw_code,
+                    "suggested_match": bp_norm or target_skeleton,
+                    "blueprint_id": bp.id,
+                    "blueprint_name": getattr(bp, "article_name", "Unknown"),
+                    "anomaly_type": "TYPE_C_TRANSPOSITION",
+                    "reason": (
+                        f"Possibile inversione di caratteri adiacenti rispetto al modello "
+                        f"'{getattr(bp, 'article_name', 'Unknown')}' ({target_skeleton})."
+                    ),
+                }
+
+            # Tipo B: Violazione pattern alfanumerico (sostituzione lettera <-> cifra)
+            if d_lev == 1:
+                diff_indices = [i for i in range(len(clean)) if clean[i] != target_skeleton[i]]
+                if len(diff_indices) == 1:
+                    idx = diff_indices[0]
+                    c1 = clean[idx]
+                    c2 = target_skeleton[idx]
+                    if (c1.isalpha() and c2.isdigit()) or (c1.isdigit() and c2.isalpha()):
+                        return {
+                            "typo_warning": True,
+                            "suspect_code": raw_code,
+                            "suggested_match": bp_norm or target_skeleton,
+                            "blueprint_id": bp.id,
+                            "blueprint_name": getattr(bp, "article_name", "Unknown"),
+                            "anomaly_type": "TYPE_B_PATTERN_VIOLATION",
+                            "reason": (
+                                f"Possibile sostituzione carattere '{c1}' <-> '{c2}' (lettera/cifra) rispetto a "
+                                f"'{getattr(bp, 'article_name', 'Unknown')}' ({target_skeleton})."
+                            ),
+                        }
+
+    # Confronta anche con le ancore dei code_embeddings del brand
+    for emb in embeddings or []:
+        anchor = getattr(emb, "root_prefix_anchor", "")
+        exp_root_len = getattr(emb, "root_length", 0)
+        if not anchor or not exp_root_len:
+            continue
+        # Se la radice differisce per un solo carattere sull'ancora (es. O vs 0 o I vs 1)
+        if len(clean) >= len(anchor):
+            clean_anchor = clean[:len(anchor)]
+            if clean_anchor != anchor and levenshtein_distance(clean_anchor, anchor) == 1:
+                diff_idx = [i for i in range(len(anchor)) if clean_anchor[i] != anchor[i]][0]
+                if (clean_anchor[diff_idx].isalpha() and anchor[diff_idx].isdigit()) or \
+                   (clean_anchor[diff_idx].isdigit() and anchor[diff_idx].isalpha()):
+                    return {
+                        "typo_warning": True,
+                        "suspect_code": raw_code,
+                        "suggested_match": anchor,
+                        "blueprint_id": None,
+                        "blueprint_name": None,
+                        "anomaly_type": "TYPE_B_PATTERN_VIOLATION",
+                        "reason": f"Possibile refuso nel prefisso serie '{clean_anchor}' (atteso '{anchor}').",
+                    }
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Regole Posizionali Legacy e Compatibilità
+# ---------------------------------------------------------------------------
 
 def compute_invariant_signature(code: str) -> str:
     """Firma separatori: ogni carattere alfanumerico diventa 'x', i separatori restano."""
     return "".join("x" if ch.isalnum() else ch for ch in clean_code(code))
 
 
-# ---------------------------------------------------------------------------
-# Applicazione di una regola
-# ---------------------------------------------------------------------------
-
 def apply_rule(raw: str, rule: dict[str, Any]) -> Optional[str]:
-    """Applica una singola regola al codice. Ritorna None se la regola non è applicabile."""
-    code = clean_code(raw)
-    if not code or not rule:
+    """Applica una singola regola al codice. Ritorna None se non è applicabile."""
+    if not raw or not rule:
         return None
     rtype = rule.get("type")
+    if rtype == "DELIMITED":
+        sterilized = sterilize_separators(raw)
+        segs = sterilized.split("@")
+        num_segs = rule.get("num_segments")
+        c_idx = rule.get("color_segment_index")
+        if num_segs is not None and len(segs) != num_segs:
+            return None
+        if len(segs) < 2 or c_idx is None:
+            return None
+        if not (-len(segs) <= c_idx < len(segs)):
+            return None
+        norm_idx = c_idx if c_idx >= 0 else len(segs) + c_idx
+        invariant_chars = sum(len(s) for i, s in enumerate(segs) if i != norm_idx)
+        if invariant_chars < MIN_PROTECTED_CHARS:
+            return None
+        out_segs = list(segs)
+        out_segs[norm_idx] = MASK_CHAR
+        return "@".join(out_segs)
+
+    code = clean_code(raw)
+    if not code:
+        return None
     if rtype == "FIXED":
         if len(code) != rule.get("length") or compute_invariant_signature(code) != rule.get("signature"):
             return None
@@ -57,7 +478,15 @@ def apply_rule(raw: str, rule: dict[str, Any]) -> Optional[str]:
         prefix, suffix = rule.get("prefix", ""), rule.get("suffix", "")
         if len(code) < len(prefix) + len(suffix) + 1:
             return None
-        if not code.startswith(prefix) or (suffix and not code.endswith(suffix)):
+        # Supporta sia il separatore originale che '@'
+        code_compat = code.replace("@", "-")
+        matched = False
+        if code.startswith(prefix) and (not suffix or code.endswith(suffix)):
+            matched = True
+        elif code_compat.startswith(prefix) and (not suffix or code_compat.endswith(suffix)):
+            code = code_compat
+            matched = True
+        if not matched:
             return None
         return f"{prefix}{MASK_CHAR}{suffix}"
     return None
@@ -72,7 +501,7 @@ def apply_rules(raw: str, rules: list[dict[str, Any]]) -> Optional[str]:
 
 
 def normalize_with_regex(raw: str, pattern: str) -> Optional[str]:
-    """Percorso regex (pattern con gruppo ``color_code``): ``#`` ripetuto per la lunghezza del gruppo."""
+    """Percorso regex (pattern con gruppo 'color_code')."""
     code = clean_code(raw)
     if not pattern or not code:
         return None
@@ -91,21 +520,67 @@ def normalize_with_regex(raw: str, pattern: str) -> Optional[str]:
 def normalize_code(raw: str, heuristic: Any = None) -> str:
     """
     Normalizza un vendor code secondo l'euristica del brand.
-    Priorità: regole in heuristic_metadata -> regex con color_code -> passthrough.
+    Priorità:
+    1. Regole in heuristic_metadata (FIXED / ELASTIC)
+    2. Nuove modalità COLOR_MASKED_DELIMITED / COLOR_MASKED_COMPACT
+    3. Regex con color_code
+    4. Passthrough con Step 0
     """
-    code = clean_code(raw)
-    if not code or heuristic is None:
-        return code
+    if not raw:
+        return ""
+    sterilized = sterilize_separators(raw)
+    if heuristic is None:
+        return sterilized
+
+    mode = getattr(heuristic, "heuristic_mode", None)
+    if mode == "COLOR_AGNOSTIC":
+        return sterilized
+
+    # 1. Regole esplicite in metadata
     metadata = getattr(heuristic, "heuristic_metadata", None) or {}
-    out = apply_rules(code, metadata.get("rules", []))
+    rules = metadata.get("rules", [])
+    out = apply_rules(raw, rules)
     if out is not None:
         return out
-    out = normalize_with_regex(code, getattr(heuristic, "pattern", "") or "")
-    return out if out is not None else code
+    out = apply_rules(sterilized, rules)
+    if out is not None:
+        return out
+
+    # 2. COLOR_MASKED_DELIMITED
+    if mode in ("COLOR_MASKED_DELIMITED", "DELIMITED"):
+        c_idx = getattr(heuristic, "color_segment_index", None)
+        c_idx = -1 if c_idx is None else c_idx
+        segments = sterilized.split("@")
+        if len(segments) > 1 and (-len(segments) <= c_idx < len(segments)):
+            norm_idx = c_idx if c_idx >= 0 else len(segments) + c_idx
+            segs = list(segments)
+            segs[norm_idx] = MASK_CHAR
+            return "@".join(segs)
+
+    # 3. COLOR_MASKED_COMPACT
+    if mode in ("COLOR_MASKED_COMPACT", "COLOR_MASKED"):
+        root_len = metadata.get("root_length")
+        if root_len:
+            _, root, col = extract_root_and_color(sterilized, heuristic_mode="COLOR_MASKED_COMPACT", root_length=root_len)
+            if col:
+                if "@" in sterilized and sterilized.startswith(root + "@"):
+                    return f"{root}@{MASK_CHAR * len(col)}"
+                return f"{root}{MASK_CHAR * len(col)}"
+
+    # 4. Regex fallback
+    pattern = getattr(heuristic, "pattern", "") or ""
+    out = normalize_with_regex(raw, pattern)
+    if out is not None:
+        return out
+    out = normalize_with_regex(sterilized, pattern)
+    if out is not None:
+        return out
+
+    return sterilized
 
 
 # ---------------------------------------------------------------------------
-# Induzione
+# Induzione Posizionale
 # ---------------------------------------------------------------------------
 
 def _fail(status: str, detail: str = "") -> dict[str, Any]:
@@ -129,12 +604,47 @@ def induce_positional_mask(
 ) -> dict[str, Any]:
     """
     Induce una regola a partire da codici dello STESSO MODELLO con colori diversi.
-    Ritorna ``{"status", "rule", "detail"}``.
+    Ritorna {"status", "rule", "detail"}.
     """
-    distinct = sorted({clean_code(c) for c in codes if clean_code(c)})
-    if len(distinct) < 2:
+    sterilized_codes = [sterilize_separators(c) for c in codes if sterilize_separators(c)]
+    distinct_sterilized = sorted(set(sterilized_codes))
+    if len(distinct_sterilized) < 2:
         return _fail(NO_VARIANCE, "servono almeno due codici distinti")
 
+    # Caso A: Codici Delimitati (tutti i codici presentano almeno un separatore '@')
+    if all("@" in c for c in distinct_sterilized):
+        seg_lists = [c.split("@") for c in distinct_sterilized]
+        num_segs_set = {len(segs) for segs in seg_lists}
+        if len(num_segs_set) != 1:
+            return _fail(SIGNATURE_MISMATCH, "numero di segmenti diverso tra i codici")
+        num_segs = num_segs_set.pop()
+        if num_segs < 2:
+            return _fail(SIGNATURE_MISMATCH, "segmenti insufficienti per induzione delimitata")
+
+        var_seg_indices = [i for i in range(num_segs) if len({s[i] for s in seg_lists}) > 1]
+        if not var_seg_indices:
+            return _fail(NO_VARIANCE)
+        if len(var_seg_indices) > 1:
+            return _fail(DISCONTINUOUS_ANOMALY, "variano più segmenti contemporaneamente")
+
+        color_seg_idx = var_seg_indices[0]
+        first_segs = seg_lists[0]
+        invariant_len = sum(len(first_segs[i]) for i in range(num_segs) if i != color_seg_idx)
+        if invariant_len < MIN_PROTECTED_CHARS:
+            return _fail(INSUFFICIENT_ANCHOR)
+
+        rule = {
+            "type": "DELIMITED",
+            "num_segments": num_segs,
+            "color_segment_index": color_seg_idx,
+            "heuristic_mode": "COLOR_MASKED_DELIMITED",
+        }
+        if _violates_negative(rule, negative_pairs or []):
+            return _fail(NEGATIVE_CONSTRAINT_VIOLATION, "la regola collasserebbe un'esclusione nota")
+        return {"status": OK, "rule": rule, "detail": ""}
+
+    # Caso B: Codici Compatti (o privi di '@' in almeno un codice)
+    distinct = distinct_sterilized
     lengths = {len(c) for c in distinct}
     if len(lengths) == 1:
         length = lengths.pop()
@@ -152,7 +662,14 @@ def induce_positional_mask(
             return _fail(DISCONTINUOUS_ANOMALY, "posizioni variabili non contigue")
         if length - len(ordered) < MIN_PROTECTED_CHARS:
             return _fail(INSUFFICIENT_ANCHOR)
-        rule = {"type": "FIXED", "signature": signature, "length": length, "masked_positions": ordered}
+        rule = {
+            "type": "FIXED",
+            "signature": signature,
+            "length": length,
+            "masked_positions": ordered,
+            "heuristic_mode": "COLOR_MASKED_COMPACT",
+            "root_length": ordered[0] if ordered[0] > 0 else length - len(ordered),
+        }
     else:
         prefix = distinct[0]
         for c in distinct[1:]:
@@ -172,7 +689,13 @@ def induce_positional_mask(
                 suffix = suffix[len(suffix) - i:] if i else ""
         if len(prefix) + len(suffix) < MIN_PROTECTED_CHARS:
             return _fail(INSUFFICIENT_ANCHOR)
-        rule = {"type": "ELASTIC", "prefix": prefix, "suffix": suffix}
+        rule = {
+            "type": "ELASTIC",
+            "prefix": prefix,
+            "suffix": suffix,
+            "heuristic_mode": "COLOR_MASKED_COMPACT",
+            "root_length": len(prefix.replace("@", "")),
+        }
 
     if _violates_negative(rule, negative_pairs or []):
         return _fail(NEGATIVE_CONSTRAINT_VIOLATION, "la regola collasserebbe un'esclusione nota")
@@ -180,9 +703,20 @@ def induce_positional_mask(
 
 
 def rule_to_regex(rule: dict[str, Any]) -> str:
-    """Pattern regex (con gruppo ``color_code``) equivalente alla regola, per visualizzazione/compatibilità API."""
+    """Pattern regex equivalente alla regola."""
     if not rule:
         return ""
+    if rule.get("type") == "DELIMITED":
+        num_segs = rule.get("num_segments", 2)
+        c_idx = rule.get("color_segment_index", -1)
+        norm_idx = c_idx if c_idx >= 0 else num_segs + c_idx
+        parts = []
+        for i in range(num_segs):
+            if i == norm_idx:
+                parts.append("(?P<color_code>[A-Za-z0-9]+)")
+            else:
+                parts.append("[A-Za-z0-9]+")
+        return f"^{re.escape('@').join(parts)}$"
     if rule.get("type") == "FIXED":
         pos = rule["masked_positions"]
         start, n, length = pos[0], len(pos), rule["length"]
@@ -193,11 +727,16 @@ def rule_to_regex(rule: dict[str, Any]) -> str:
 
 
 def merge_rule(rules: list[dict[str, Any]], new_rule: dict[str, Any]) -> list[dict[str, Any]]:
-    """Inserisce/sostituisce ``new_rule`` nella lista, rimpiazzando una regola della stessa famiglia."""
+    """Inserisce/sostituisce new_rule nella lista."""
     out = []
     replaced = False
     for r in rules or []:
-        if r.get("type") == new_rule.get("type") == "FIXED" \
+        if r.get("type") == new_rule.get("type") == "DELIMITED" \
+                and r.get("num_segments") == new_rule.get("num_segments") \
+                and r.get("color_segment_index") == new_rule.get("color_segment_index"):
+            out.append(new_rule)
+            replaced = True
+        elif r.get("type") == new_rule.get("type") == "FIXED" \
                 and r.get("length") == new_rule.get("length") and r.get("signature") == new_rule.get("signature"):
             out.append(new_rule)
             replaced = True
@@ -219,10 +758,6 @@ def find_applicable_rule(raw: str, rules: list[dict[str, Any]]) -> Optional[dict
     return None
 
 
-# ---------------------------------------------------------------------------
-# Famiglie DDT / pivot
-# ---------------------------------------------------------------------------
-
 def family_key(code: str) -> tuple[str, int, str]:
     c = clean_code(code)
     return (compute_invariant_signature(c), len(c), c[:4])
@@ -242,7 +777,7 @@ def _divergence(a: str, b: str) -> int:
 
 
 def select_pivot_pairs(codes: list[str], max_pairs: int = 2) -> list[tuple[str, str]]:
-    """Coppie di codici (entro la stessa famiglia) a massima divergenza: i migliori candidati per l'oracolo."""
+    """Coppie di codici a massima divergenza."""
     pairs: list[tuple[str, str]] = []
     for members in partition_ddt_cohort_families(codes).values():
         if len(members) < 2:

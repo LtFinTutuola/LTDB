@@ -63,14 +63,24 @@ class TestVendorCodeNormalizer:
         assert vcn.apply_rule("ABCDEF12567", rule2) == "ABCDEF12###"
 
     def test_elastic_dual_anchor_variable_length_codes(self):
-        res = vcn.induce_positional_mask(["BAG100-BK", "BAG100-RED"])
+        res = vcn.induce_positional_mask(["BAG100BK", "BAG100RED"])
         assert res["status"] == vcn.OK
         rule = res["rule"]
         assert rule["type"] == "ELASTIC"
-        assert rule["prefix"] == "BAG100-"
+        assert rule["prefix"] == "BAG100"
         assert rule["suffix"] == ""
-        assert vcn.apply_rule("BAG100-BK", rule) == "BAG100-#"
-        assert vcn.apply_rule("BAG100-GREEN", rule) == "BAG100-#"
+        assert vcn.apply_rule("BAG100BK", rule) == "BAG100#"
+        assert vcn.apply_rule("BAG100GREEN", rule) == "BAG100#"
+
+    def test_delimited_segment_variable_length_codes(self):
+        res = vcn.induce_positional_mask(["BAG100-BK", "BAG100-RED"])
+        assert res["status"] == vcn.OK
+        rule = res["rule"]
+        assert rule["type"] == "DELIMITED"
+        assert rule["num_segments"] == 2
+        assert rule["color_segment_index"] == 1
+        assert vcn.apply_rule("BAG100-BK", rule) == "BAG100@#"
+        assert vcn.apply_rule("BAG100-GREEN", rule) == "BAG100@#"
 
     def test_discontinuous_anomaly_rejected(self):
         # Variano sia l'indice 2 sia l'indice 6 e il suffisso -> non contiguo
@@ -488,7 +498,7 @@ class TestHeuristicInductionAndHITL:
         assert len(bp_db.articles) == 4
         assert {a.supplier_code for a in bp_db.articles} == {"ABCDEF12345", "ABCDEF12678"}
         active_h = heuristic_repo.get_active_heuristic(db_session, str(brand.id))
-        assert active_h.heuristic_mode == HeuristicMode.COLOR_MASKED
+        assert active_h.heuristic_mode in (HeuristicMode.COLOR_MASKED, HeuristicMode.COLOR_MASKED_COMPACT)
         assert active_h.heuristic_confirmed is True
         assert active_h.heuristic_metadata["rules"][0]["masked_positions"] == [8, 9, 10]
 

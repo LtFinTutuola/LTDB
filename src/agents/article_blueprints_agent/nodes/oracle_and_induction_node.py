@@ -43,7 +43,7 @@ MAX_DB_CANDIDATES = 3
 def _cluster_codes(cluster: dict) -> list[str]:
     seen: list[str] = []
     for it in cluster.get("cluster_items", []):
-        c = vcn.clean_code(it.get("vendor_code") or it.get("VendorCode"))
+        c = vcn.sterilize_separators(it.get("vendor_code") or it.get("VendorCode"))
         if c and c not in seen:
             seen.append(c)
     return seen
@@ -112,7 +112,7 @@ def _affected_db_blueprints(cohort: list[dict], rules_after: list[dict]) -> list
     """Blueprint DB il cui codice normalizzato cambierebbe applicando ``rules_after``."""
     affected = []
     for bp in cohort:
-        codes = [vcn.clean_code(v.get("supplier_code")) for v in bp.get("variants", []) if v.get("supplier_code")]
+        codes = [vcn.sterilize_separators(v.get("supplier_code")) for v in bp.get("variants", []) if v.get("supplier_code")]
         new_codes = {vcn.apply_rules(c, rules_after) for c in codes}
         new_codes.discard(None)
         current = bp.get("normalized_vendor_code")
@@ -298,7 +298,9 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                     f"Selezionato '{same_cands[0][1].get('article_name')}' (score {_get_score(same_cands[0][0]):.1f})."
                 )
             best_res, cand = same_cands[0]
-            cand_codes = {vcn.clean_code(v.get("supplier_code")) for v in cand.get("variants", []) if v.get("supplier_code")}
+            cand_codes = {vcn.sterilize_separators(v.get("supplier_code")) for v in cand.get("variants", []) if v.get("supplier_code")}
+            if cand.get("normalized_vendor_code"):
+                cand_codes.add(vcn.sterilize_separators(cand.get("normalized_vendor_code")))
             same_code = set(codes) & cand_codes
             relation = _get_relation(best_res)
 
@@ -360,7 +362,9 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                                 staging_blueprint_ids=[cluster["id"]], incoming_items=_incoming_view(cluster),
                                 matched_db_blueprints=[_db_bp_view(a) for a in ordered_affected],
                                 proposed_heuristic_update=_proposal(rules, new_rule, codes[0], explanation),
-                                rule_update=new_rule, merge_target_blueprint_id=cand["id"],
+                                rule_update=new_rule, mode_update=new_rule.get("heuristic_mode", "COLOR_MASKED"),
+                                color_segment_index=new_rule.get("color_segment_index"),
+                                merge_target_blueprint_id=cand["id"],
                                 oracle={
                                     "final_score": _get_score(best_res),
                                     "raw_score": getattr(best_res, "raw_score", _get_score(best_res)),
@@ -376,7 +380,9 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                             remaining.append(cluster)  # resta blueprint separato finché l'utente non conferma
                         else:
                             records.append(_record(
-                                kind="MASK_UPDATE", rule_update=new_rule, mode_update="COLOR_MASKED",
+                                kind="MASK_UPDATE", rule_update=new_rule,
+                                mode_update=new_rule.get("heuristic_mode", "COLOR_MASKED"),
+                                color_segment_index=new_rule.get("color_segment_index"),
                                 incoming_items=_incoming_view(cluster)
                             ))
                             rules = new_rules
@@ -446,7 +452,9 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
         elif ambig_cands:
             ambig_cands.sort(key=lambda t: _get_score(t[0]), reverse=True)
             best_res, cand = ambig_cands[0]
-            cand_codes = {vcn.clean_code(v.get("supplier_code")) for v in cand.get("variants", []) if v.get("supplier_code")}
+            cand_codes = {vcn.sterilize_separators(v.get("supplier_code")) for v in cand.get("variants", []) if v.get("supplier_code")}
+            if cand.get("normalized_vendor_code"):
+                cand_codes.add(vcn.sterilize_separators(cand.get("normalized_vendor_code")))
 
             # Calcolo di prova della maschera posizionale se l'utente dovesse confermare l'unione
             all_codes = sorted(set(codes) | cand_codes)
@@ -474,6 +482,8 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                 },
                 proposed_heuristic_update=_proposal(rules, proposed_rule, codes[0], explanation) if proposed_rule else None,
                 rule_update=proposed_rule,
+                mode_update=proposed_rule.get("heuristic_mode", "COLOR_MASKED") if proposed_rule else None,
+                color_segment_index=proposed_rule.get("color_segment_index") if proposed_rule else None,
             )
             cluster["_heuristic_reconciliation_id"] = rec["reconciliation_id"]
             records.append(rec)
@@ -483,7 +493,9 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
         # Caso 3: Tutti i candidati hanno verdetto DIFFERENT_MODEL
         else:
             for r, cand in diff_cands:
-                cand_codes = {vcn.clean_code(v.get("supplier_code")) for v in cand.get("variants", []) if v.get("supplier_code")}
+                cand_codes = {vcn.sterilize_separators(v.get("supplier_code")) for v in cand.get("variants", []) if v.get("supplier_code")}
+                if cand.get("normalized_vendor_code"):
+                    cand_codes.add(vcn.sterilize_separators(cand.get("normalized_vendor_code")))
                 write_neg = getattr(r, "write_negative_constraint", False) if hasattr(r, "write_negative_constraint") else (r.get("write_negative_constraint", False) if isinstance(r, dict) else False)
                 if write_neg:
                     # Registra vincolo negativo solo per codici della stessa famiglia morfologica
@@ -589,15 +601,19 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                 matched_db_blueprints=[_db_bp_view(a) for a in affected],
                 proposed_heuristic_update=_proposal(rules, new_rule, c1, explanation),
                 rule_update=new_rule,
+                mode_update=new_rule.get("heuristic_mode", "COLOR_MASKED"),
+                color_segment_index=new_rule.get("color_segment_index"),
             )
             records.append(rec)
         else:
             records.append(_record(
-                kind="MASK_UPDATE", rule_update=new_rule, mode_update="COLOR_MASKED",
+                kind="MASK_UPDATE", rule_update=new_rule,
+                mode_update=new_rule.get("heuristic_mode", "COLOR_MASKED"),
+                color_segment_index=new_rule.get("color_segment_index"),
                 staging_blueprint_ids=[sv["id"]], incoming_items=_incoming_view(sv)
             ))
             rules = new_rules
-            mode = "COLOR_MASKED"
+            mode = new_rule.get("heuristic_mode", "COLOR_MASKED")
 
     new_blueprints = []
     for c in remaining:

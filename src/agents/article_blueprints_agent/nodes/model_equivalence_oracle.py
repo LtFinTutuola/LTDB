@@ -206,47 +206,105 @@ def _common_prefix_len(a: str, b: str) -> int:
     return i
 
 
-def calc_code_morphology(code_x: str, code_y: str, config: Optional[dict[str, Any]] = None) -> str:
+def calc_code_morphology(
+    code_x: str,
+    code_y: str,
+    config: Optional[dict[str, Any]] = None,
+    color_segment_index: Optional[int] = None,
+) -> str:
     """
-    Valuta deterministamente l'affinità morfologica tra due vendor code (Dimensione 6).
+    Valuta deterministamente l'affinità morfologica tra due vendor code (Dimensione 6) a 3 Fasi:
+      - Fase 1: Sterilizzazione e Identità (sterilize_separators, skeleton code, tolleranza 1 sep omesso)
+      - Fase 2: Confronto Segment-Aware per Codici Delimitati (Sx = Sy >= 1 con segs_x[0] == segs_y[0] obbligatorio)
+      - Fase 3: Confronto Prefisso-Continuo (LCP) per Codici Compatti e Tolleranza Varianza Lunghezza (1 <= DeltaL <= 2)
     Restituisce: IDENTICAL, VERY_HIGH, HIGH, NEUTRAL, CONFLICT.
     """
-    cfg = config or load_oracle_config()
-    morph_cfg = cfg.get("morphology", {})
-    max_res_vh = morph_cfg.get("max_variable_residue_very_high", 4)
-    max_res_h = morph_cfg.get("max_variable_residue_high", 6)
-    min_ratio_vh = morph_cfg.get("min_prefix_ratio_very_high", 0.72)
-    min_ratio_h = morph_cfg.get("min_prefix_ratio_high", 0.60)
-    min_p_len = morph_cfg.get("min_prefix_len", 4)
-
-    cx = clean_code(code_x)
-    cy = clean_code(code_y)
-
-    if not cx or not cy:
+    if not code_x or not code_y:
         return CODE_CONFLICT
 
-    if cx == cy:
+    from src.utils.vendor_code_normalizer import (
+        sterilize_separators,
+        compute_skeleton_code,
+    )
+
+    ster_x = sterilize_separators(code_x)
+    ster_y = sterilize_separators(code_y)
+
+    if not ster_x or not ster_y:
+        return CODE_CONFLICT
+
+    # --- Fase 1: Sterilizzazione e Identità ---
+    if ster_x == ster_y:
         return CODE_IDENTICAL
 
-    lx, ly = len(cx), len(cy)
-    p = _common_prefix_len(cx, cy)
+    skel_x = compute_skeleton_code(ster_x)
+    skel_y = compute_skeleton_code(ster_y)
+    sep_x = len(ster_x.split("@")) - 1
+    sep_y = len(ster_y.split("@")) - 1
 
-    if p < min_p_len:
+    if skel_x == skel_y and abs(sep_x - sep_y) <= 1:
+        return CODE_IDENTICAL
+
+    # --- Fase 2: Confronto Segment-Aware per Codici Delimitati (Sx = Sy >= 1) ---
+    if sep_x >= 1 and sep_y >= 1 and sep_x == sep_y:
+        segs_x = ster_x.split("@")
+        segs_y = ster_y.split("@")
+        # Rettifica 1.A: Ancoraggio obbligatorio del primo segmento (segs_x[0] == segs_y[0])
+        if segs_x[0] == segs_y[0]:
+            diff_indices = [i for i in range(len(segs_x)) if segs_x[i] != segs_y[i]]
+            if len(diff_indices) == 1:
+                k = diff_indices[0]
+                # k deve essere >= 1 (mai il primo segmento modello)
+                if k >= 1:
+                    if color_segment_index is None or k == color_segment_index or (color_segment_index < 0 and k == len(segs_x) + color_segment_index):
+                        root_len = sum(len(segs_x[i]) for i in range(len(segs_x)) if i != k)
+                        diff_len_x = len(segs_x[k])
+                        diff_len_y = len(segs_y[k])
+                        if root_len >= 3 and 1 <= diff_len_x <= 5 and 1 <= diff_len_y <= 5:
+                            return CODE_VERY_HIGH
+
+    # --- Fase 3: Confronto Prefisso-Continuo (LCP) per Codici Compatti / Varianza Lunghezza ---
+    # Rettifica 1.B: Nessuna somma lcp + lcs! Si usa esclusivamente lcp sullo scheletro alfanumerico
+    lcp_len = _common_prefix_len(skel_x, skel_y)
+    lx, ly = len(skel_x), len(skel_y)
+    max_len = max(lx, ly)
+    delta_len = abs(lx - ly)
+
+    cfg = config or load_oracle_config()
+    morph_cfg = cfg.get("morphology", {}) if cfg else {}
+    min_p_len = morph_cfg.get("min_prefix_len", 4)
+
+    if lcp_len < min_p_len:
         return CODE_CONFLICT
 
-    if lx != ly:
-        # Se lunghezze diverse e nessun separatore esplicito comune, penalizza come conflitto
+    if delta_len == 0:
+        ratio = lcp_len / float(lx)
+        res = lx - lcp_len
+        if lcp_len >= min_p_len and ratio >= 0.72 and res <= 4:
+            return CODE_VERY_HIGH
+        if lcp_len >= min_p_len and ratio >= 0.60 and res <= 6:
+            return CODE_HIGH
+    elif 1 <= delta_len <= 2:
+        ratio = lcp_len / float(max_len)
+        res_x = lx - lcp_len
+        res_y = ly - lcp_len
+        min_res = min(res_x, res_y)
+        max_res = max(res_x, res_y)
+
+        if min_res >= 1 and max_res <= 4 and lcp_len >= 6 and ratio >= 0.70:
+            return CODE_VERY_HIGH
+        if min_res == 0 and 1 <= max_res <= 3 and lcp_len >= 6:
+            return CODE_HIGH
+    elif delta_len <= 3 and ((sep_x == 0 and sep_y == 1 and ster_y.startswith(ster_x + "@")) or (sep_y == 0 and sep_x == 1 and ster_x.startswith(ster_y + "@"))):
+        # Static root vs delimited code with color suffix (es. AW5646WOL01 vs AW5646WOL01@BLA)
+        if lcp_len >= 6:
+            return CODE_HIGH
+    else:
+        # Differenza di lunghezza > 2 senza pattern delimitato valido
         return CODE_CONFLICT
 
-    # lx == ly e p >= min_p_len
-    r = lx - p  # lunghezza residua variabile
-    ratio = p / lx
-
-    if 1 <= r <= max_res_vh and (ratio >= min_ratio_vh or family_key(cx) == family_key(cy)):
-        return CODE_VERY_HIGH
-
-    if 1 <= r <= max_res_h and ratio >= min_ratio_h:
-        return CODE_HIGH
+    if max_len > 0 and (lcp_len / float(max_len)) < 0.30:
+        return CODE_CONFLICT
 
     return CODE_NEUTRAL
 
@@ -698,6 +756,11 @@ async def evaluate_pair(
     colors_b = _extract_colors(b_item)
     color_rel = calc_color_relation(colors_a, colors_b)
 
+    # Se il colore primario dichiarato è esplicitamente SAME per codici diversi,
+    # declassa il bonus codice a NEUTRAL (il bonus rimane attivo per DIFFERENT o UNKNOWN)
+    if color_rel == "SAME" and best_code_verdict in (CODE_VERY_HIGH, CODE_HIGH):
+        best_code_verdict = CODE_NEUTRAL
+
     # 3. Controllo anti-genericità
     generic_a = is_generic_article(a_item)
     generic_b = is_generic_article(b_item)
@@ -793,20 +856,41 @@ def select_candidates(
 ) -> list[dict]:
     """
     Selezione candidati dalla coorte del brand:
-      - affinità morfologica del codice (stessa famiglia o prefisso >= 4)
+      - affinità morfologica del codice (stessa famiglia, prefisso >= 4, trigram dice >= 0.40 o skeleton match)
       - similarità semantica coseno >= soglia
     """
+    from src.utils.vendor_code_normalizer import (
+        compute_skeleton_code,
+        trigram_dice_similarity,
+    )
     scored: list[tuple[int, float, dict]] = []
     codes = [clean_code(c) for c in cluster_codes if clean_code(c)]
     for bp in cohort:
+        bp_norm = clean_code(bp.get("normalized_vendor_code"))
         variant_codes = [clean_code(v.get("supplier_code")) for v in bp.get("variants", []) if v.get("supplier_code")]
-        morph = any(
-            family_key(c) == family_key(v) or _common_prefix_len(c, v) >= 4
-            for c in codes for v in variant_codes
-        )
+        all_bp_codes = variant_codes + ([bp_norm] if bp_norm else [])
+
+        morph = False
+        best_trigram = 0.0
+        for c in codes:
+            c_skel = compute_skeleton_code(c)
+            for v in all_bp_codes:
+                v_skel = compute_skeleton_code(v)
+                if family_key(c) == family_key(v) or _common_prefix_len(c, v) >= 4 or _common_prefix_len(c_skel, v_skel) >= 4:
+                    morph = True
+                    break
+                tri_sim = trigram_dice_similarity(c_skel, v_skel)
+                if tri_sim > best_trigram:
+                    best_trigram = tri_sim
+                if tri_sim >= 0.40:
+                    morph = True
+                    break
+            if morph:
+                break
+
         cos = cosine_similarity(cluster_embedding, bp.get("embedding"))
-        if morph or cos >= COSINE_THRESHOLD:
-            scored.append((0 if morph else 1, -cos, bp))
+        if morph or cos >= COSINE_THRESHOLD or best_trigram >= 0.40:
+            scored.append((0 if morph else 1, -max(cos, best_trigram), bp))
     scored.sort(key=lambda t: (t[0], t[1]))
     return [bp for _, _, bp in scored[:top_k]]
 

@@ -255,6 +255,21 @@ def _apply_update_blueprint(
         bp[key] = value
 
 
+def _invalidate_reconciliations_for_items_or_bps(staging_data: dict, affected_bp_ids: set[str], affected_item_ids: set[str]) -> None:
+    """Rimuove dalle heuristic_reconciliations automatiche le voci che toccano item o blueprint modificati manualmente (Punto Operativo 3.3)."""
+    if "heuristic_reconciliations" not in staging_data or not staging_data["heuristic_reconciliations"]:
+        return
+    recs = staging_data["heuristic_reconciliations"]
+    filtered = []
+    for r in recs:
+        r_bp_ids = {bp.get("id") for bp in (r.get("matched_db_blueprints") or []) + (r.get("affected_db_blueprints") or []) if bp.get("id")}
+        r_item_ids = {it.get("item_id") for it in (r.get("incoming_items") or []) if it.get("item_id")}
+        if (r_bp_ids & affected_bp_ids) or (r_item_ids & affected_item_ids):
+            continue
+        filtered.append(r)
+    staging_data["heuristic_reconciliations"] = filtered
+
+
 def _apply_reassign_item(
     db: Session, staging_data: dict, op: RevisionOperation,
     op_index: int, generated_ids: Dict[int, str],
@@ -277,6 +292,9 @@ def _apply_reassign_item(
 
     # Update reference
     item["article_blueprint_id"] = target_id
+
+    # Invalidate automated reconciliations for affected elements
+    _invalidate_reconciliations_for_items_or_bps(staging_data, {source_bp_id, target_id}, {op.item_id})
 
     # Orphan cleanup on source blueprint
     if source_bp_id and source_bp_id != target_id:
@@ -363,6 +381,8 @@ def _apply_merge_blueprints(
         if bp.get("id") not in absorbed_ids or not bp.get("is_new", True)
     ]
 
+    _invalidate_reconciliations_for_items_or_bps(staging_data, set(op.source_blueprint_ids), set())
+
     logger.log_execution("staging_revision_service", "blueprints_merged", "ok",
                          op_index=op_index, target=op.target_blueprint_id,
                          absorbed=absorbed_ids)
@@ -436,6 +456,8 @@ def _apply_split_blueprint(
     # Store in generated_ids context for cross-operation references
     generated_ids[op_index] = new_id
 
+    _invalidate_reconciliations_for_items_or_bps(staging_data, {op.source_blueprint_id, new_id}, set(op.item_ids))
+
     logger.log_execution("staging_revision_service", "blueprint_split", "ok",
                          op_index=op_index, source=op.source_blueprint_id,
                          new_blueprint=new_id, items_moved=len(provided_items))
@@ -507,23 +529,23 @@ def _apply_confirm_heuristic_reconciliation(
     # Se rule_update non era stato pre-calcolato (es. DISAMBIGUATION senza proposta) ma i codici differiscono, inducila ora
     if not rule and target_bp_id:
         inc_codes = [
-            vcn.clean_code(it.get("vendor_code"))
+            vcn.sterilize_separators(it.get("vendor_code"))
             for it in (rec.get("incoming_items") or [])
-            if vcn.clean_code(it.get("vendor_code"))
+            if vcn.sterilize_separators(it.get("vendor_code"))
         ]
         target_bps = [
             bp for bp in (rec.get("matched_db_blueprints") or [])
             if str(bp.get("id")) == str(target_bp_id)
         ] or (rec.get("matched_db_blueprints") or [])
         cand_codes = {
-            vcn.clean_code(v.get("supplier_code"))
+            vcn.sterilize_separators(v.get("supplier_code"))
             for bp in target_bps
             for v in (bp.get("variants") or [])
-            if vcn.clean_code(v.get("supplier_code"))
+            if vcn.sterilize_separators(v.get("supplier_code"))
         }
         if not cand_codes:
             for bp in target_bps:
-                rc = vcn.clean_code(bp.get("raw_vendor_code") or bp.get("normalized_vendor_code"))
+                rc = vcn.sterilize_separators(bp.get("raw_vendor_code") or bp.get("normalized_vendor_code"))
                 if rc and "#" not in rc:
                     cand_codes.add(rc)
         if inc_codes and cand_codes and (set(inc_codes) != cand_codes):
@@ -570,18 +592,35 @@ def _apply_confirm_heuristic_reconciliation(
                     "matched_db_blueprints": affected_bps,
                     "proposed_heuristic_update": rec.get("proposed_heuristic_update"),
                     "rule_update": rule,
+                    "mode_update": rule.get("heuristic_mode", "COLOR_MASKED"),
+                    "color_segment_index": rule.get("color_segment_index"),
                     "merge_target_blueprint_id": target_bp_id,
                 }
                 staging_data.setdefault("heuristic_reconciliations", []).append(chained_mask_rec)
             else:
-                # Applica la maschera agli item correnti e genera eventuali card HITL di split/merge retroattivo su DB
+                # Applica la maschera agli item correnti e al blueprint target in staging, e genera eventuali card HITL di split/merge retroattivo su DB
+                target_masked_code = None
                 for item in staging_data.get("items", []):
                     if item.get("article_blueprint_id") == target_bp_id or item.get("item_id") in incoming_item_ids:
                         raw_code = item.get("vendor_code") or ""
                         masked = vcn.apply_rule(raw_code, rule)
                         if masked:
                             item["normalized_vendor_code"] = masked
-                rec["mode_update"] = "COLOR_MASKED"
+                            if not target_masked_code:
+                                target_masked_code = masked
+                for bp in staging_data.get("blueprints", []):
+                    if str(bp.get("id")) == str(target_bp_id):
+                        raw_code = bp.get("raw_vendor_code") or bp.get("normalized_vendor_code") or ""
+                        masked = vcn.apply_rule(raw_code, rule) or target_masked_code
+                        if masked:
+                            bp["normalized_vendor_code"] = masked
+                            bp["skeleton_vendor_code"] = vcn.compute_skeleton_code(masked)
+                            target_masked_code = masked
+                rec["kind"] = "MASK_UPDATE"
+                rec["mode_update"] = rule.get("heuristic_mode", "COLOR_MASKED")
+                rec["color_segment_index"] = rule.get("color_segment_index")
+                if target_masked_code:
+                    rec["new_normalized_code"] = target_masked_code
                 _generate_retroactive_db_reconciliations(db, staging_data, rule, target_bp_id)
 
     # Caso 2: Conferma di MASK_UPDATE (diretto oppure origin == "DISAMBIGUATION")
@@ -680,13 +719,13 @@ def _generate_retroactive_db_reconciliations(
     bps_by_primary_norm: dict[str, list[tuple[ArticleBlueprint, list]]] = OrderedDict()
 
     for bp in db_blueprints:
-        arts = [a for a in (bp.articles or []) if vcn.clean_code(a.supplier_code)]
+        arts = [a for a in (bp.articles or []) if vcn.sterilize_separators(a.supplier_code)]
         if not arts:
             continue
 
         groups: dict[str, list] = OrderedDict()
         for a in arts:
-            raw_c = vcn.clean_code(a.supplier_code)
+            raw_c = vcn.sterilize_separators(a.supplier_code)
             norm_c = vcn.apply_rules(raw_c, new_rules) or raw_c
             groups.setdefault(norm_c, []).append(a)
 
@@ -696,7 +735,7 @@ def _generate_retroactive_db_reconciliations(
 
         # 1. Rilevamento Split Retroattivo (Multi-Norm dentro lo stesso blueprint storico)
         if len(group_items) > 1:
-            prim_raw = vcn.clean_code(primary_arts[0].supplier_code)
+            prim_raw = vcn.sterilize_separators(primary_arts[0].supplier_code)
             prim_photo = _photo_url_for_articles(bp, primary_arts)
             primary_view = {
                 "id": str(bp.id),
@@ -705,7 +744,7 @@ def _generate_retroactive_db_reconciliations(
                 "normalized_vendor_code": primary_norm,
                 "photo_url": prim_photo,
                 "variants": [
-                    {"supplier_code": vcn.clean_code(a.supplier_code), "colors": list(a.colors or [])}
+                    {"supplier_code": vcn.sterilize_separators(a.supplier_code), "colors": list(a.colors or [])}
                     for a in primary_arts
                 ],
             }
@@ -714,7 +753,7 @@ def _generate_retroactive_db_reconciliations(
                 if s_key in existing_split_keys:
                     continue
                 existing_split_keys.add(s_key)
-                split_raw = vcn.clean_code(split_arts[0].supplier_code)
+                split_raw = vcn.sterilize_separators(split_arts[0].supplier_code)
                 split_photo = _photo_url_for_articles(bp, split_arts)
                 split_view = {
                     "item_id": str(split_arts[0].id),
@@ -753,8 +792,8 @@ def _generate_retroactive_db_reconciliations(
             key=lambda entry: 0 if str(entry[0].id) == str(target_bp_id) else 1,
         )
         bp_primary, prim_arts = sorted_entries[0]
-        prim_codes = {vcn.clean_code(a.supplier_code) for a in prim_arts if vcn.clean_code(a.supplier_code)}
-        prim_raw = vcn.clean_code(prim_arts[0].supplier_code)
+        prim_codes = {vcn.sterilize_separators(a.supplier_code) for a in prim_arts if vcn.sterilize_separators(a.supplier_code)}
+        prim_raw = vcn.sterilize_separators(prim_arts[0].supplier_code)
         prim_photo = _photo_url_for_articles(bp_primary, prim_arts)
         primary_bp_view = {
             "id": str(bp_primary.id),
@@ -763,7 +802,7 @@ def _generate_retroactive_db_reconciliations(
             "normalized_vendor_code": norm_key,
             "photo_url": prim_photo,
             "variants": [
-                {"supplier_code": vcn.clean_code(a.supplier_code), "colors": list(a.colors or [])}
+                {"supplier_code": vcn.sterilize_separators(a.supplier_code), "colors": list(a.colors or [])}
                 for a in prim_arts
             ],
         }

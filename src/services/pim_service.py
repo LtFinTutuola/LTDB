@@ -91,6 +91,8 @@ def get_or_create_product(
     dimensions: Optional[str] = None,
     category_id: Optional[str] = None,
     normalized_vendor_code: Optional[str] = None,
+    heuristic_id: Optional[str] = None,
+    skeleton_vendor_code: Optional[str] = None,
     commit_changes: bool = True
 ) -> str:
     """
@@ -104,7 +106,9 @@ def get_or_create_product(
     blueprint_in = ArticleBlueprintCreate(
         brand_id=brand_id,
         category_id=category_id,
+        heuristic_id=heuristic_id,
         normalized_vendor_code=normalized_vendor_code,
+        skeleton_vendor_code=skeleton_vendor_code,
         article_name=article_name,
         description=description,
         extended_description=extended_description,

@@ -90,33 +90,51 @@ def _resolve_items_with_photos(db: Session, brand_id: str, extracted_items: list
 
     active_h = heuristics[-1] if heuristics else None
     active_mode = getattr(active_h, "heuristic_mode", None) or HeuristicMode.PENDING_COHORT
+    brand_embeddings = heuristic_repo.get_embeddings_by_brand(db, brand_id)
+    from src.models.pim import BrandHeuristic
 
     for item in extracted_items:
-        raw_code = vcn.clean_code(item.get("vendor_code") or item.get("VendorCode") or "")
+        raw_code = item.get("vendor_code") or item.get("VendorCode") or ""
+        clean_raw = vcn.clean_code(raw_code)
+        sterilized_code = vcn.sterilize_separators(raw_code)
         item_colors = _extract_item_colors(item)
-
-        # Calcolo codice normalizzato tramite regole posizionali o regex
-        normalized_code = raw_code
-        color_masked = False
-        for h in reversed(heuristics or []):
-            cand = vcn.normalize_code(raw_code, h)
-            if cand != raw_code:
-                normalized_code = cand
-                color_masked = True
-                break
 
         bp = None
         send_to_cold_path = False
+        normalized_code = sterilized_code or clean_raw
+        color_masked = False
+        matched_heuristic_id = None
 
-        # --- Fast-Path L0: exact supplier_code match ---
+        # Pre-calcolo codice normalizzato tramite euristiche del brand o embedding
+        for h in reversed(heuristics or []):
+            cand = vcn.normalize_code(clean_raw, h)
+            if cand != clean_raw and cand != sterilized_code:
+                normalized_code = cand
+                color_masked = True
+                matched_heuristic_id = getattr(h, "id", None)
+                break
+
+        if not color_masked and sterilized_code:
+            for emb in brand_embeddings:
+                emb_h = db.query(BrandHeuristic).filter_by(id=emb.heuristic_id).first()
+                score, root_str, masked_code = vcn.score_embedding_compatibility(sterilized_code, emb, emb_h)
+                if score >= 0.80 and masked_code:
+                    normalized_code = masked_code
+                    color_masked = True
+                    matched_heuristic_id = emb.heuristic_id
+                    break
+
+        # --- Stadio 1: Exact Match (WMS Articles & Static Blueprints) ---
         existing_article = None
-        if raw_code:
-            existing_article = wms_repo.get_article_by_supplier_code_and_brand(db, brand_id, raw_code)
+        if clean_raw:
+            existing_article = wms_repo.get_article_by_supplier_code_and_brand(db, brand_id, clean_raw)
+            if not existing_article and sterilized_code != clean_raw:
+                existing_article = wms_repo.get_article_by_supplier_code_and_brand(db, brand_id, sterilized_code)
             if existing_article:
                 known_colors = {str(c).strip().lower() for c in (existing_article.colors or []) if c}
                 if (
-                    active_mode in (HeuristicMode.COLOR_AGNOSTIC, HeuristicMode.COLOR_MASKED)
-                    or color_masked
+                    active_mode in (HeuristicMode.COLOR_AGNOSTIC, HeuristicMode.COLOR_MASKED, HeuristicMode.COLOR_MASKED_COMPACT, HeuristicMode.COLOR_MASKED_DELIMITED)
+                    or "@" in sterilized_code
                     or not item_colors
                     or not known_colors
                     or bool(set(item_colors) & known_colors)
@@ -126,27 +144,44 @@ def _resolve_items_with_photos(db: Session, brand_id: str, extracted_items: list
                     ).first()
                     if bp and bp.normalized_vendor_code:
                         normalized_code = bp.normalized_vendor_code
+                        if "#" in normalized_code:
+                            color_masked = True
                 else:
-                    # Stesso supplier_code ma colore nuovo con euristica ancora PENDING_COHORT -> verifica Q2/Q4
                     send_to_cold_path = True
 
-        # --- Fast-Path L1: normalized_vendor_code match ---
         if bp is None and not send_to_cold_path and normalized_code:
             cand_bp = pim_repo.get_blueprint_by_normalized_code(db, brand_id, normalized_code)
             if cand_bp is not None:
-                # Se il codice non è mascherato (passthrough) e siamo in PENDING_COHORT con un colore diverso
-                # da tutti gli articoli del blueprint, richiedi verifica Q2/Q4 all'Oracolo
-                if not color_masked and active_mode == HeuristicMode.PENDING_COHORT and item_colors:
-                    bp_colors = {
-                        str(c).strip().lower()
-                        for a in (cand_bp.articles or [])
-                        for c in (a.colors or [])
-                        if c
-                    }
+                if not color_masked and active_mode == HeuristicMode.PENDING_COHORT and item_colors and "@" not in sterilized_code:
+                    bp_colors = {str(c).strip().lower() for a in (cand_bp.articles or []) for c in (a.colors or []) if c}
                     if bp_colors and not (set(item_colors) & bp_colors):
                         send_to_cold_path = True
                 if not send_to_cold_path:
                     bp = cand_bp
+
+        if bp is None and not send_to_cold_path and sterilized_code:
+            cand_bp = pim_repo.get_blueprint_by_normalized_code(db, brand_id, sterilized_code)
+            if not cand_bp and clean_raw != sterilized_code:
+                cand_bp = pim_repo.get_blueprint_by_normalized_code(db, brand_id, clean_raw)
+            if cand_bp is not None and not (cand_bp.normalized_vendor_code and "#" in cand_bp.normalized_vendor_code):
+                if active_mode == HeuristicMode.PENDING_COHORT and item_colors and "@" not in sterilized_code:
+                    bp_colors = {str(c).strip().lower() for a in (cand_bp.articles or []) for c in (a.colors or []) if c}
+                    if bp_colors and not (set(item_colors) & bp_colors):
+                        send_to_cold_path = True
+                if not send_to_cold_path:
+                    bp = cand_bp
+                    normalized_code = bp.normalized_vendor_code or sterilized_code
+
+        # --- Stadio 2A & 2B: Morphological Routing (CodeEmbedding) + Skeleton Lookup ---
+        if bp is None and not send_to_cold_path and normalized_code:
+            candidate_skeleton = vcn.compute_skeleton_code(normalized_code)
+            is_compact_no_sep = ("@" not in sterilized_code and active_mode in (HeuristicMode.COLOR_MASKED, HeuristicMode.COLOR_MASKED_COMPACT))
+            matches = pim_repo.get_by_skeleton_code(db, brand_id, candidate_skeleton, exclude_color_agnostic=is_compact_no_sep)
+            if len(matches) == 1:
+                bp = matches[0]
+            elif len(matches) > 1:
+                # Q4 case / split HITL pregresso: invia all'Oracolo (Stadio 4)
+                send_to_cold_path = True
 
         if bp is not None:
             item["article_blueprint_id"] = str(bp.id)
@@ -578,6 +613,8 @@ def _apply_reconciliations_and_realign(
     confirmed: bool = bool(getattr(active_h, "heuristic_confirmed", False))
     explanation: Optional[str] = getattr(active_h, "explanation", None)
     pattern: str = getattr(active_h, "pattern", "") or ""
+    active_color_segment_index: Optional[int] = getattr(active_h, "color_segment_index", None)
+    root_len: Optional[int] = meta.get("root_length")
     changed = False
     rules_changed = False
 
@@ -602,23 +639,23 @@ def _apply_reconciliations_and_realign(
                 rejected_merges.append(rec)
             continue
 
-        if st not in ("NOT_REQUIRED", "ACCEPTED"):
+        if st not in ("NOT_REQUIRED", "ACCEPTED", "CONFIRMED"):
             continue
 
-        if kind == "RETROACTIVE_SPLIT" and st == "ACCEPTED":
+        if kind == "RETROACTIVE_SPLIT" and st in ("ACCEPTED", "CONFIRMED"):
             accepted_splits.append(rec)
             continue
 
-        if kind == "RETROACTIVE_MERGE" and st == "ACCEPTED":
+        if kind == "RETROACTIVE_MERGE" and st in ("ACCEPTED", "CONFIRMED"):
             accepted_merges.append(rec)
             continue
 
         # Se l'utente ha confermato esplicitamente una riconciliazione, rimuovi eventuali vincoli
         # negativi pregressi tra i codici dell'articolo in ingresso e il blueprint target confermato.
-        if st == "ACCEPTED" and rec.get("merge_target_blueprint_id"):
+        if st in ("ACCEPTED", "CONFIRMED") and rec.get("merge_target_blueprint_id"):
             target_bp_id = str(rec["merge_target_blueprint_id"])
             inc_codes = {
-                vcn.clean_code(it.get("vendor_code"))
+                vcn.sterilize_separators(it.get("vendor_code"))
                 for it in (rec.get("incoming_items") or [])
                 if it.get("vendor_code")
             }
@@ -627,7 +664,7 @@ def _apply_reconciliations_and_realign(
                 if str(mb.get("id")) == target_bp_id:
                     for v in mb.get("variants") or []:
                         if v.get("supplier_code"):
-                            cand_codes.add(vcn.clean_code(v["supplier_code"]))
+                            cand_codes.add(vcn.sterilize_separators(v["supplier_code"]))
             if inc_codes and cand_codes:
                 new_negatives = []
                 for pair in negatives:
@@ -645,15 +682,29 @@ def _apply_reconciliations_and_realign(
                 negatives.append(pair)
                 changed = True
 
+        color_seg_idx = rec.get("color_segment_index")
+        if color_seg_idx is not None:
+            active_color_segment_index = color_seg_idx
+            changed = True
+
         if rec.get("mode_update"):
             mode = rec["mode_update"]
-            confirmed = mode in (HeuristicMode.COLOR_MASKED, HeuristicMode.COLOR_AGNOSTIC)
+            confirmed = mode in HeuristicMode.MASKED_MODES or mode == HeuristicMode.COLOR_AGNOSTIC
             changed = True
 
         if rec.get("rule_update"):
             rule = rec["rule_update"]
             rules = vcn.merge_rule(rules, rule)
-            mode = HeuristicMode.COLOR_MASKED
+            if rule.get("type") == "DELIMITED" or rec.get("mode_update") == HeuristicMode.COLOR_MASKED_DELIMITED:
+                mode = HeuristicMode.COLOR_MASKED_DELIMITED
+                if rule.get("color_segment_index") is not None:
+                    active_color_segment_index = rule.get("color_segment_index")
+            elif rule.get("type") in ("FIXED", "ELASTIC") or rec.get("mode_update") == HeuristicMode.COLOR_MASKED_COMPACT:
+                mode = HeuristicMode.COLOR_MASKED_COMPACT
+                if rule.get("root_length") is not None:
+                    root_len = rule["root_length"]
+            elif mode not in (HeuristicMode.COLOR_MASKED_DELIMITED, HeuristicMode.COLOR_MASKED_COMPACT):
+                mode = HeuristicMode.COLOR_MASKED
             confirmed = True
             pattern = vcn.rule_to_regex(rule) or pattern
             prop = rec.get("proposed_heuristic_update") or {}
@@ -663,9 +714,13 @@ def _apply_reconciliations_and_realign(
             changed = True
             rules_changed = True
 
+    h_meta = {"rules": rules, "negative_constraints": negatives}
+    if root_len is not None:
+        h_meta["root_length"] = root_len
+
     # Se il brand non ha ancora un'euristica in DB, inizializza in modalità PENDING_COHORT (Lazy Induction N=1)
     if active_h is None:
-        heuristic_repo.create_heuristic(
+        active_h = heuristic_repo.create_heuristic(
             db,
             brand_id=brand_id,
             pattern=pattern,
@@ -673,7 +728,8 @@ def _apply_reconciliations_and_realign(
             commit_changes=False,
             heuristic_mode=mode,
             heuristic_confirmed=confirmed,
-            heuristic_metadata={"rules": rules, "negative_constraints": negatives},
+            color_segment_index=active_color_segment_index,
+            heuristic_metadata=h_meta,
         )
     elif changed:
         heuristic_repo.update_heuristic(
@@ -684,7 +740,8 @@ def _apply_reconciliations_and_realign(
             commit_changes=False,
             heuristic_mode=mode,
             heuristic_confirmed=confirmed,
-            heuristic_metadata={"rules": rules, "negative_constraints": negatives},
+            color_segment_index=active_color_segment_index,
+            heuristic_metadata=h_meta,
         )
 
     if not rules_changed and not accepted_splits and not accepted_merges:
@@ -835,6 +892,9 @@ def _apply_reconciliations_and_realign(
         if cand_norm in occupied_final:
             cand_norm = f"{split_norm}__{str(new_bp.id)[:6]}"
         new_bp.normalized_vendor_code = cand_norm
+        new_bp.skeleton_vendor_code = vcn.compute_skeleton_code(cand_norm)
+        if active_h:
+            new_bp.heuristic_id = str(active_h.id)
         occupied_final.add(cand_norm)
 
     for bp in db_blueprints:
@@ -849,17 +909,19 @@ def _apply_reconciliations_and_realign(
             if target_norm in occupied_final:
                 target_norm = f"{target_norm}__{bp_id_str[:6]}"
             bp.normalized_vendor_code = target_norm
+            bp.skeleton_vendor_code = vcn.compute_skeleton_code(target_norm)
             occupied_final.add(target_norm)
             continue
 
         var_codes = [
-            vcn.clean_code(a.supplier_code)
+            vcn.sterilize_separators(a.supplier_code)
             for a in (bp.articles or [])
             if a.supplier_code and str(a.article_blueprint_id) == bp_id_str
         ]
         if not var_codes:
             fallback = orig_norm if (orig_norm and orig_norm not in occupied_final) else f"__EMPTY__{bp.id}"
             bp.normalized_vendor_code = fallback
+            bp.skeleton_vendor_code = vcn.compute_skeleton_code(fallback)
             occupied_final.add(fallback)
             continue
 
@@ -872,6 +934,7 @@ def _apply_reconciliations_and_realign(
             if fallback in occupied_final:
                 fallback = f"{var_codes[0]}__{bp_id_str[:6]}"
             bp.normalized_vendor_code = fallback
+            bp.skeleton_vendor_code = vcn.compute_skeleton_code(fallback)
             occupied_final.add(fallback)
             logger.log_execution(
                 "data_ingestion_service",
@@ -883,9 +946,15 @@ def _apply_reconciliations_and_realign(
             )
         else:
             bp.normalized_vendor_code = target_norm
+            bp.skeleton_vendor_code = vcn.compute_skeleton_code(target_norm)
             occupied_final.add(target_norm)
+        if active_h:
+            bp.heuristic_id = str(active_h.id)
 
     db.flush()
+
+    if active_h:
+        heuristic_repo.recalculate_embeddings_for_heuristic(db, brand_id, str(active_h.id), commit_changes=False)
 
     # Aggiorna in-memory i codici normalizzati degli items in conferma
     surviving_bp_ids = {str(bp.id) for bp in db_blueprints if str(bp.id) not in deleted_bp_ids} | {
@@ -1002,6 +1071,11 @@ async def confirm_and_persist_staging(
                 blueprint_id = resolved_blueprints[bp_group_key]
                 logger.log_execution("data_ingestion_service", "blueprint_resolved", "ok", blueprint_key=bp_group_key, blueprint_id=blueprint_id, resolution_status="existing_cluster")
             else:
+                matched_h_id = raw_it_dict.get("matched_heuristic_id")
+                active_h = heuristic_repo.get_active_heuristic(db, brand_id)
+                if not matched_h_id and active_h and (active_h.heuristic_confirmed or active_h.heuristic_mode in HeuristicMode.MASKED_MODES | {HeuristicMode.COLOR_AGNOSTIC}):
+                    matched_h_id = str(active_h.id)
+                skel_code = vcn.compute_skeleton_code(item.normalized_vendor_code)
                 blueprint_id = get_or_create_product(
                     db=db,
                     brand_id=brand_id,
@@ -1013,8 +1087,12 @@ async def confirm_and_persist_staging(
                     dimensions=item.dimensions,
                     category_id=category_id,
                     normalized_vendor_code=item.normalized_vendor_code,
+                    heuristic_id=matched_h_id,
+                    skeleton_vendor_code=skel_code,
                     commit_changes=False,
                 )
+                if matched_h_id:
+                    heuristic_repo.recalculate_embeddings_for_heuristic(db, brand_id, matched_h_id, commit_changes=False)
                 resolved_blueprints[bp_group_key] = blueprint_id
                 logger.log_execution("data_ingestion_service", "blueprint_resolved", "ok", blueprint_key=bp_group_key, blueprint_id=blueprint_id, resolution_status="new")
 
@@ -1047,6 +1125,11 @@ async def confirm_and_persist_staging(
                 colors=item.colors,
                 commit_changes=False,
             )
+
+    db.flush()
+    active_h = heuristic_repo.get_active_heuristic(db, brand_id)
+    if active_h and active_h.heuristic_mode in HeuristicMode.MASKED_MODES:
+        heuristic_repo.recalculate_embeddings_for_heuristic(db, brand_id, str(active_h.id), commit_changes=False)
 
     db.commit()
     logger.log_execution("data_ingestion_service", "confirm_staging_commit", "ok", job_id=job_id)
@@ -1111,6 +1194,26 @@ async def process_and_stage_single_item(job_id: str, request: SingleItemIngestio
                 "colors": request.colors,
                 "article_name": request.article_name,
             }]
+
+            # --- Stadio 3: Guardrail Anti-Typo Interattivo (solo SINGLE_ITEM_IMPORT) ---
+            if not getattr(request, "typo_warning_confirmed", False):
+                from src.models.pim import ArticleBlueprint
+                resolved_items, unresolved_items, _, _, _ = _resolve_items_with_photos(
+                    db, request.brand_id, extracted_items, list(brand_obj.heuristics or [])
+                )
+                if unresolved_items:
+                    brand_embeddings = heuristic_repo.get_embeddings_by_brand(db, request.brand_id)
+                    brand_blueprints = db.query(ArticleBlueprint).filter(ArticleBlueprint.brand_id == request.brand_id).all()
+                    typo_info = vcn.detect_typo_anomaly(request.vendor_code, brand_embeddings, brand_blueprints)
+                    if typo_info:
+                        staging_repo.update_job(
+                            db,
+                            job_id=job_id,
+                            status=JobStatus.TYPO_WARNING.value,
+                            data=typo_info,
+                        )
+                        logger.log_execution("data_ingestion_service", "typo_warning_triggered", "ok", job_id=job_id, typo_info=typo_info)
+                        return
 
             result = await _stage_extracted_items(
                 db=db,

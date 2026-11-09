@@ -124,7 +124,7 @@ async function submitDDTForm() {
 async function submitSingleItemForm() {
     const brandId = _val('single-brand');
     const rawVendor = _val('single-vendor');
-    const vendorCode = rawVendor.replace(/\s+/g, '').toUpperCase();
+    const vendorCode = rawVendor.trim().replace(/\s+/g, ' ').toUpperCase();
     const rawBarcode = _val('single-barcode');
     const barcode = rawBarcode.replace(/\s+/g, '');
     const rawName = _val('single-name');
@@ -183,6 +183,52 @@ function startPolling(jobId, statusEl, btn) {
                 
                 enterSplitScreen();
                 staging.renderStagingPanel(statusData.data, jobId);
+            } else if (statusData.status === 'TYPO_WARNING') {
+                clearInterval(_pollingInterval);
+                _pollingInterval = null;
+                _activeJobId = null;
+                btn.disabled = false;
+                const d = statusData.data || {};
+                statusEl.innerHTML = `
+                    <div class="typo-warning-banner" style="background:var(--bg-warning, #fff3cd); border:1px solid #ffeeba; color:#856404; padding:12px; border-radius:6px; margin-top:10px;">
+                        <strong>⚠️ Possibile Refuso Rilevato nel Codice Fornitore:</strong><br>
+                        Codice inserito: <code>${d.suspect_code || ''}</code><br>
+                        Suggerimento / Modello simile: <code>${d.suggested_match || ''}</code> (${d.blueprint_name || ''})<br>
+                        <em>${d.reason || ''}</em>
+                        <div style="margin-top:10px; display:flex; gap:8px;">
+                            <button type="button" class="btn btn-secondary btn-sm" id="btn-typo-edit">1. Modifica Codice</button>
+                            <button type="button" class="btn btn-primary btn-sm" id="btn-typo-confirm">2. Conferma Codice Inserito</button>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('btn-typo-edit')?.addEventListener('click', () => {
+                    const vendorInput = document.getElementById('single-vendor');
+                    if (vendorInput) {
+                        vendorInput.focus();
+                        vendorInput.select();
+                    }
+                    statusEl.innerHTML = `<span style="color:var(--text-muted);">Correggi il codice e premi di nuovo Importa.</span>`;
+                });
+                document.getElementById('btn-typo-confirm')?.addEventListener('click', async () => {
+                    statusEl.innerHTML = `<span class="spinner"></span> Invio con conferma in corso...`;
+                    btn.disabled = true;
+                    try {
+                        const payload = {
+                            brand_id: _val('single-brand'),
+                            vendor_code: _val('single-vendor'),
+                            article_name: _val('single-name') || null,
+                            barcode: _val('single-barcode') || null,
+                            quantity: parseInt(_val('single-qty') || '1', 10),
+                            colors: _val('single-colors') ? _val('single-colors').split(',').map(s => s.trim()).filter(Boolean) : [],
+                            typo_warning_confirmed: true
+                        };
+                        const { job_id } = await api.ingestSingleItem(payload);
+                        startPolling(job_id, statusEl, btn);
+                    } catch (e) {
+                        statusEl.innerHTML = `<span style="color:var(--error);">❌ Errore: ${e.message}</span>`;
+                        btn.disabled = false;
+                    }
+                });
             } else if (statusData.status === 'ERROR') {
                 clearInterval(_pollingInterval);
                 _pollingInterval = null;

@@ -1,16 +1,65 @@
-from typing import Optional
+from typing import Optional, List
+from datetime import datetime
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
-from src.models.pim import ArticleBlueprint, Brand, Category, BrandHeuristic, HeuristicMode
-from src.schemas.pim import ArticleBlueprintCreate, ArticleBlueprintResponse  # placeholder for update schema
+from src.models.pim import ArticleBlueprint, Brand, Category, BrandHeuristic, HeuristicMode, CodeEmbedding
+from src.schemas.pim import ArticleBlueprintCreate, ArticleBlueprintUpdate, ArticleBlueprintResponse
 from src.repositories.base import BaseRepository
 from src.core.logger import get_logger
 
 logger = get_logger()
 
-class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBlueprintCreate, ArticleBlueprintCreate]):
+class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBlueprintCreate, ArticleBlueprintUpdate]):
     def __init__(self):
         super().__init__(ArticleBlueprint)
+
+    def create(self, db: Session, *, obj_in: ArticleBlueprintCreate, commit_changes: bool = True) -> ArticleBlueprint:
+        from src.utils.vendor_code_normalizer import compute_skeleton_code
+        obj_in_data = obj_in.model_dump(exclude_unset=True)
+        if "skeleton_vendor_code" not in obj_in_data or not obj_in_data["skeleton_vendor_code"]:
+            if obj_in_data.get("normalized_vendor_code"):
+                obj_in_data["skeleton_vendor_code"] = compute_skeleton_code(obj_in_data["normalized_vendor_code"])
+        db_obj = self.model(**obj_in_data)
+        db.add(db_obj)
+        if commit_changes:
+            db.commit()
+            db.refresh(db_obj)
+        else:
+            db.flush()
+        return db_obj
+
+    def update(self, db: Session, *, db_obj: ArticleBlueprint, obj_in: ArticleBlueprintUpdate, commit_changes: bool = True) -> ArticleBlueprint:
+        from src.utils.vendor_code_normalizer import compute_skeleton_code
+        obj_data = obj_in.model_dump(exclude_unset=True)
+        for field, value in obj_data.items():
+            setattr(db_obj, field, value)
+        if "normalized_vendor_code" in obj_data and "skeleton_vendor_code" not in obj_data:
+            db_obj.skeleton_vendor_code = compute_skeleton_code(db_obj.normalized_vendor_code) if db_obj.normalized_vendor_code else None
+        db.add(db_obj)
+        if commit_changes:
+            db.commit()
+            db.refresh(db_obj)
+        else:
+            db.flush()
+        return db_obj
+
+    def get_by_skeleton_code(
+        self, db: Session, brand_id: str, skeleton_code: str, exclude_color_agnostic: bool = False
+    ) -> List[ArticleBlueprint]:
+        """
+        Indicizzato su (brand_id, skeleton_vendor_code).
+        Se exclude_color_agnostic=True, esclude i blueprint la cui euristica associata
+        è esplicitamente COLOR_AGNOSTIC.
+        """
+        query = db.query(ArticleBlueprint).filter(
+            ArticleBlueprint.brand_id == brand_id,
+            ArticleBlueprint.skeleton_vendor_code == skeleton_code,
+        )
+        if exclude_color_agnostic:
+            query = query.outerjoin(BrandHeuristic, ArticleBlueprint.heuristic_id == BrandHeuristic.id).filter(
+                (ArticleBlueprint.heuristic_id.is_(None)) | (BrandHeuristic.heuristic_mode != HeuristicMode.COLOR_AGNOSTIC)
+            )
+        return query.all()
 
     def get_embeddings_by_brand(self, db: Session, brand_id: str) -> list[dict]:
         """
@@ -172,25 +221,41 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
         import re
         from sqlalchemy import func, or_
         from src.models.wms import Article
+        from src.utils import vendor_code_normalizer as vcn
 
         clean_code = (code or "").strip()
         if not clean_code:
             return []
 
         code_lower = clean_code.lower()
+        sterilized_query = vcn.sterilize_separators(clean_code)
+        skeleton_query = vcn.compute_skeleton_code(clean_code).lower()
         matches_by_bp: dict[str, Optional[set[str]]] = {}
 
-        # 1. Primary check: Exact matches on Article.ean or Article.supplier_code
+        # 1. Primary check: Article-level exact or skeleton match (isolates specific color variant allowed_colors)
+        # 1a. Direct exact match on Article.ean or Article.supplier_code
         matched_articles = (
             db.query(Article)
             .filter(
                 or_(
                     func.lower(Article.ean) == code_lower,
                     func.lower(Article.supplier_code) == code_lower,
+                    func.lower(Article.supplier_code) == sterilized_query.lower(),
                 )
             )
             .all()
         )
+        # 1b. Skeleton match on Article.supplier_code (e.g. 'P10QMTZ4551' -> 'P10QMTZ4-551', '0130250114' -> '01302501-14')
+        if not matched_articles and len(skeleton_query) >= 3:
+            sql_stripped_supplier = func.lower(Article.supplier_code)
+            for sep in ("-", " ", "/", "_", ".", "@"):
+                sql_stripped_supplier = func.replace(sql_stripped_supplier, sep, "")
+            matched_articles = (
+                db.query(Article)
+                .filter(sql_stripped_supplier == skeleton_query)
+                .all()
+            )
+
         for art in matched_articles:
             bp_id = str(art.article_blueprint_id)
             art_colors = [c.lower() for c in (art.colors or []) if c]
@@ -203,23 +268,38 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
                     else:
                         matches_by_bp[bp_id] = None
 
-        # 2. Primary check: Exact match on ArticleBlueprint.normalized_vendor_code
-        matched_bps = (
-            db.query(ArticleBlueprint)
-            .filter(func.lower(ArticleBlueprint.normalized_vendor_code) == code_lower)
-            .all()
-        )
-        for bp in matched_bps:
-            bp_id = str(bp.id)
-            matches_by_bp[bp_id] = None
+        # 2. Primary check: Blueprint-level exact match (returns all colors allowed_colors = None)
+        # Matches when user searches model root, e.g. "P10QMTZ4" or "013025"
+        if not matches_by_bp:
+            matched_bps = (
+                db.query(ArticleBlueprint)
+                .filter(
+                    or_(
+                        func.lower(ArticleBlueprint.normalized_vendor_code).in_([code_lower, sterilized_query.lower()]),
+                        func.lower(ArticleBlueprint.skeleton_vendor_code) == skeleton_query,
+                    )
+                )
+                .all()
+            )
+            for bp in matched_bps:
+                bp_id = str(bp.id)
+                matches_by_bp[bp_id] = None
 
-        # 3. Enhanced check: If no exact matches and query looks like a code pattern
-        # (at least 3 characters, alphanumeric or common code separators)
+        # 3. Enhanced check: Fallback prefix / wildcard matching if Step 1 & 2 found nothing
         if not matches_by_bp and len(clean_code) >= 3 and not re.search(r"\s{2,}", clean_code):
-            # 3a. Prefix match on Article.supplier_code (e.g. user entered "048519" for "04851901" or "151664" for "151664-1041-1CNU")
+            # 3a. Prefix match on Article.supplier_code (literal or stripped)
+            sql_stripped_supplier = func.lower(Article.supplier_code)
+            for sep in ("-", " ", "/", "_", ".", "@"):
+                sql_stripped_supplier = func.replace(sql_stripped_supplier, sep, "")
+
             prefix_articles = (
                 db.query(Article)
-                .filter(Article.supplier_code.ilike(f"{clean_code}%"))
+                .filter(
+                    or_(
+                        Article.supplier_code.ilike(f"{clean_code}%"),
+                        sql_stripped_supplier.like(f"{skeleton_query}%"),
+                    )
+                )
                 .all()
             )
             for art in prefix_articles:
@@ -230,38 +310,41 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
                 elif matches_by_bp[bp_id] is not None and art_colors:
                     matches_by_bp[bp_id].update(art_colors)
 
-            # 3b. Prefix match on ArticleBlueprint.normalized_vendor_code (e.g. "HWVG84" for "HWVG84#")
-            prefix_bps = (
-                db.query(ArticleBlueprint)
-                .filter(ArticleBlueprint.normalized_vendor_code.ilike(f"{clean_code}%"))
-                .all()
-            )
-            for bp in prefix_bps:
-                bp_id = str(bp.id)
-                matches_by_bp[bp_id] = None
-
-            # 3c. Wildcard '#' pattern matching in ArticleBlueprint.normalized_vendor_code
-            # (e.g. bp code "048519#" matches search "048519" or "04851901"; "151664-#-1CNU" matches "151664-1041-1CNU")
-            wildcard_bps = (
-                db.query(ArticleBlueprint)
-                .filter(ArticleBlueprint.normalized_vendor_code.like("%#%"))
-                .all()
-            )
-            clean_alnum = re.sub(r"[^a-zA-Z0-9]", "", clean_code).lower()
-            for bp in wildcard_bps:
-                bp_code = (bp.normalized_vendor_code or "").strip()
-                # Construct regex replacing '#' with wildcard and '*' with literal '*'
-                regex_pattern = "^" + re.sub(r"(?:\\#)+", r"[a-zA-Z0-9]+", re.escape(bp_code)) + "$"
-                bp_base = bp_code.replace("#", "").strip("-* ")
-                bp_base_alnum = re.sub(r"[^a-zA-Z0-9]", "", bp_base).lower()
-
-                if (
-                    re.match(regex_pattern, clean_code, re.IGNORECASE)
-                    or (bp_base and clean_code.lower().startswith(bp_base.lower()))
-                    or (bp_base_alnum and clean_alnum.startswith(bp_base_alnum))
-                ):
+            # 3b. Prefix match on ArticleBlueprint
+            if not matches_by_bp:
+                prefix_bps = (
+                    db.query(ArticleBlueprint)
+                    .filter(
+                        or_(
+                            ArticleBlueprint.normalized_vendor_code.ilike(f"{clean_code}%"),
+                            ArticleBlueprint.normalized_vendor_code.ilike(f"{sterilized_query}%"),
+                            ArticleBlueprint.skeleton_vendor_code.ilike(f"{skeleton_query}%"),
+                        )
+                    )
+                    .all()
+                )
+                for bp in prefix_bps:
                     bp_id = str(bp.id)
                     matches_by_bp[bp_id] = None
+
+            # 3c. Wildcard '#' pattern matching or prefix parent blueprint match
+            if not matches_by_bp:
+                all_bps = db.query(ArticleBlueprint).all()
+                clean_alnum = skeleton_query
+                for bp in all_bps:
+                    bp_code = (bp.normalized_vendor_code or "").strip()
+                    bp_skel = (bp.skeleton_vendor_code or vcn.compute_skeleton_code(bp_code)).lower()
+                    bp_id = str(bp.id)
+
+                    if "#" in bp_code:
+                        sterilized_bp = vcn.sterilize_separators(bp_code)
+                        regex_pattern = "^" + re.sub(r"(?:\\#)+", r"[a-zA-Z0-9]+", re.escape(sterilized_bp)) + "$"
+                        if re.match(regex_pattern, sterilized_query, re.IGNORECASE) or re.match(regex_pattern, clean_code, re.IGNORECASE):
+                            matches_by_bp[bp_id] = None
+                            continue
+
+                    if bp_skel and len(bp_skel) >= 5 and clean_alnum.startswith(bp_skel):
+                        matches_by_bp[bp_id] = None
 
         result = [
             {
@@ -607,6 +690,7 @@ class BrandHeuristicRepository:
         commit_changes: bool = True,
         heuristic_mode: Optional[str] = None,
         heuristic_confirmed: Optional[bool] = None,
+        color_segment_index: Optional[int] = None,
         heuristic_metadata: Optional[dict] = None,
     ) -> BrandHeuristic:
         logger.log_execution("pim_repo", "create_brand_heuristic", "ok", brand_id=brand_id, pattern=pattern)
@@ -617,6 +701,7 @@ class BrandHeuristicRepository:
             explanation=explanation,
             heuristic_mode=mode,
             heuristic_confirmed=bool(heuristic_confirmed) if heuristic_confirmed is not None else mode != HeuristicMode.PENDING_COHORT,
+            color_segment_index=color_segment_index,
             heuristic_metadata=heuristic_metadata,
         )
         db.add(heuristic)
@@ -636,6 +721,7 @@ class BrandHeuristicRepository:
         commit_changes: bool = True,
         heuristic_mode: Optional[str] = None,
         heuristic_confirmed: Optional[bool] = None,
+        color_segment_index: Optional[int] = None,
         heuristic_metadata: Optional[dict] = None,
     ) -> Optional[BrandHeuristic]:
         heuristic = db.query(BrandHeuristic).filter(BrandHeuristic.id == heuristic_id).first()
@@ -652,6 +738,8 @@ class BrandHeuristicRepository:
             heuristic.heuristic_mode = heuristic_mode
         if heuristic_confirmed is not None:
             heuristic.heuristic_confirmed = heuristic_confirmed
+        if color_segment_index is not None:
+            heuristic.color_segment_index = color_segment_index
         if heuristic_metadata is not None:
             heuristic.heuristic_metadata = heuristic_metadata
         if commit_changes:
@@ -661,6 +749,151 @@ class BrandHeuristicRepository:
             db.flush()
         logger.log_execution("pim_repo", "update_brand_heuristic", "ok", heuristic_id=heuristic_id, pattern=heuristic.pattern)
         return heuristic
+
+    def get_embeddings_by_brand(self, db: Session, brand_id: str) -> list[CodeEmbedding]:
+        return db.query(CodeEmbedding).filter(CodeEmbedding.brand_id == brand_id).all()
+
+    def get_embeddings_by_heuristic(self, db: Session, heuristic_id: str) -> list[CodeEmbedding]:
+        return db.query(CodeEmbedding).filter(CodeEmbedding.heuristic_id == heuristic_id).all()
+
+    def recalculate_embeddings_for_heuristic(
+        self, db: Session, brand_id: str, heuristic_id: str, commit_changes: bool = True
+    ) -> list[CodeEmbedding]:
+        """
+        Ricalcola a cascata i code_embeddings per l'euristica specificata a partire
+        dai Blueprint collegati (heuristic_id) e dai relativi Article (supplier_code).
+        Applica la Garbage Collection (DELETE) sugli embedding orfani non più rappresentati.
+        """
+        from src.utils.vendor_code_normalizer import (
+            extract_root_and_color,
+            compute_root_blocks_pattern,
+            compute_root_prefix_anchor,
+            compute_skeleton_code,
+        )
+        heuristic = db.query(BrandHeuristic).filter(BrandHeuristic.id == heuristic_id).first()
+        if not heuristic:
+            return []
+
+        blueprints = db.query(ArticleBlueprint).filter(
+            ArticleBlueprint.brand_id == brand_id,
+            ArticleBlueprint.heuristic_id == heuristic_id,
+        ).all()
+
+        codes = []
+        for bp in blueprints:
+            art_codes = [art.supplier_code for art in bp.articles if art.supplier_code]
+            if art_codes:
+                codes.extend(art_codes)
+            elif bp.normalized_vendor_code:
+                codes.append(bp.normalized_vendor_code)
+
+        if not codes:
+            db.query(CodeEmbedding).filter(CodeEmbedding.heuristic_id == heuristic_id).delete()
+            if commit_changes:
+                db.commit()
+            return []
+
+        h_rules = (heuristic.heuristic_metadata or {}).get("rules") if heuristic.heuristic_metadata else None
+        h_root_len = (heuristic.heuristic_metadata or {}).get("root_length") if heuristic.heuristic_metadata else None
+
+        groups: dict[tuple[int, int, str], dict] = {}
+        for raw in set(codes):
+            sterilized, root_str, color_segment = extract_root_and_color(
+                raw,
+                heuristic_mode=heuristic.heuristic_mode,
+                color_segment_index=heuristic.color_segment_index,
+                root_length=h_root_len,
+                rules=h_rules,
+            )
+            clean_code_val = compute_skeleton_code(sterilized)
+            clean_root = compute_skeleton_code(root_str)
+            root_len = len(clean_root)
+            if not root_len:
+                continue
+            color_len = len(compute_skeleton_code(color_segment))
+            if color_len == 0 and "#" in color_segment:
+                color_len = max(1, color_segment.count("#"))
+            total_len = len(clean_code_val)
+            if total_len < root_len + color_len:
+                total_len = root_len + color_len
+            sep_count = len(sterilized.split("@")) - 1
+            pattern = compute_root_blocks_pattern(root_str)
+            anchor = compute_root_prefix_anchor(root_str)
+
+            key = (sep_count, root_len, pattern)
+            if key not in groups:
+                groups[key] = {
+                    "total_lengths": [total_len],
+                    "color_lengths": [color_len] if color_len > 0 else [1],
+                    "root_length": root_len,
+                    "separator_count": sep_count,
+                    "root_blocks_pattern": pattern,
+                    "root_prefix_anchor": anchor,
+                    "sample_raw_code": raw,
+                }
+            else:
+                groups[key]["total_lengths"].append(total_len)
+                if color_len > 0:
+                    groups[key]["color_lengths"].append(color_len)
+
+        existing_embeddings = db.query(CodeEmbedding).filter(CodeEmbedding.heuristic_id == heuristic_id).all()
+        existing_by_key = {
+            (e.separator_count, e.root_length, e.root_blocks_pattern): e
+            for e in existing_embeddings
+        }
+
+        active_keys = set(groups.keys())
+        updated_embeddings = []
+
+        for key, gdata in groups.items():
+            tot_min = min(gdata["total_lengths"])
+            tot_max = max(gdata["total_lengths"])
+            col_min = min(gdata["color_lengths"])
+            col_max = max(gdata["color_lengths"])
+
+            if key in existing_by_key:
+                emb = existing_by_key[key]
+                emb.total_length_min = min(emb.total_length_min, tot_min)
+                emb.total_length_max = max(emb.total_length_max, tot_max)
+                emb.color_length_min = min(emb.color_length_min, col_min)
+                emb.color_length_max = max(emb.color_length_max, col_max)
+                emb.root_prefix_anchor = gdata["root_prefix_anchor"]
+                emb.sample_raw_code = gdata["sample_raw_code"]
+                emb.updated_at = datetime.utcnow()
+                updated_embeddings.append(emb)
+            else:
+                now = datetime.utcnow()
+                emb = CodeEmbedding(
+                    heuristic_id=heuristic_id,
+                    brand_id=brand_id,
+                    total_length_min=tot_min,
+                    total_length_max=tot_max,
+                    root_length=gdata["root_length"],
+                    color_length_min=col_min,
+                    color_length_max=col_max,
+                    separator_count=gdata["separator_count"],
+                    root_blocks_pattern=gdata["root_blocks_pattern"],
+                    root_prefix_anchor=gdata["root_prefix_anchor"],
+                    sample_raw_code=gdata["sample_raw_code"],
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(emb)
+                updated_embeddings.append(emb)
+
+        # Rettifica 2.B: Garbage collection degli embedding orfani
+        for key, emb in existing_by_key.items():
+            if key not in active_keys:
+                db.delete(emb)
+
+        if commit_changes:
+            db.commit()
+            for emb in updated_embeddings:
+                db.refresh(emb)
+        else:
+            db.flush()
+
+        return updated_embeddings
 
     def get_active_heuristic(self, db: Session, brand_id: str) -> Optional[BrandHeuristic]:
         """Euristica attiva del brand = la più recente."""

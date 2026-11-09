@@ -9,6 +9,7 @@ class JobStatus(enum.IntEnum):
     ACCEPTED = 1
     COMPLETED = 2
     ERROR = 3
+    TYPO_WARNING = 4
 
 
 class JobType(str, enum.Enum):
