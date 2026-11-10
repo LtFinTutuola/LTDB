@@ -84,10 +84,11 @@ class ArticleBlueprint(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "article_blueprints"
     __table_args__ = (
         Index("ix_brand_skeleton_vendor_code", "brand_id", "skeleton_vendor_code"),
+        Index("ix_article_blueprints_created_at", "created_at"),
     )
 
-    brand_id: Mapped[str] = mapped_column(String(36), ForeignKey("brands.id"), nullable=False)
-    category_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("categories.id"), nullable=True)
+    brand_id: Mapped[str] = mapped_column(String(36), ForeignKey("brands.id"), nullable=False, index=True)
+    category_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("categories.id"), nullable=True, index=True)
     heuristic_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("brand_heuristics.id", ondelete="SET NULL"), nullable=True, index=True)
     normalized_vendor_code: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
     skeleton_vendor_code: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)

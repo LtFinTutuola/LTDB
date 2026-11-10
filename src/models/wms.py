@@ -2,7 +2,7 @@ from datetime import date
 from typing import List, Optional
 import enum
 
-from sqlalchemy import String, ForeignKey, Date, Enum, Numeric, Integer, JSON
+from sqlalchemy import String, ForeignKey, Date, Enum, Numeric, Integer, JSON, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, UUIDMixin, TimestampMixin
@@ -30,7 +30,7 @@ class Batch(Base, UUIDMixin, TimestampMixin):
 
     supplier_id: Mapped[str] = mapped_column(String(36), ForeignKey("suppliers.id"), nullable=False)
     delivery_note_number: Mapped[str] = mapped_column(String, nullable=False)
-    document_date: Mapped[date] = mapped_column(Date, nullable=False)
+    document_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
 
     # Relationships
     supplier: Mapped["Supplier"] = relationship("Supplier", back_populates="batches")
@@ -39,13 +39,17 @@ class Batch(Base, UUIDMixin, TimestampMixin):
 
 class Article(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "articles"
+    __table_args__ = (
+        Index("ix_articles_bp_status", "article_blueprint_id", "status"),
+        Index("ix_articles_created_at", "created_at"),
+    )
 
-    article_blueprint_id: Mapped[str] = mapped_column(String(36), ForeignKey("article_blueprints.id"), nullable=False)
-    batch_id: Mapped[str] = mapped_column(String(36), ForeignKey("batches.id"), nullable=False)
+    article_blueprint_id: Mapped[str] = mapped_column(String(36), ForeignKey("article_blueprints.id"), nullable=False, index=True)
+    batch_id: Mapped[str] = mapped_column(String(36), ForeignKey("batches.id"), nullable=False, index=True)
     supplier_code: Mapped[Optional[str]] = mapped_column(UppercaseString, index=True, nullable=True)
     ean: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
     colors: Mapped[Optional[list]] = mapped_column(LowercaseJSONList, nullable=True)
-    status: Mapped[ArticleStatus] = mapped_column(Enum(ArticleStatus), nullable=False, default=ArticleStatus.AVAILABLE)
+    status: Mapped[ArticleStatus] = mapped_column(Enum(ArticleStatus), nullable=False, default=ArticleStatus.AVAILABLE, index=True)
 
     # Relationships
     blueprint: Mapped["ArticleBlueprint"] = relationship("ArticleBlueprint", back_populates="articles")

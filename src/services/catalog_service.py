@@ -410,28 +410,13 @@ def list_latest_items(
     sort_by: str = "date",
     sort_dir: str = "desc",
 ) -> dict:
-    from src.services.catalog_query_service import (
-        build_variant_rows_for_blueprints,
-        sort_variant_rows,
-        paginate_rows,
+    from src.services.catalog_query_service import query_paginated_catalog_variants
+
+    return query_paginated_catalog_variants(
+        db=db,
+        limit=limit,
+        offset=offset,
+        in_stock_only=in_stock_only,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
-
-    query = db.query(ArticleBlueprint)
-
-    if in_stock_only:
-        avail_article_subq = (
-            db.query(Article.article_blueprint_id)
-            .filter(Article.status == ArticleStatus.AVAILABLE)
-            .distinct()
-            .subquery()
-        )
-        query = query.join(avail_article_subq, ArticleBlueprint.id == avail_article_subq.c.article_blueprint_id)
-
-    blueprints = query.all()
-    entries = [{"id": bp.id, "blueprint": bp} for bp in blueprints]
-
-    rows = build_variant_rows_for_blueprints(db, entries, in_stock_only=in_stock_only)
-    sorted_rows = sort_variant_rows(rows, sort_by=sort_by, sort_dir=sort_dir)
-
-    page = (offset // limit) + 1 if limit > 0 else 1
-    return paginate_rows(sorted_rows, page=page, page_size=limit)
