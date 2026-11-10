@@ -1,13 +1,13 @@
-import * as api from './api.js?v=20261026_4';
-import { setupBarcodeScanner } from './barcode_scanner.js?v=20261022_6';
-import { requestPhotoUpload } from './photo_upload_helper.js?v=20261022_6';
+import * as api from './api.js';
+import { setupBarcodeScanner } from './barcode_scanner.js';
+import { requestPhotoUpload } from './photo_upload_helper.js';
 import {
     openBlueprintRevision,
     refreshWarehouseAnomaliesBadge,
     openWarehouseAnomaliesModal,
     getWarehouseAnomaliesCount,
     ANOMALY_BLOCKED_MESSAGE,
-} from './blueprint_revision.js?v=20261026_6';
+} from './blueprint_revision.js';
 
 let _controlsBound = false;
 let _editingItem = null;

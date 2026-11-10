@@ -1,7 +1,7 @@
 import uvicorn
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Depends, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -72,9 +72,26 @@ async def login_redirect_handler(request: Request, exc: LoginRedirect):
     return response
 
 
-# Static files (JS, CSS)
+# Static files (JS, CSS) with cache validation headers
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
-app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """
+    Subclasses Starlette's StaticFiles to ensure that JavaScript and CSS files
+    always include 'Cache-Control: no-cache, must-revalidate'.
+    This forces browsers to revalidate files with the server (returning 304 if unchanged)
+    rather than executing outdated scripts from browser disk/memory cache.
+    """
+    async def get_response(self, path: str, scope) -> Response:
+        response = await super().get_response(path, scope)
+        if path.endswith((".js", ".css", ".html")):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+        return response
+
+
+app.mount("/static", NoCacheStaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 # Public Auth router (login, logout, me, change-password)
 app.include_router(auth_router)

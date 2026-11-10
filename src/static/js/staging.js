@@ -6,13 +6,13 @@
  *  - Submits revision batches to PUT /ingestion/staging/{job_id}
  *  - Handles photo proposal display and retry
  */
-import * as api from './api.js?v=20261022_6';
+import * as api from './api.js';
 import {
     appState, Mode, setMode,
     addMessage, getDetailPanel, exitSplitScreen, _esc,
-} from './main.js?v=20261022_6';
-import { setupBarcodeScanner } from './barcode_scanner.js?v=20261022_6';
-import { requestPhotoUpload } from './photo_upload_helper.js?v=20261022_6';
+} from './main.js';
+import { setupBarcodeScanner } from './barcode_scanner.js';
+import { requestPhotoUpload } from './photo_upload_helper.js';
 
 // ---- Module state ----
 let _activePhotoIndices = {};

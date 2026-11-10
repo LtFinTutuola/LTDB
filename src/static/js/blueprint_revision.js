@@ -7,15 +7,15 @@
  * Strictly hides all regular expression syntax from the operator.
  */
 
-import * as api from './api.js?v=20261026_4';
+import * as api from './api.js';
 import {
     enterSplitScreen,
     exitSplitScreen,
     getDetailPanel,
     addMessage,
     _esc,
-} from './main.js?v=20261026_4';
-import { requestPhotoUpload } from './photo_upload_helper.js?v=20261026_2';
+} from './main.js';
+import { requestPhotoUpload } from './photo_upload_helper.js';
 
 let _currentContext = null;
 let _buckets = []; // [{ group_id, label, is_original, user_hint, groupKeys: Set }]

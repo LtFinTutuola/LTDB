@@ -296,6 +296,13 @@ async function _pollOnce(jobId) {
             enterSplitScreen();
             staging.renderStagingPanel(result.data, jobId);
             setMode(Mode.STAGING);
+        } else if (result.status === 'TYPO_WARNING') {
+            clearInterval(appState.pollingTimer);
+            appState.pollingTimer = null;
+            const d = result.data || {};
+            updateArtifactBoxStatus(jobId, '⚠️ Sospetto refuso', true);
+            addMessage(`⚠️ Possibile refuso: ${d.reason || ''}`, 'error');
+            _resetToIdle();
         } else if (result.status === 'ERROR') {
             clearInterval(appState.pollingTimer);
             appState.pollingTimer = null;
