@@ -696,9 +696,11 @@ def test_warehouse_search_toolbar_ui_layout_and_responsive_styles(db_session):
 
     # 2. Barcode scan button positioned before search input wrapper
     idx_scan_btn = html.find('id="warehouse-barcode-scan-btn"')
+    idx_refresh_btn = html.find('id="warehouse-refresh-btn"')
     idx_search_input = html.find('id="warehouse-search-input"')
-    assert idx_scan_btn != -1 and idx_search_input != -1
+    assert idx_scan_btn != -1 and idx_search_input != -1 and idx_refresh_btn != -1
     assert idx_scan_btn < idx_search_input, "Barcode scan button must be to the left of the search input"
+    assert idx_refresh_btn < idx_search_input, "Refresh button must be to the left of the search input"
 
     # 3. Sort dropdown and stock toggle placed inside .search-toolbar-sub
     idx_sub = html.find('class="search-toolbar-sub"')
@@ -707,14 +709,23 @@ def test_warehouse_search_toolbar_ui_layout_and_responsive_styles(db_session):
     assert idx_sub != -1 and idx_sort != -1 and idx_toggle != -1
     assert idx_sub < idx_sort < idx_toggle, "Sort dropdown should be in sub-toolbar on the left, followed by stock toggle"
 
-    # 4. CSS: Desktop hides scan button, mobile displays it on left
+    # 4. CSS: Desktop hides scan button, mobile displays it on left; refresh button responsive styles
     assert ".search-scan-btn {\n    display: none !important;\n  }" in html
     assert "display: inline-flex !important;" in html
+    assert ".warehouse-refresh-btn" in html
+    assert "@keyframes warehouse-spin" in html
+    assert "border: none !important;" in html
 
     # 5. CSS: De-emphasized borderless styling with --text-muted
     assert ".warehouse-sort-wrapper" in html
     assert "background: transparent !important;" in html
     assert "color: var(--text-muted);" in html
+
+    # 6. JS handles warehouse-refresh-btn reset
+    res_js = client.get("/static/js/warehouse.js")
+    assert res_js.status_code == 200
+    assert "warehouse-refresh-btn" in res_js.text
+    assert "is-spinning" in res_js.text
 
 
 

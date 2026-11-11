@@ -599,6 +599,50 @@ function _bindSearchControls() {
         });
     }
 
+    const refreshBtn = document.getElementById('warehouse-refresh-btn');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', async () => {
+            refreshBtn.classList.add('is-spinning');
+            if (searchInput) {
+                searchInput.value = '';
+            }
+            if (clearBtn) {
+                clearBtn.style.display = 'none';
+            }
+            if (feedbackEl) {
+                feedbackEl.style.display = 'none';
+                feedbackEl.textContent = '';
+            }
+            if (stockToggle) {
+                stockToggle.checked = false;
+            }
+            const sortSelect = document.getElementById('warehouse-sort-select');
+            if (sortSelect) {
+                sortSelect.value = 'date:desc';
+            }
+            const relOpt = document.getElementById('warehouse-sort-opt-relevance');
+            if (relOpt) {
+                relOpt.style.display = 'none';
+            }
+            _activeSearchQuery = '';
+            _currentPage = 1;
+
+            const container = document.getElementById('catalog-results');
+            if (container) {
+                container.scrollTop = 0;
+            }
+
+            try {
+                await fetchLatestItems(false, 1);
+                await refreshWarehouseAnomaliesBadge();
+            } finally {
+                setTimeout(() => {
+                    refreshBtn.classList.remove('is-spinning');
+                }, 400);
+            }
+        });
+    }
+
     if (stockToggle) {
         stockToggle.addEventListener('change', () => {
             const query = searchInput ? searchInput.value.trim() : '';

@@ -281,6 +281,50 @@
     box-shadow: none;
   }
 
+  /* Warehouse Refresh Button (Left of search bar) */
+  @keyframes warehouse-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .warehouse-refresh-btn {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    padding: 0;
+    border-radius: var(--radius-pill);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: var(--text-secondary);
+    cursor: pointer;
+    outline: none;
+    transition: color var(--transition-fast), transform 0.1s ease;
+  }
+  .warehouse-refresh-btn:hover {
+    background: transparent !important;
+    border: none !important;
+    color: var(--accent);
+  }
+  .warehouse-refresh-btn:active {
+    transform: scale(0.92);
+  }
+  .warehouse-refresh-btn .material-symbols-rounded {
+    font-size: 20px;
+    display: inline-block;
+  }
+  .warehouse-refresh-btn.is-spinning .material-symbols-rounded {
+    animation: warehouse-spin 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
   /* Barcode Scanner Button (Desktop/Tablet hidden, Mobile visible on left) */
   .search-scan-btn {
     display: none !important;
@@ -756,6 +800,17 @@
       right: 6px;
       width: 22px;
       height: 22px;
+    }
+    .warehouse-refresh-btn {
+      width: 38px;
+      height: 38px;
+      min-width: 38px;
+      background: transparent !important;
+      border: none !important;
+      box-shadow: none !important;
+    }
+    .warehouse-refresh-btn .material-symbols-rounded {
+      font-size: 20px;
     }
     .search-scan-btn {
       width: 38px;
@@ -1611,6 +1666,11 @@
                             <button type="button" id="warehouse-barcode-scan-btn" class="search-scan-btn" title="Scansiona codice a barre con la fotocamera">
                                 <span class="material-symbols-rounded" style="font-size: 20px;">photo_camera</span>
                                 <span>Scansiona Barcode</span>
+                            </button>
+
+                            <!-- Refresh / Reset Button (Desktop, Tablet, Mobile) -->
+                            <button type="button" id="warehouse-refresh-btn" class="warehouse-refresh-btn" title="Ripristina vista magazzino senza filtri">
+                                <span class="material-symbols-rounded">refresh</span>
                             </button>
 
                             <!-- Rounded search bar -->
