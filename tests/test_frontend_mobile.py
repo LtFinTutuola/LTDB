@@ -777,6 +777,77 @@ def test_warehouse_search_race_condition_and_form_submit_guards(db_session):
     assert "signal: options.signal" in api_text
 
 
+def test_fullscreen_image_modal_architecture_and_responsive_click_handlers(db_session):
+    """
+    Verify unified full-screen image preview / lightbox modal across all application sections:
+    1. Dedicated image_modal.js module with openImageModal & closeImageModal
+    2. CSS rules in workspace.css (.image-modal-overlay, .image-modal-overlay.open, .btn-close-modal)
+    3. Warehouse responsive photo thumbnail click handler works across desktop & mobile (no window.innerWidth restriction)
+    4. Staging area & Oracle confirmation HITL cards call unified openImageModal
+    5. Blueprint revision does not override window._openImageModal with broken opacity 0 modal
+    6. Sales page delegates to unified image_modal.js
+    """
+    client = TestClient(app)
+
+    # 1. image_modal.js static delivery and structure
+    res_img_js = client.get("/static/js/image_modal.js")
+    assert res_img_js.status_code == 200
+    img_js = res_img_js.text
+    assert "export function openImageModal" in img_js
+    assert "export function closeImageModal" in img_js
+    assert "image-zoom-modal" in img_js
+    assert "image-modal-overlay" in img_js
+    assert "image-modal-content" in img_js
+    assert "btn-close-modal" in img_js
+    assert "classList.add('open')" in img_js
+    assert "classList.remove('open')" in img_js
+    assert "window._openImageModal = openImageModal" in img_js
+    assert "window.showImageFullscreen = openImageModal" in img_js
+
+    # 2. workspace.css rules
+    res_css = client.get("/static/css/workspace.css")
+    assert res_css.status_code == 200
+    css = res_css.text
+    assert ".image-modal-overlay {" in css
+    assert "opacity: 0;" in css
+    assert "pointer-events: none;" in css
+    assert ".image-modal-overlay.open {" in css
+    assert "opacity: 1;" in css
+    assert "pointer-events: all;" in css
+    assert ".btn-close-modal {" in css
+
+    # 3. warehouse.js uses openImageModal and no longer blocks mobile/tablet clicks
+    res_wh = client.get("/static/js/warehouse.js")
+    assert res_wh.status_code == 200
+    wh_js = res_wh.text
+    assert "import { openImageModal } from './image_modal.js';" in wh_js
+    assert "openImageModal(photoUrl, item.article_name)" in wh_js
+    # Ensure window.innerWidth restriction is removed from photoEl click
+    assert "if (window.innerWidth > 768) {\n                    e.stopPropagation();\n                    showImageFullscreen" not in wh_js
+
+    # 4. staging.js uses openImageModal
+    res_st = client.get("/static/js/staging.js")
+    assert res_st.status_code == 200
+    st_js = res_st.text
+    assert "import { openImageModal } from './image_modal.js';" in st_js
+    assert "window._openImageModal = openImageModal;" in st_js
+
+    # 5. blueprint_revision.js does not overwrite with broken display: block
+    res_bp = client.get("/static/js/blueprint_revision.js")
+    assert res_bp.status_code == 200
+    bp_js = res_bp.text
+    assert "import { openImageModal } from './image_modal.js';" in bp_js
+    assert "overlay.style.display = 'block';" not in bp_js
+
+    # 6. sales_page.js uses openImageModal
+    res_sales = client.get("/static/js/sales_page.js")
+    assert res_sales.status_code == 200
+    sales_js = res_sales.text
+    assert "import { openImageModal } from './image_modal.js';" in sales_js
+    assert "openImageModal(this.src)" in sales_js
+
+
+
 
 
 

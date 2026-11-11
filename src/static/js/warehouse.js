@@ -1,6 +1,7 @@
 import * as api from './api.js';
 import { setupBarcodeScanner } from './barcode_scanner.js';
 import { requestPhotoUpload } from './photo_upload_helper.js';
+import { openImageModal } from './image_modal.js';
 import {
     openBlueprintRevision,
     refreshWarehouseAnomaliesBadge,
@@ -247,14 +248,12 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
             </td>
         `;
 
-        // Photo click -> fullscreen image (desktop only; on mobile entire row navigates to detail panel)
+        // Photo click -> fullscreen image (all screen sizes; stop propagation so row doesn't open detail panel)
         const photoEl = tr.querySelector('.warehouse-row__photo');
         if (photoEl && hasPhoto) {
             photoEl.addEventListener('click', (e) => {
-                if (window.innerWidth > 768) {
-                    e.stopPropagation();
-                    showImageFullscreen(photoUrl, item.article_name);
-                }
+                e.stopPropagation();
+                openImageModal(photoUrl, item.article_name);
             });
         }
 
@@ -854,7 +853,7 @@ function _bindArticleModals() {
     if (photoWrapMobile) {
         photoWrapMobile.addEventListener('click', () => {
             if (_currentMobileArticle && _currentMobileArticle.photo_id) {
-                showImageFullscreen(api.getPhotoUrl(_currentMobileArticle.photo_id), _currentMobileArticle.article_name);
+                openImageModal(api.getPhotoUrl(_currentMobileArticle.photo_id), _currentMobileArticle.article_name);
             }
         });
     }
@@ -1217,7 +1216,7 @@ function openEditArticleModal(item) {
     if (photoWrap) {
         photoWrap.onclick = () => {
             if (_editingItem && _editingItem.photo_id) {
-                showImageFullscreen(api.getPhotoUrl(_editingItem.photo_id), _editingItem.article_name);
+                openImageModal(api.getPhotoUrl(_editingItem.photo_id), _editingItem.article_name);
             }
         };
     }
@@ -1552,47 +1551,7 @@ async function _handleSaveArticleMobile(e) {
 // ============================================================================
 
 function showImageFullscreen(imageUrl, altText = '') {
-    let imgOverlay = document.getElementById('image-fullscreen-modal');
-    if (!imgOverlay) {
-        imgOverlay = document.createElement('div');
-        imgOverlay.id = 'image-fullscreen-modal';
-        imgOverlay.style.position = 'fixed';
-        imgOverlay.style.top = '0';
-        imgOverlay.style.left = '0';
-        imgOverlay.style.width = '100vw';
-        imgOverlay.style.height = '100vh';
-        imgOverlay.style.backgroundColor = 'rgba(0, 0, 0, 0.92)';
-        imgOverlay.style.zIndex = '12000';
-        imgOverlay.style.display = 'none';
-        imgOverlay.style.justifyContent = 'center';
-        imgOverlay.style.alignItems = 'center';
-        imgOverlay.style.backdropFilter = 'blur(6px)';
-        imgOverlay.style.cursor = 'zoom-out';
-        document.body.appendChild(imgOverlay);
-
-        imgOverlay.addEventListener('click', (e) => {
-            if (e.target === imgOverlay || e.target.closest('.close-image-fullscreen')) {
-                imgOverlay.style.display = 'none';
-            }
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && imgOverlay.style.display === 'flex') {
-                imgOverlay.style.display = 'none';
-            }
-        });
-    }
-
-    imgOverlay.innerHTML = `
-        <button type="button" class="close-image-fullscreen" title="Chiudi immagine"
-                style="position: absolute; top: 20px; right: 24px; background: var(--bg-elevated); border: 1px solid var(--border-color); color: var(--text-primary); width: 42px; height: 42px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.4);">
-            <span class="material-symbols-rounded" style="font-size: 24px;">close</span>
-        </button>
-        <img src="${imageUrl}" alt=""
-             style="max-width: 92vw; max-height: 90vh; object-fit: contain; border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.65); cursor: default;"
-             onclick="event.stopPropagation()">
-    `;
-    imgOverlay.style.display = 'flex';
+    openImageModal(imageUrl, altText);
 }
 
 function showArticleFullscreen(item) {
@@ -1695,7 +1654,7 @@ function showArticleFullscreen(item) {
     if (fullPhotoEl && hasPhoto) {
         fullPhotoEl.addEventListener('click', (e) => {
             e.stopPropagation();
-            showImageFullscreen(photoUrl, item.article_name);
+            openImageModal(photoUrl, item.article_name);
         });
     }
 

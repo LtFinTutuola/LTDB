@@ -16,6 +16,7 @@ import {
     _esc,
 } from './main.js';
 import { requestPhotoUpload } from './photo_upload_helper.js';
+import { openImageModal } from './image_modal.js';
 
 let _currentContext = null;
 let _buckets = []; // [{ group_id, label, is_original, user_hint, groupKeys: Set }]
@@ -29,28 +30,7 @@ let _skipRuleDeduction = false;
 let _relatedBlueprintIds = [];
 let _categoryHierarchy = null;
 
-function _openImageModal(url) {
-    if (!url) return;
-    let overlay = document.getElementById('image-zoom-modal');
-    if (!overlay) {
-        overlay = document.createElement('div');
-        overlay.id = 'image-zoom-modal';
-        overlay.className = 'image-modal-overlay';
-        overlay.innerHTML = `
-            <div class="image-modal-content" style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:pointer;">
-                <img id="image-zoom-img" src="" style="max-width:90vw;max-height:90vh;border-radius:8px;object-fit:contain;">
-            </div>
-        `;
-        document.body.appendChild(overlay);
-        overlay.onclick = () => {
-            overlay.style.display = 'none';
-        };
-    }
-    const img = overlay.querySelector('#image-zoom-img');
-    if (img) img.src = url;
-    overlay.style.display = 'block';
-}
-window._openImageModal = _openImageModal;
+
 
 function _groupKey(g) {
     return g.group_key || `${g.supplier_code}__${(g.colors || []).join('|')}__${g.ean || ''}`;

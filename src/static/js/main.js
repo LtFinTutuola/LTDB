@@ -2,6 +2,7 @@ import { initWarehouse } from './warehouse.js';
 import { renderForms } from './imports.js';
 import * as staging from './staging.js';
 import { initAnomalyBlockedTooltip } from './blueprint_revision.js';
+import './image_modal.js';
 
 export function _esc(str) {
     if (typeof str !== 'string') return '';

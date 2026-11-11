@@ -1,4 +1,5 @@
 import * as api from './api.js';
+import { openImageModal } from './image_modal.js';
 
 function _esc(str) {
     if (str === null || str === undefined) return '';
@@ -93,29 +94,7 @@ const lazyLoadObserver = new IntersectionObserver((entries, observer) => {
     });
 }, { rootMargin: '200px' });
 
-function openImageModal(url) {
-    let overlay = document.getElementById('image-zoom-modal');
-    if (!overlay) {
-        overlay = document.createElement('div');
-        overlay.id = 'image-zoom-modal';
-        overlay.className = 'image-modal-overlay';
-        overlay.innerHTML = `
-            <div class="image-modal-content">
-                <button class="btn-close-modal">✕</button>
-                <img id="image-zoom-img" src="" alt="zoom">
-            </div>
-        `;
-        document.body.appendChild(overlay);
-        
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay || e.target.classList.contains('btn-close-modal')) {
-                overlay.classList.remove('open');
-            }
-        });
-    }
-    document.getElementById('image-zoom-img').src = url;
-    overlay.classList.add('open');
-}
+
 
 function init() {
     dom.datePicker.valueAsDate = new Date();
@@ -792,7 +771,7 @@ async function fetchAndRenderSaleDetail(saleId) {
         const res = await fetch(`/api/v1/excel-synchronization/sale-detail/${saleId}`).then(r => r.json());
         
         const photoHtml = res.photo_url 
-            ? `<img src="${res.photo_url}" class="detail-card__img" alt="Foto" onclick="showImageModal(this.src)">`
+            ? `<img src="${res.photo_url}" class="detail-card__img" alt="Foto" onclick="openImageModal(this.src)">`
             : `<div class="detail-card__img" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:12px;">No Img</div>`;
             
         const invBadgeClass = res.inventory > 0 ? 'inventory-badge--in-stock' : 'inventory-badge--out-of-stock';
