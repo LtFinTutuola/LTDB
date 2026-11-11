@@ -136,12 +136,14 @@ export async function searchCatalogPhoto(blueprintId, color = '', feedback = nul
 
 // --- Catalog ---
 
-export async function getCatalogItems(limit = 50, offset = 0, inStockOnly = false, sortBy = 'date', sortDir = 'desc') {
-    const res = await fetch(`${API_BASE}/catalog/items?limit=${limit}&offset=${offset}&in_stock_only=${inStockOnly}&sort_by=${encodeURIComponent(sortBy)}&sort_dir=${encodeURIComponent(sortDir)}`);
+export async function getCatalogItems(limit = 50, offset = 0, inStockOnly = false, sortBy = 'date', sortDir = 'desc', options = {}) {
+    const res = await fetch(`${API_BASE}/catalog/items?limit=${limit}&offset=${offset}&in_stock_only=${inStockOnly}&sort_by=${encodeURIComponent(sortBy)}&sort_dir=${encodeURIComponent(sortDir)}`, {
+        signal: options.signal,
+    });
     return _handleResponse(res);
 }
 
-export async function catalogSearch(query, inStockOnly = false, page = 1, pageSize = 50, sortBy = 'date', sortDir = 'desc') {
+export async function catalogSearch(query, inStockOnly = false, page = 1, pageSize = 50, sortBy = 'date', sortDir = 'desc', options = {}) {
     const res = await fetch(`${API_BASE}/catalog/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -153,6 +155,7 @@ export async function catalogSearch(query, inStockOnly = false, page = 1, pageSi
             sort_by: sortBy,
             sort_dir: sortDir,
         }),
+        signal: options.signal,
     });
     return _handleResponse(res);
 }

@@ -19,6 +19,9 @@ let _totalItems = 0;
 let _totalBlueprints = 0;
 let _totalPages = 1;
 let _activeSearchQuery = '';
+let _currentWarehouseRequestId = 0;
+let _warehouseAbortController = null;
+let _emptyInputDebounceTimer = null;
 
 function _getCurrentSort() {
     const sortSelect = document.getElementById('warehouse-sort-select');
@@ -310,10 +313,33 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
 }
 
 async function fetchLatestItems(inStockOnly = false, page = 1) {
+    const searchInput = document.getElementById('warehouse-search-input');
+    const currentQuery = searchInput ? searchInput.value.trim() : '';
+    // If user has a query in the search input, do not fetch or render generic items
+    if (currentQuery) {
+        return;
+    }
+
+    // Cancel any previous in-flight warehouse fetch/search
+    if (_warehouseAbortController) {
+        _warehouseAbortController.abort();
+    }
+    _warehouseAbortController = new AbortController();
+    const requestId = ++_currentWarehouseRequestId;
+
     _currentPage = Math.max(1, page);
     _activeSearchQuery = '';
     const container = document.getElementById('catalog-results');
     if (!container) return;
+
+    // Immediately show loading placeholder so UI is never perceived as frozen
+    container.innerHTML = `
+        <div class="pim-loading-state" style="padding: 50px 20px;">
+            <div class="pim-loading-spinner"></div>
+            <div style="font-size: 15px; color: var(--text-primary); margin-top: 4px;">Caricamento magazzino in corso...</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Recupero articoli e giacenze</div>
+        </div>
+    `;
 
     // Hide relevance option when not searching
     const relOpt = document.getElementById('warehouse-sort-opt-relevance');
@@ -322,7 +348,13 @@ async function fetchLatestItems(inStockOnly = false, page = 1) {
     try {
         const offset = (_currentPage - 1) * _pageSize;
         const { sortBy, sortDir } = _getCurrentSort();
-        const data = await api.getCatalogItems(_pageSize, offset, inStockOnly, sortBy, sortDir);
+        const data = await api.getCatalogItems(_pageSize, offset, inStockOnly, sortBy, sortDir, { signal: _warehouseAbortController.signal });
+
+        // Stale response guard: discard if another request started or if user has since typed a query
+        if (requestId !== _currentWarehouseRequestId) return;
+        const inputAfter = document.getElementById('warehouse-search-input');
+        if (inputAfter && inputAfter.value.trim().length > 0) return;
+        if (_activeSearchQuery) return;
 
         let items = data.results || [];
         _totalItems = typeof data.total_items === 'number' ? data.total_items : (typeof data.total_blueprints === 'number' ? data.total_blueprints : items.length);
@@ -342,6 +374,8 @@ async function fetchLatestItems(inStockOnly = false, page = 1) {
 
         _renderPagination(container, inStockOnly);
     } catch (e) {
+        if (e.name === 'AbortError') return;
+        if (requestId !== _currentWarehouseRequestId) return;
         console.error('fetchLatestItems error:', e);
         container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--error);">Errore nel caricamento del magazzino.</div>';
     }
@@ -459,7 +493,6 @@ function _renderPagination(container, inStockOnly) {
 }
 
 async function executeWarehouseSearch(page = 1) {
-    _currentPage = Math.max(1, page);
     const container = document.getElementById('catalog-results');
     const searchInput = document.getElementById('warehouse-search-input');
     const searchBtn = document.getElementById('warehouse-search-btn');
@@ -486,6 +519,14 @@ async function executeWarehouseSearch(page = 1) {
         return;
     }
 
+    // Cancel any previous in-flight warehouse fetch/search
+    if (_warehouseAbortController) {
+        _warehouseAbortController.abort();
+    }
+    _warehouseAbortController = new AbortController();
+    const requestId = ++_currentWarehouseRequestId;
+
+    _currentPage = Math.max(1, page);
     _activeSearchQuery = query;
     if (clearBtn) clearBtn.style.display = 'inline-flex';
 
@@ -494,16 +535,25 @@ async function executeWarehouseSearch(page = 1) {
         <div class="pim-loading-state" style="padding: 50px 20px;">
             <div class="pim-loading-spinner"></div>
             <div style="font-size: 15px; color: var(--text-primary); margin-top: 4px;">Ricerca in corso...</div>
-            <div style="font-size: 12px; color: var(--text-muted);">Elaborazione filtri e articoli di magazzino</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Elaborazione filtri per «${_esc(query)}»</div>
         </div>
     `;
 
+    if (feedbackEl) {
+        feedbackEl.style.display = 'block';
+        feedbackEl.style.color = 'var(--text-muted)';
+        feedbackEl.textContent = `Ricerca in corso per «${query}»...`;
+    }
+
     if (searchBtn) searchBtn.disabled = true;
-    searchInput.disabled = true;
 
     try {
         const { sortBy, sortDir } = _getCurrentSort();
-        const response = await api.catalogSearch(query, inStockOnly, _currentPage, _pageSize, sortBy, sortDir);
+        const response = await api.catalogSearch(query, inStockOnly, _currentPage, _pageSize, sortBy, sortDir, { signal: _warehouseAbortController.signal });
+
+        // Stale response guard: discard if another search or items fetch superseded this one
+        if (requestId !== _currentWarehouseRequestId) return;
+
         const results = response.results || [];
 
         _totalItems = typeof response.total_items === 'number' ? response.total_items : results.length;
@@ -532,6 +582,8 @@ async function executeWarehouseSearch(page = 1) {
         _renderPagination(container, inStockOnly);
 
     } catch (err) {
+        if (err.name === 'AbortError') return;
+        if (requestId !== _currentWarehouseRequestId) return;
         console.error('Search error:', err);
         container.innerHTML = `<div style="text-align: center; padding: 40px; color: var(--error);">Errore durante la ricerca: ${_esc(err.message || 'Errore del server')}</div>`;
         if (feedbackEl) {
@@ -540,50 +592,87 @@ async function executeWarehouseSearch(page = 1) {
             feedbackEl.textContent = 'Errore durante l\'esecuzione della ricerca.';
         }
     } finally {
-        if (searchBtn) searchBtn.disabled = false;
-        searchInput.disabled = false;
-        searchInput.focus();
+        if (requestId === _currentWarehouseRequestId) {
+            if (searchBtn) searchBtn.disabled = false;
+        }
     }
 }
 
 function _bindSearchControls() {
+    const searchForm = document.getElementById('warehouse-search-form');
     const searchInput = document.getElementById('warehouse-search-input');
     const searchBtn = document.getElementById('warehouse-search-btn');
     const clearBtn = document.getElementById('warehouse-search-clear');
     const stockToggle = document.getElementById('warehouse-stock-toggle');
     const feedbackEl = document.getElementById('warehouse-search-feedback');
 
+    if (searchForm) {
+        searchForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            if (_emptyInputDebounceTimer) {
+                clearTimeout(_emptyInputDebounceTimer);
+                _emptyInputDebounceTimer = null;
+            }
+            executeWarehouseSearch();
+        });
+    }
+
     if (searchInput) {
         searchInput.addEventListener('input', () => {
             const hasText = searchInput.value.trim().length > 0;
             if (clearBtn) clearBtn.style.display = hasText ? 'inline-flex' : 'none';
+
+            if (_emptyInputDebounceTimer) {
+                clearTimeout(_emptyInputDebounceTimer);
+                _emptyInputDebounceTimer = null;
+            }
+
             if (!hasText) {
                 if (feedbackEl) {
                     feedbackEl.style.display = 'none';
                     feedbackEl.textContent = '';
                 }
-                const inStockOnly = stockToggle ? Boolean(stockToggle.checked) : false;
-                _currentPage = 1;
-                fetchLatestItems(inStockOnly, 1);
+                // Debounce restoring all items by 250ms so rapid clearing and typing doesn't race
+                _emptyInputDebounceTimer = setTimeout(() => {
+                    const currentVal = searchInput ? searchInput.value.trim() : '';
+                    if (!currentVal) {
+                        const inStockOnly = stockToggle ? Boolean(stockToggle.checked) : false;
+                        _currentPage = 1;
+                        fetchLatestItems(inStockOnly, 1);
+                    }
+                }, 250);
             }
         });
 
         searchInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' || e.keyCode === 13 || e.which === 13) {
                 e.preventDefault();
+                if (_emptyInputDebounceTimer) {
+                    clearTimeout(_emptyInputDebounceTimer);
+                    _emptyInputDebounceTimer = null;
+                }
                 executeWarehouseSearch();
             }
         });
     }
 
     if (searchBtn) {
-        searchBtn.addEventListener('click', () => {
+        searchBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (_emptyInputDebounceTimer) {
+                clearTimeout(_emptyInputDebounceTimer);
+                _emptyInputDebounceTimer = null;
+            }
             executeWarehouseSearch();
         });
     }
 
     if (clearBtn) {
         clearBtn.addEventListener('click', () => {
+            if (_emptyInputDebounceTimer) {
+                clearTimeout(_emptyInputDebounceTimer);
+                _emptyInputDebounceTimer = null;
+            }
             if (searchInput) {
                 searchInput.value = '';
                 searchInput.focus();
@@ -602,6 +691,10 @@ function _bindSearchControls() {
     const refreshBtn = document.getElementById('warehouse-refresh-btn');
     if (refreshBtn) {
         refreshBtn.addEventListener('click', async () => {
+            if (_emptyInputDebounceTimer) {
+                clearTimeout(_emptyInputDebounceTimer);
+                _emptyInputDebounceTimer = null;
+            }
             refreshBtn.classList.add('is-spinning');
             if (searchInput) {
                 searchInput.value = '';
@@ -630,6 +723,13 @@ function _bindSearchControls() {
             const container = document.getElementById('catalog-results');
             if (container) {
                 container.scrollTop = 0;
+                container.innerHTML = `
+                    <div class="pim-loading-state" style="padding: 50px 20px;">
+                        <div class="pim-loading-spinner"></div>
+                        <div style="font-size: 15px; color: var(--text-primary); margin-top: 4px;">Ripristino magazzino in corso...</div>
+                        <div style="font-size: 12px; color: var(--text-muted);">Ripristino vista completa senza filtri</div>
+                    </div>
+                `;
             }
 
             try {

@@ -728,6 +728,56 @@ def test_warehouse_search_toolbar_ui_layout_and_responsive_styles(db_session):
     assert "is-spinning" in res_js.text
 
 
+def test_warehouse_search_race_condition_and_form_submit_guards(db_session):
+    """
+    Verify architectural bugfix for warehouse search activation and race conditions:
+    1. Markup: .search-toolbar-main is a <form> with id="warehouse-search-form" and type="submit" button.
+    2. Input anti-interception: autocomplete="off", autocorrect="off", autocapitalize="off", spellcheck="false", enterkeyhint="search".
+    3. JS anti-race condition: AbortController, sequence requestId tracking, debounce timer on input clearing,
+       stale response discard in fetchLatestItems & executeWarehouseSearch.
+    4. API client supports fetch abort signals.
+    """
+    client = TestClient(app)
+    res = client.get("/magazzino")
+    assert res.status_code == 200
+    html = res.text
+
+    # 1. Form tag structure
+    assert 'id="warehouse-search-form"' in html
+    assert '<form id="warehouse-search-form" class="search-toolbar-main"' in html
+    assert 'type="submit" id="warehouse-search-btn"' in html
+    assert 'pim-loading-state' in html
+    assert 'Caricamento magazzino in corso...' in html
+
+    # 2. Input attributes against browser autocomplete interception & for mobile virtual keyboards
+    assert 'autocomplete="off"' in html
+    assert 'autocorrect="off"' in html
+    assert 'autocapitalize="off"' in html
+    assert 'spellcheck="false"' in html
+    assert 'enterkeyhint="search"' in html
+
+    # 3. JS anti-race condition and instant loading placeholder logic
+    res_js = client.get("/static/js/warehouse.js")
+    assert res_js.status_code == 200
+    js_text = res_js.text
+    assert "_currentWarehouseRequestId" in js_text
+    assert "_warehouseAbortController" in js_text
+    assert "_emptyInputDebounceTimer" in js_text
+    assert "warehouse-search-form" in js_text
+    assert "requestId !== _currentWarehouseRequestId" in js_text
+    assert "Caricamento magazzino in corso..." in js_text
+    assert "Ripristino magazzino in corso..." in js_text
+    assert "Ricerca in corso..." in js_text
+
+    # 4. API client supports abort signal
+    res_api = client.get("/static/js/api.js")
+    assert res_api.status_code == 200
+    api_text = res_api.text
+    assert "options = {}" in api_text
+    assert "signal: options.signal" in api_text
+
+
+
 
 
 
