@@ -187,41 +187,81 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
             target_articles = articles
             norm_color = None
 
+        if not target_articles and articles:
+            target_articles = articles
+
         available_articles = [a for a in target_articles if a.status == ArticleStatus.AVAILABLE]
         current_stock = len(available_articles)
         diff = new_quantity - current_stock
 
         if diff > 0:
+            unavailable_articles = [a for a in target_articles if a.status == ArticleStatus.UNAVAILABLE]
+            unavailable_articles.sort(key=lambda a: a.created_at or datetime.min, reverse=True)
+            num_to_reactivate = min(diff, len(unavailable_articles))
+            for art in unavailable_articles[:num_to_reactivate]:
+                art.status = ArticleStatus.AVAILABLE
+
+            remaining_diff = diff - num_to_reactivate
+            if remaining_diff > 0:
+                from src.services.wms_service import register_inbound_movement
+                sup_code = (
+                    (new_vendor_code.strip() if new_vendor_code and new_vendor_code.strip() else None)
+                    or next((a.supplier_code for a in target_articles if a.supplier_code), None)
+                )
+                ean_code = (
+                    (new_barcode.strip() if new_barcode and new_barcode.strip() else None)
+                    or next((a.ean for a in target_articles if a.ean), None)
+                )
+                if wants_color_update:
+                    color_list = cleaned_new_colors if cleaned_new_colors else None
+                elif norm_color:
+                    color_list = [norm_color]
+                else:
+                    color_list = target_articles[0].colors if target_articles and target_articles[0].colors else None
+
+                register_inbound_movement(
+                    db=db,
+                    job_id=f"manual-{str(bp.id)[:8]}",
+                    blueprint_id=str(bp.id),
+                    quantity=remaining_diff,
+                    supplier_code=sup_code,
+                    ean=ean_code,
+                    colors=color_list,
+                    commit_changes=False
+                )
+        elif diff < 0:
+            # Sort available articles by creation date ASC (oldest to newest)
+            available_articles.sort(key=lambda a: a.created_at or datetime.min)
+            to_deactivate = available_articles[:abs(diff)]
+            for art in to_deactivate:
+                art.status = ArticleStatus.UNAVAILABLE
+        elif diff == 0 and not target_articles:
+            # When stock is 0 and no physical articles exist at all for this variant/blueprint,
+            # persist a placeholder Article in UNAVAILABLE status to preserve variant codes
             from src.services.wms_service import register_inbound_movement
-            sup_code = next((a.supplier_code for a in target_articles if a.supplier_code), None)
-            ean_code = next((a.ean for a in target_articles if a.ean), None)
+            sup_code = new_vendor_code.strip() if new_vendor_code and new_vendor_code.strip() else None
+            ean_code = new_barcode.strip() if new_barcode and new_barcode.strip() else None
             if wants_color_update:
                 color_list = cleaned_new_colors if cleaned_new_colors else None
             elif norm_color:
                 color_list = [norm_color]
             else:
-                color_list = target_articles[0].colors if target_articles and target_articles[0].colors else None
+                color_list = None
 
-            register_inbound_movement(
+            created_ids = register_inbound_movement(
                 db=db,
                 job_id=f"manual-{str(bp.id)[:8]}",
                 blueprint_id=str(bp.id),
-                quantity=diff,
+                quantity=1,
                 supplier_code=sup_code,
                 ean=ean_code,
                 colors=color_list,
                 commit_changes=False
             )
-        elif diff < 0:
-            to_remove = available_articles[:abs(diff)]
-            for art in to_remove:
-                db.query(ArticlePrice).filter(ArticlePrice.article_id == art.id).delete()
-                db.query(ArticleMovement).filter(ArticleMovement.article_id == art.id).delete()
-                db.query(SaleLine).filter(SaleLine.article_id == art.id).delete()
-                db.query(ExcelSale).filter(ExcelSale.article_id == art.id).update(
-                    {ExcelSale.article_id: None}
-                )
-                db.delete(art)
+            for aid in created_ids:
+                art_obj = db.query(Article).filter(Article.id == aid).first()
+                if art_obj:
+                    art_obj.status = ArticleStatus.UNAVAILABLE
 
         updated_fields_list.append("quantity")
 
@@ -240,6 +280,27 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
 
         if not target_articles and articles:
             target_articles = articles
+
+        if not target_articles:
+            from src.services.wms_service import register_inbound_movement
+            sup_code = new_vendor_code.strip() if new_vendor_code and new_vendor_code.strip() else None
+            ean_code = new_barcode.strip() if new_barcode and new_barcode.strip() else None
+            c_list = cleaned_new_colors if cleaned_new_colors else ([norm_color] if norm_color else None)
+            created_ids = register_inbound_movement(
+                db=db,
+                job_id=f"manual-{str(bp.id)[:8]}",
+                blueprint_id=str(bp.id),
+                quantity=1,
+                supplier_code=sup_code,
+                ean=ean_code,
+                colors=c_list,
+                commit_changes=False
+            )
+            for aid in created_ids:
+                art_obj = db.query(Article).filter(Article.id == aid).first()
+                if art_obj:
+                    art_obj.status = ArticleStatus.UNAVAILABLE
+            target_articles = db.query(Article).filter(Article.id.in_(created_ids)).all()
 
         for art in target_articles:
             if wants_color_update:

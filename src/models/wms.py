@@ -13,6 +13,7 @@ class ArticleStatus(str, enum.Enum):
     AVAILABLE = "Available"
     SOLD = "Sold"
     LOST = "Lost"
+    UNAVAILABLE = "Unavailable"
 
 
 class Supplier(Base, UUIDMixin, TimestampMixin):

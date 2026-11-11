@@ -911,6 +911,184 @@ class TestUpdateBlueprintQuantityAndCategory:
             Article.status == ArticleStatus.AVAILABLE
         ).count()
         assert avail_count_zero == 0
+        # Articles must not be deleted: total articles is still 3 in UNAVAILABLE status
+        total_arts_zero = db_session.query(Article).filter(
+            Article.article_blueprint_id == bp.id
+        ).count()
+        assert total_arts_zero == 3
+        unavail_count = db_session.query(Article).filter(
+            Article.article_blueprint_id == bp.id,
+            Article.status == ArticleStatus.UNAVAILABLE
+        ).count()
+        assert unavail_count == 3
+
+    def test_update_blueprint_quantity_zero_preserves_codes_in_catalog_query(self, db_session):
+        from datetime import date
+        from src.services import catalog_service
+        from src.services.catalog_query_service import query_paginated_catalog_variants
+        from src.schemas.catalog import CatalogUpdateRequest
+        from src.models.wms import Article, Batch, Supplier, ArticleStatus
+
+        brand = _make_brand(db_session)
+        cat = _make_category(db_session)
+        bp = _make_blueprint(db_session, brand.id, category_id=cat.id, article_name="Borsa Tracolla Test")
+
+        sup = Supplier(company_name="Supplier Codes Test")
+        db_session.add(sup)
+        db_session.flush()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-CODE-01", document_date=date.today())
+        db_session.add(batch)
+        db_session.flush()
+
+        art = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="ORIG-VEND-123",
+            ean="8012345678901",
+            status=ArticleStatus.AVAILABLE,
+            colors=["nero"]
+        )
+        db_session.add(art)
+        db_session.commit()
+
+        # Update article to quantity 0, simultaneously updating vendor_code and barcode
+        req = CatalogUpdateRequest(
+            quantity=0,
+            color="nero",
+            vendor_code="NEW-VEND-999",
+            barcode="8099999999999"
+        )
+        res = catalog_service.update_blueprint(db_session, bp.id, req)
+        assert res.status == "success"
+
+        # Check DB directly: article exists, status is UNAVAILABLE, codes updated
+        articles_in_db = db_session.query(Article).filter(Article.article_blueprint_id == bp.id).all()
+        assert len(articles_in_db) == 1
+        assert articles_in_db[0].status == ArticleStatus.UNAVAILABLE
+        assert articles_in_db[0].supplier_code == "NEW-VEND-999"
+        assert articles_in_db[0].ean == "8099999999999"
+
+        # Query catalog variants (as warehouse page does): codes must be visible even with stock 0
+        cat_items = query_paginated_catalog_variants(db_session, limit=50, in_stock_only=False)
+        matched = [i for i in cat_items["results"] if i.blueprint_id == bp.id]
+        assert len(matched) == 1
+        assert matched[0].stock == 0
+        assert matched[0].vendor_code == "NEW-VEND-999"
+        assert matched[0].barcode == "8099999999999"
+        assert matched[0].colors == ["nero"]
+
+    def test_update_blueprint_quantity_reduction_creation_order(self, db_session):
+        import time
+        from datetime import date, datetime, timedelta
+        from src.services import catalog_service
+        from src.schemas.catalog import CatalogUpdateRequest
+        from src.models.wms import Article, Batch, Supplier, ArticleStatus
+
+        brand = _make_brand(db_session)
+        cat = _make_category(db_session)
+        bp = _make_blueprint(db_session, brand.id, category_id=cat.id, article_name="Zaino Order Test")
+
+        sup = Supplier(company_name="Order Supplier")
+        db_session.add(sup)
+        db_session.flush()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-ORD-01", document_date=date.today())
+        db_session.add(batch)
+        db_session.flush()
+
+        base_time = datetime.utcnow()
+        art1 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="ORD-1",
+            status=ArticleStatus.AVAILABLE,
+            colors=["rosso"],
+            created_at=base_time - timedelta(minutes=10)
+        )
+        art2 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="ORD-2",
+            status=ArticleStatus.AVAILABLE,
+            colors=["rosso"],
+            created_at=base_time - timedelta(minutes=5)
+        )
+        art3 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="ORD-3",
+            status=ArticleStatus.AVAILABLE,
+            colors=["rosso"],
+            created_at=base_time
+        )
+        db_session.add_all([art1, art2, art3])
+        db_session.commit()
+
+        # Reduce quantity from 3 to 1:
+        # art3 (most recently created) must remain AVAILABLE
+        # art1 and art2 (older) must become UNAVAILABLE
+        req = CatalogUpdateRequest(quantity=1, color="rosso")
+        catalog_service.update_blueprint(db_session, bp.id, req)
+
+        db_session.refresh(art1)
+        db_session.refresh(art2)
+        db_session.refresh(art3)
+
+        assert art3.status == ArticleStatus.AVAILABLE
+        assert art2.status == ArticleStatus.UNAVAILABLE
+        assert art1.status == ArticleStatus.UNAVAILABLE
+
+        # Re-increase quantity from 1 to 2:
+        # art2 (most recent UNAVAILABLE) must reactivate to AVAILABLE
+        req_inc = CatalogUpdateRequest(quantity=2, color="rosso")
+        catalog_service.update_blueprint(db_session, bp.id, req_inc)
+
+        db_session.refresh(art1)
+        db_session.refresh(art2)
+        db_session.refresh(art3)
+
+        assert art3.status == ArticleStatus.AVAILABLE
+        assert art2.status == ArticleStatus.AVAILABLE
+        assert art1.status == ArticleStatus.UNAVAILABLE
+
+        total_count = db_session.query(Article).filter(Article.article_blueprint_id == bp.id).count()
+        assert total_count == 3  # No new rows were created unnecessarily!
+
+    def test_update_blueprint_empty_articles_quantity_zero_creates_unavailable_placeholder(self, db_session):
+        from src.services import catalog_service
+        from src.services.catalog_query_service import query_paginated_catalog_variants
+        from src.schemas.catalog import CatalogUpdateRequest
+        from src.models.wms import Article, ArticleStatus
+
+        brand = _make_brand(db_session)
+        cat = _make_category(db_session)
+        # Blueprint with 0 articles
+        bp = _make_blueprint(db_session, brand.id, category_id=cat.id, article_name="Empty BP Test")
+
+        assert db_session.query(Article).filter(Article.article_blueprint_id == bp.id).count() == 0
+
+        # Updating with quantity 0, vendor_code and barcode
+        req = CatalogUpdateRequest(
+            quantity=0,
+            color="blu",
+            vendor_code="RESTORED-CODE",
+            barcode="8011223344556"
+        )
+        catalog_service.update_blueprint(db_session, bp.id, req)
+
+        arts = db_session.query(Article).filter(Article.article_blueprint_id == bp.id).all()
+        assert len(arts) == 1
+        assert arts[0].status == ArticleStatus.UNAVAILABLE
+        assert arts[0].supplier_code == "RESTORED-CODE"
+        assert arts[0].ean == "8011223344556"
+        assert arts[0].colors == ["blu"]
+
+        # Visible in catalog with stock 0 and preserved codes
+        cat_items = query_paginated_catalog_variants(db_session, limit=50, in_stock_only=False)
+        matched = [i for i in cat_items["results"] if i.blueprint_id == bp.id]
+        assert len(matched) == 1
+        assert matched[0].stock == 0
+        assert matched[0].vendor_code == "RESTORED-CODE"
+        assert matched[0].barcode == "8011223344556"
 
     def test_update_blueprint_category_and_subcategory(self, db_session):
         from src.services import catalog_service
