@@ -36,14 +36,13 @@ def _clean_blueprint(bp: dict) -> dict:
         "is_new": bp.get("is_new", True),
         "article_name": bp.get("article_name"),
         "description": bp.get("description"),
+        "category": bp.get("category"),
+        "sub_category": bp.get("sub_category"),
+        "extended_description": bp.get("extended_description"),
+        "tags": list(bp.get("tags") or []),
+        "materials": list(bp.get("materials") or []),
+        "dimensions": bp.get("dimensions"),
     }
-    if cleaned["is_new"]:
-        cleaned["category"] = bp.get("category")
-        cleaned["sub_category"] = bp.get("sub_category")
-        cleaned["extended_description"] = bp.get("extended_description")
-        cleaned["tags"] = bp.get("tags", [])
-        cleaned["materials"] = bp.get("materials", [])
-        cleaned["dimensions"] = bp.get("dimensions")
     return cleaned
 
 

@@ -129,12 +129,30 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
         from sqlalchemy.orm import selectinload
         blueprints = (
             db.query(ArticleBlueprint)
-            .options(selectinload(ArticleBlueprint.articles), joinedload(ArticleBlueprint.category))
+            .options(
+                selectinload(ArticleBlueprint.articles),
+                joinedload(ArticleBlueprint.category).joinedload(Category.parent)
+            )
             .filter(ArticleBlueprint.brand_id == brand_id)
             .all()
         )
         cohort = []
         for bp in blueprints:
+            cat_dict = None
+            sub_cat_dict = None
+            if bp.category:
+                if bp.category.parent_id:
+                    parent_cat = bp.category.parent or db.query(Category).filter_by(id=bp.category.parent_id).first()
+                    if parent_cat:
+                        cat_dict = {"id": str(parent_cat.id), "description": parent_cat.name}
+                        sub_cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
+                    else:
+                        cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
+                        sub_cat_dict = None
+                else:
+                    cat_dict = {"id": str(bp.category.id), "description": bp.category.name}
+                    sub_cat_dict = None
+
             cohort.append({
                 "id": str(bp.id),
                 "normalized_vendor_code": bp.normalized_vendor_code,
@@ -144,6 +162,8 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
                 "dimensions": bp.dimensions,
                 "tags": list(bp.tags or []),
                 "materials": list(bp.materials or []),
+                "category": cat_dict,
+                "sub_category": sub_cat_dict,
                 "category_id": str(bp.category_id) if bp.category_id else None,
                 "category_name": bp.category.name if bp.category else None,
                 "embedding": bp.embedding,

@@ -742,6 +742,9 @@ def test_get_job_existing_blueprint_name_and_description(db_session):
     assert bp["is_new"] is False
     assert bp["article_name"] == "Existing Blueprint Name"
     assert bp["description"] == "Existing Blueprint Description"
+    assert bp["extended_description"] == "Extended info"
+    assert bp["tags"] == ["tag1"]
+    assert bp["materials"] == ["leather"]
 
     # Also test fallback enrichment if article_name/description were omitted in stored job data
     job_id_omitted = "job_existing_bp_omitted_test"
@@ -769,6 +772,9 @@ def test_get_job_existing_blueprint_name_and_description(db_session):
     assert bp_omitted["is_new"] is False
     assert bp_omitted["article_name"] == "Existing Blueprint Name"
     assert bp_omitted["description"] == "Existing Blueprint Description"
+    assert bp_omitted["extended_description"] == "Extended info"
+    assert bp_omitted["tags"] == ["tag1"]
+    assert bp_omitted["materials"] == ["leather"]
 
 
 def test_single_item_request_whitespace_stripping():
@@ -1025,6 +1031,158 @@ def test_get_job_enriches_existing_blueprint_categories(db_session):
     assert bp_res["sub_category"] == {"id": str(sub_cat.id), "description": "Zaino Tecnico"}
     assert bp_res["article_name"] == "Zaino Outdoor"
     assert bp_res["description"] == "Zaino per trekking"
+
+
+@pytest.mark.asyncio
+async def test_stage_extracted_items_hydrates_agent_matched_existing_blueprints(db_session, monkeypatch):
+    from src.models.pim import Brand, Category, ArticleBlueprint
+    from src.services.data_ingestion_service import _stage_extracted_items
+
+    brand = Brand(name="Mandarina Duck Test")
+    db_session.add(brand)
+    db_session.commit()
+
+    cat = Category(name="Borse", description="Borse donna")
+    db_session.add(cat)
+    db_session.commit()
+
+    sub_cat = Category(name="Tracolla", description="Borse a tracolla", parent_id=cat.id)
+    db_session.add(sub_cat)
+    db_session.commit()
+
+    existing_bp = ArticleBlueprint(
+        brand_id=brand.id,
+        normalized_vendor_code="P10QMT56###",
+        article_name="Mandarina Duck MD20 Shoulder Bag",
+        description="MD20 Hobo Bag",
+        extended_description="Tracolla Mandarina Duck linea MD20 in tessuto mitrix.",
+        tags=["borsa", "tracolla", "md20"],
+        materials=["mitrix", "poliestere"],
+        category_id=sub_cat.id,
+    )
+    db_session.add(existing_bp)
+    db_session.commit()
+
+    class MockArticleBlueprintsAgent:
+        async def aexecute(self, input_data):
+            return {
+                "items": [
+                    {
+                        "item_id": "item-cold-1",
+                        "vendor_code": "P10QMT56651",
+                        "article_blueprint_id": str(existing_bp.id),
+                        "quantity": 1,
+                        "colors": ["nero"],
+                    }
+                ],
+                "blueprints": [
+                    {
+                        "id": str(existing_bp.id),
+                        "is_new": False,
+                        "article_name": "Mandarina Duck MD20 Shoulder Bag",
+                        "description": "MD20 Hobo Bag",
+                        # Simulates agent previously mistakenly returning subcategory in category
+                        "category": {"id": str(sub_cat.id), "description": "Tracolla"},
+                        "sub_category": None,
+                    }
+                ],
+                "photo_proposals": [],
+                "warnings": [],
+                "heuristic_reconciliations": [],
+            }
+
+    monkeypatch.setattr(
+        "src.services.data_ingestion_service.ArticleBlueprintsAgent",
+        MockArticleBlueprintsAgent,
+    )
+
+    extracted_items = [
+        {
+            "item_id": "item-cold-1",
+            "vendor_code": "P10QMT56651",
+            "quantity": 1,
+            "colors": ["nero"],
+        }
+    ]
+
+    res = await _stage_extracted_items(
+        db=db_session,
+        job_id="job-cold-test",
+        brand_id=str(brand.id),
+        brand_name=brand.name,
+        categories={},
+        heuristics=[],
+        extracted_items=extracted_items,
+        extraction_warnings=[],
+    )
+
+    blueprints = res["blueprints"]
+    assert len(blueprints) == 1
+    staged_bp = blueprints[0]
+    assert staged_bp["id"] == str(existing_bp.id)
+    assert staged_bp["is_new"] is False
+    assert staged_bp["tags"] == ["borsa", "tracolla", "md20"]
+    assert staged_bp["materials"] == ["mitrix", "poliestere"]
+    assert staged_bp["extended_description"] == "Tracolla Mandarina Duck linea MD20 in tessuto mitrix."
+    assert staged_bp["category"] == {"id": str(cat.id), "description": "Borse"}
+    assert staged_bp["sub_category"] == {"id": str(sub_cat.id), "description": "Tracolla"}
+
+
+def test_get_job_repairs_corrupted_categories_for_existing_blueprint(db_session):
+    """Verifica che get_job ripari una categoria erroneamente salvata uguale alla sotto-categoria."""
+    from src.models.pim import Brand, Category, ArticleBlueprint
+    from src.models.staging import StagingArea, JobStatus, JobType
+    from src.services.data_ingestion_service import get_job
+
+    brand = Brand(name="RepairBrand")
+    db_session.add(brand)
+    db_session.commit()
+
+    macro_cat = Category(name="Borse", description="Borse donna")
+    db_session.add(macro_cat)
+    db_session.commit()
+
+    sub_cat = Category(name="Hobo Bag", description="Borse hobo", parent_id=macro_cat.id)
+    db_session.add(sub_cat)
+    db_session.commit()
+
+    existing_bp = ArticleBlueprint(
+        brand_id=str(brand.id),
+        article_name="Mandarina Duck MD20",
+        description="Borsa MD20",
+        extended_description="Descrizione estesa MD20",
+        category_id=sub_cat.id,
+    )
+    db_session.add(existing_bp)
+    db_session.commit()
+
+    job_id = "job-corrupted-categories-test"
+    job = StagingArea(
+        id=job_id,
+        file_path="some/file.pdf",
+        status=JobStatus.COMPLETED.value,
+        data={
+            "brand_id": str(brand.id),
+            "items": [],
+            "blueprints": [
+                {
+                    "id": str(existing_bp.id),
+                    "is_new": False,
+                    "category": {"id": str(sub_cat.id), "description": "Hobo Bag"},
+                    "sub_category": {"id": str(sub_cat.id), "description": "Hobo Bag"},
+                }
+            ],
+        },
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    result = get_job(db_session, job_id)
+    bp = result["data"]["blueprints"][0]
+    assert bp["category"] == {"id": str(macro_cat.id), "description": "Borse"}
+    assert bp["sub_category"] == {"id": str(sub_cat.id), "description": "Hobo Bag"}
+
+
 
 
 

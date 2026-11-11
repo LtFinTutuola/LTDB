@@ -149,3 +149,71 @@ async def test_process_and_stage_pdf_handles_generic_exception(db_session: Sessi
     job = staging_repo.get_job(db_session, job_id)
     assert job.status == JobStatus.ERROR.value
     assert "PDF parser memory corruption" in job.data.get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_oracle_attach_preserves_cohort_metadata(monkeypatch):
+    from src.agents.article_blueprints_agent.state import BlueprintsGraphState
+    from src.agents.article_blueprints_agent.nodes.oracle_and_induction_node import oracle_and_induction_node
+    from src.agents.article_blueprints_agent.nodes.model_equivalence_oracle import OracleEvaluationResult
+
+    cand = {
+        "id": "db-bp-mandarina",
+        "normalized_vendor_code": "P10QMT56###",
+        "article_name": "Mandarina Duck MD20 Shoulder Bag",
+        "description": "Borsa a tracolla MD20",
+        "extended_description": "Tracolla iconica Mandarina Duck in mitrix",
+        "dimensions": {"width_cm": 30.0, "height_cm": 25.0, "depth_cm": 10.0},
+        "tags": ["borsa", "tracolla", "md20"],
+        "materials": ["mitrix", "poliestere"],
+        "category": {"id": "cat-macro-1", "description": "Borse"},
+        "sub_category": {"id": "cat-sub-1", "description": "Tracolle"},
+        "category_id": "cat-sub-1",
+        "category_name": "Tracolle",
+        "embedding": [0.1] * 768,
+        "variants": [{"supplier_code": "P10QMT56001", "colors": ["nero"]}],
+    }
+
+    state = BlueprintsGraphState(
+        new_blueprints=[
+            {
+                "id": "incoming-cluster-1",
+                "is_new": True,
+                "cluster_items": [
+                    {"item_id": "it-1", "vendor_code": "P10QMT56001", "colors": ["blu"], "quantity": 1}
+                ],
+            }
+        ],
+        brand_id="brand-md",
+        brand_name="Mandarina Duck",
+        brand_cohort=[cand],
+        brand_heuristic={"mode": "COLOR_AGNOSTIC", "rules": []},
+    )
+
+    async def mock_embed(*args, **kwargs):
+        return [0.1] * 768
+
+    async def mock_eval(*args, **kwargs):
+        return OracleEvaluationResult(
+            verdict="SAME_MODEL",
+            final_score=114.0,
+            raw_score=114.0,
+            code_verdict="VERY_HIGH",
+            color_relation="DIFFERENT",
+            reasoning="Stesso modello MD20, colore differente",
+        )
+
+    monkeypatch.setattr("src.agents.article_blueprints_agent.nodes.oracle_and_induction_node.embed_entity", mock_embed)
+    monkeypatch.setattr("src.agents.article_blueprints_agent.nodes.oracle_and_induction_node.evaluate_pair", mock_eval)
+
+    res = await oracle_and_induction_node(state)
+    assert len(res["output_blueprints"]) == 1
+    attached_bp = res["output_blueprints"][0]
+    assert attached_bp["id"] == "db-bp-mandarina"
+    assert attached_bp["is_new"] is False
+    assert attached_bp["tags"] == ["borsa", "tracolla", "md20"]
+    assert attached_bp["materials"] == ["mitrix", "poliestere"]
+    assert attached_bp["extended_description"] == "Tracolla iconica Mandarina Duck in mitrix"
+    assert attached_bp["category"] == {"id": "cat-macro-1", "description": "Borse"}
+    assert attached_bp["sub_category"] == {"id": "cat-sub-1", "description": "Tracolle"}
+

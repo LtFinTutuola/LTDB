@@ -205,3 +205,38 @@ async def test_web_search_to_synthesize_pipeline_preserves_description(monkeypat
     assert "Portafoglio da donna in cuoio con chiusura a patta." in captured_prompt["prompt"]
     assert synth_res["new_blueprints"][0]["description"] == "Portafoglio in cuoio con patta"
 
+
+def test_format_output_node_preserves_metadata_for_existing_blueprints():
+    state = BlueprintsGraphState(
+        output_blueprints=[
+            {
+                "id": "bp-existing-1",
+                "is_new": False,
+                "article_name": "Mandarina Duck MD20",
+                "description": "Shoulder bag",
+                "extended_description": "Iconic MD20 shoulder bag with mitrix texture.",
+                "tags": ["borsa", "tracolla", "md20"],
+                "materials": ["mitrix", "polyester"],
+                "dimensions": {"width_cm": 30, "height_cm": 25, "depth_cm": 10},
+                "category": {"id": "cat-1", "description": "Borse"},
+                "sub_category": {"id": "cat-2", "description": "Tracolle"},
+                "cluster_items": [
+                    {"vendor_code": "P10QMT56651", "article_name": "Mandarina Duck MD20", "colors": ["nero"], "quantity": 2}
+                ],
+            }
+        ],
+        new_blueprints=[],
+        categories={},
+        brand_name="Mandarina Duck",
+    )
+    res = format_output_node(state)
+    assert len(res["output_blueprints"]) == 1
+    bp = res["output_blueprints"][0]
+    assert bp["is_new"] is False
+    assert bp["tags"] == ["borsa", "tracolla", "md20"]
+    assert bp["materials"] == ["mitrix", "polyester"]
+    assert bp["extended_description"] == "Iconic MD20 shoulder bag with mitrix texture."
+    assert bp["category"] == {"id": "cat-1", "description": "Borse"}
+    assert bp["sub_category"] == {"id": "cat-2", "description": "Tracolle"}
+
+

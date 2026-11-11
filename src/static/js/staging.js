@@ -227,8 +227,25 @@ function _buildMobileStagingList(grouped, photoProposals) {
     const brandName = _stagingData?.brand_name || 'Brand';
 
     for (const [bpId, { blueprint, items }] of grouped) {
-        const catDesc = blueprint.category?.description || '';
-        const subCatDesc = blueprint.sub_category?.description || '';
+        let catDesc = blueprint.category?.description || (typeof blueprint.category === 'string' ? blueprint.category : '') || '';
+        let subCatDesc = blueprint.sub_category?.description || (typeof blueprint.sub_category === 'string' ? blueprint.sub_category : '') || '';
+
+        if (_categoryHierarchy && Object.keys(_categoryHierarchy).length > 0) {
+            const macroKeys = Object.keys(_categoryHierarchy);
+            const isDirectMacro = macroKeys.some(m => m.trim().toLowerCase() === catDesc.trim().toLowerCase());
+            if (!isDirectMacro && catDesc) {
+                for (const m of macroKeys) {
+                    const subs = Object.keys(_categoryHierarchy[m]?.sub_categories || {});
+                    if (subs.some(s => s.trim().toLowerCase() === catDesc.trim().toLowerCase())) {
+                        if (!subCatDesc || subCatDesc === catDesc) {
+                            subCatDesc = catDesc;
+                        }
+                        catDesc = m;
+                        break;
+                    }
+                }
+            }
+        }
         let catText = catDesc;
         if (subCatDesc) {
             catText = catText ? `${catText} ↳ ${subCatDesc}` : subCatDesc;
@@ -420,17 +437,38 @@ function _buildBlueprintCard(bp, items, photoProposals) {
         </span>
     `).join('');
 
-    const catDesc = bp.category?.description || '';
-    const subCatDesc = bp.sub_category?.description || '';
+    let catDesc = bp.category?.description || (typeof bp.category === 'string' ? bp.category : '') || '';
+    let subCatDesc = bp.sub_category?.description || (typeof bp.sub_category === 'string' ? bp.sub_category : '') || '';
 
     const hasHierarchy = _categoryHierarchy && Object.keys(_categoryHierarchy).length > 0;
+    if (hasHierarchy) {
+        const macroKeys = Object.keys(_categoryHierarchy);
+        const isDirectMacro = macroKeys.some(m => m.trim().toLowerCase() === catDesc.trim().toLowerCase());
+        if (!isDirectMacro && catDesc) {
+            for (const m of macroKeys) {
+                const subs = Object.keys(_categoryHierarchy[m]?.sub_categories || {});
+                if (subs.some(s => s.trim().toLowerCase() === catDesc.trim().toLowerCase())) {
+                    if (!subCatDesc || subCatDesc === catDesc) {
+                        subCatDesc = catDesc;
+                    }
+                    catDesc = m;
+                    break;
+                }
+            }
+        }
+    }
 
     let catOpts = '';
     let subCatOpts = '';
     if (hasHierarchy) {
-        catOpts = Object.keys(_categoryHierarchy).map(c => `<option value="${_esc(c)}" ${catDesc === c ? 'selected' : ''}>${_esc(c)}</option>`).join('');
-        const subCats = catDesc && _categoryHierarchy[catDesc] ? Object.keys(_categoryHierarchy[catDesc].sub_categories || {}) : [];
-        subCatOpts = subCats.map(sc => `<option value="${_esc(sc)}" ${subCatDesc === sc ? 'selected' : ''}>${_esc(sc)}</option>`).join('');
+        catOpts = Object.keys(_categoryHierarchy).map(c => 
+            `<option value="${_esc(c)}" ${c.trim().toLowerCase() === catDesc.trim().toLowerCase() ? 'selected' : ''}>${_esc(c)}</option>`
+        ).join('');
+        const matchedMacro = Object.keys(_categoryHierarchy).find(c => c.trim().toLowerCase() === catDesc.trim().toLowerCase()) || catDesc;
+        const subCats = matchedMacro && _categoryHierarchy[matchedMacro] ? Object.keys(_categoryHierarchy[matchedMacro].sub_categories || {}) : [];
+        subCatOpts = subCats.map(sc => 
+            `<option value="${_esc(sc)}" ${sc.trim().toLowerCase() === subCatDesc.trim().toLowerCase() ? 'selected' : ''}>${_esc(sc)}</option>`
+        ).join('');
     } else {
         if (catDesc) catOpts = `<option value="${_esc(catDesc)}" selected>${_esc(catDesc)}</option>`;
         if (subCatDesc) subCatOpts = `<option value="${_esc(subCatDesc)}" selected>${_esc(subCatDesc)}</option>`;
@@ -445,12 +483,12 @@ function _buildBlueprintCard(bp, items, photoProposals) {
                 <div class="blueprint-card__name">
                     <span class="editable" data-entity="blueprint" data-id="${_esc(bp.id)}" data-field="article_name">${_esc(bp.article_name || '')}</span>${isNew}
                 </div>
-                <div>
-                    <select class="category-select sel-macro-cat" data-bp-id="${_esc(bp.id)}" ${!hasHierarchy ? 'disabled' : ''}>
+                <div class="blueprint-card__categories">
+                    <select class="category-select sel-macro-cat" data-bp-id="${_esc(bp.id)}" ${!hasHierarchy ? 'disabled' : ''} title="Macro Categoria">
                         <option value="">Macro Categoria...</option>
                         ${catOpts}
                     </select>
-                    <select class="category-select sel-sub-cat" data-bp-id="${_esc(bp.id)}" ${!hasHierarchy ? 'disabled' : ''}>
+                    <select class="category-select sel-sub-cat" data-bp-id="${_esc(bp.id)}" ${!hasHierarchy ? 'disabled' : ''} title="Sotto Categoria">
                         <option value="">Sotto Categoria...</option>
                         ${subCatOpts}
                     </select>
@@ -789,15 +827,31 @@ export function openStagingMobilePanel(bp, item) {
     // 2. Categories
     const macroCatSelect = document.getElementById('mob-staging-macro-cat');
     const subCatSelect = document.getElementById('mob-staging-sub-cat');
-    const currentMacro = bp.category?.description || '';
-    const currentSub = bp.sub_category?.description || '';
+    let currentMacro = bp.category?.description || (typeof bp.category === 'string' ? bp.category : '') || '';
+    let currentSub = bp.sub_category?.description || (typeof bp.sub_category === 'string' ? bp.sub_category : '') || '';
 
     const hasHierarchy = _categoryHierarchy && Object.keys(_categoryHierarchy).length > 0;
+    if (hasHierarchy) {
+        const macroKeys = Object.keys(_categoryHierarchy);
+        const isDirectMacro = macroKeys.some(m => m.trim().toLowerCase() === currentMacro.trim().toLowerCase());
+        if (!isDirectMacro && currentMacro) {
+            for (const m of macroKeys) {
+                const subs = Object.keys(_categoryHierarchy[m]?.sub_categories || {});
+                if (subs.some(s => s.trim().toLowerCase() === currentMacro.trim().toLowerCase())) {
+                    if (!currentSub || currentSub === currentMacro) {
+                        currentSub = currentMacro;
+                    }
+                    currentMacro = m;
+                    break;
+                }
+            }
+        }
+    }
     if (macroCatSelect) {
         let macroHtml = '<option value="">Macro Categoria...</option>';
         if (hasHierarchy) {
             macroHtml += Object.keys(_categoryHierarchy).map(c =>
-                `<option value="${_esc(c)}" ${c === currentMacro ? 'selected' : ''}>${_esc(c)}</option>`
+                `<option value="${_esc(c)}" ${c.trim().toLowerCase() === currentMacro.trim().toLowerCase() ? 'selected' : ''}>${_esc(c)}</option>`
             ).join('');
         } else if (currentMacro) {
             macroHtml += `<option value="${_esc(currentMacro)}" selected>${_esc(currentMacro)}</option>`;
@@ -808,10 +862,11 @@ export function openStagingMobilePanel(bp, item) {
     function _updateSubCatDropdown(selectedMacro, selectedSub) {
         if (!subCatSelect) return;
         let subHtml = '<option value="">Sotto Categoria...</option>';
-        if (hasHierarchy && selectedMacro && _categoryHierarchy[selectedMacro]) {
-            const subs = Object.keys(_categoryHierarchy[selectedMacro].sub_categories || {});
+        const matchedMacro = Object.keys(_categoryHierarchy || {}).find(c => c.trim().toLowerCase() === (selectedMacro || '').trim().toLowerCase()) || selectedMacro;
+        if (hasHierarchy && matchedMacro && _categoryHierarchy[matchedMacro]) {
+            const subs = Object.keys(_categoryHierarchy[matchedMacro].sub_categories || {});
             subHtml += subs.map(sc =>
-                `<option value="${_esc(sc)}" ${sc === selectedSub ? 'selected' : ''}>${_esc(sc)}</option>`
+                `<option value="${_esc(sc)}" ${sc.trim().toLowerCase() === (selectedSub || '').trim().toLowerCase() ? 'selected' : ''}>${_esc(sc)}</option>`
             ).join('');
         } else if (selectedSub) {
             subHtml += `<option value="${_esc(selectedSub)}" selected>${_esc(selectedSub)}</option>`;

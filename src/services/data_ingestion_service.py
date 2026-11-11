@@ -64,8 +64,8 @@ def _serialize_db_blueprint(db: Session, bp) -> dict:
         "category": cat_dict,
         "sub_category": sub_cat_dict,
         "extended_description": bp.extended_description,
-        "tags": bp.tags,
-        "materials": bp.materials,
+        "tags": list(bp.tags or []),
+        "materials": list(bp.materials or []),
         "dimensions": bp.dimensions,
     }
 
@@ -431,6 +431,12 @@ async def _stage_extracted_items(
     for bp in list(resolved_blueprints.values()) + agent_blueprints:
         bp_id = bp.get("id")
         if bp_id and bp_id not in seen_bp_ids:
+            if not bp.get("is_new", True):
+                from src.models.pim import ArticleBlueprint
+                db_bp = db.query(ArticleBlueprint).filter(ArticleBlueprint.id == bp_id).first()
+                if db_bp:
+                    full_bp = _serialize_db_blueprint(db, db_bp)
+                    bp = {**bp, **full_bp}
             output_blueprints.append(bp)
             seen_bp_ids.add(bp_id)
 
@@ -580,6 +586,11 @@ def get_job(db: Session, job_id: str) -> Dict[str, Any]:
                 or bp.get("description") is None
                 or bp.get("category") is None
                 or bp.get("sub_category") is None
+                or bp.get("extended_description") is None
+                or not bp.get("tags")
+                or not bp.get("materials")
+                or bp.get("dimensions") is None
+                or (isinstance(bp.get("category"), dict) and isinstance(bp.get("sub_category"), dict) and bp["category"].get("id") == bp["sub_category"].get("id"))
             ) and bp.get("id")
         ]
         if missing_bp_ids:
@@ -588,20 +599,16 @@ def get_job(db: Session, job_id: str) -> Dict[str, Any]:
             for bp in data["blueprints"]:
                 if isinstance(bp, dict) and not bp.get("is_new", True) and bp.get("id") in bp_map:
                     db_bp = bp_map[bp["id"]]
-                    if bp.get("article_name") is None:
-                        bp["article_name"] = db_bp.article_name
-                    if bp.get("description") is None:
-                        bp["description"] = db_bp.description
-                    if (bp.get("category") is None or bp.get("sub_category") is None) and db_bp.category:
-                        if db_bp.category.parent_id:
-                            parent_cat = db_bp.category.parent or db.query(Category).filter_by(id=db_bp.category.parent_id).first()
-                            if parent_cat:
-                                bp["category"] = {"id": str(parent_cat.id), "description": parent_cat.name}
-                                bp["sub_category"] = {"id": str(db_bp.category.id), "description": db_bp.category.name}
-                            elif bp.get("category") is None:
-                                bp["category"] = {"id": str(db_bp.category.id), "description": db_bp.category.name}
-                        elif bp.get("category") is None:
-                            bp["category"] = {"id": str(db_bp.category.id), "description": db_bp.category.name}
+                    serialized = _serialize_db_blueprint(db, db_bp)
+                    for k in ("article_name", "description", "category", "sub_category", "extended_description", "tags", "materials", "dimensions"):
+                        needs_enrichment = (
+                            bp.get(k) is None
+                            or (k in ("tags", "materials") and not bp.get(k))
+                            or (k in ("category", "sub_category") and bp.get("category") == bp.get("sub_category"))
+                            or (k == "category" and db_bp.category and db_bp.category.parent_id and bp.get("category", {}).get("id") == str(db_bp.category_id))
+                        )
+                        if needs_enrichment:
+                            bp[k] = serialized.get(k)
 
     return {
         "status": JobStatus(job.status).name,

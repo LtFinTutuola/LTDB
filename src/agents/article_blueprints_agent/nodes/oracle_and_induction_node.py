@@ -242,15 +242,37 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
                 it["normalized_vendor_code"] = norm_code
             it["needs_photo_only"] = True
             attached_items.append(it)
-        attached_bps.append({
-            "id": cand["id"], "is_new": False,
-            "article_name": cand.get("article_name"), "description": cand.get("description"),
+        cat_info = cand.get("category")
+        sub_cat_info = cand.get("sub_category")
+        if not cat_info and not sub_cat_info and (cand.get("category_id") or cand.get("category_name")):
+            cat_info = {"id": str(cand.get("category_id")), "description": cand.get("category_name")} if cand.get("category_id") else cand.get("category_name")
+        attached_bp_data = {
+            "id": cand["id"],
+            "is_new": False,
+            "article_name": cand.get("article_name"),
+            "description": cand.get("description"),
+            "extended_description": cand.get("extended_description"),
+            "tags": list(cand.get("tags") or []),
+            "materials": list(cand.get("materials") or []),
+            "dimensions": cand.get("dimensions"),
+            "category": cat_info,
+            "sub_category": sub_cat_info,
             "cluster_items": cluster.get("cluster_items", []),
-        })
-        resolved_update[cand["id"]] = {
-            "id": cand["id"], "is_new": False,
-            "article_name": cand.get("article_name"), "description": cand.get("description"),
         }
+        attached_bps.append(attached_bp_data)
+        resolved_data = {
+            "id": cand["id"],
+            "is_new": False,
+            "article_name": cand.get("article_name"),
+            "description": cand.get("description"),
+            "extended_description": cand.get("extended_description"),
+            "tags": list(cand.get("tags") or []),
+            "materials": list(cand.get("materials") or []),
+            "dimensions": cand.get("dimensions"),
+            "category": cat_info,
+            "sub_category": sub_cat_info,
+        }
+        resolved_update[cand["id"]] = resolved_data
 
     # ---------------- Passata A: cluster vs coorte DB ----------------
     remaining: list[dict] = []
