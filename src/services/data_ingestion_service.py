@@ -502,6 +502,7 @@ async def _stage_extracted_items(
         "warnings": extraction_warnings + heuristic_warnings + agent_warnings,
         "job_id": job_id,
         "brand_id": brand_id,
+        "brand_name": brand_name,
     }
 
 

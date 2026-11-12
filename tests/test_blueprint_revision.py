@@ -1306,13 +1306,12 @@ class TestAnomaliesGuardsAndManualClosure:
         assert "ANOMALY_BLOCKED_MESSAGE" in bp_js
         assert "data-blocked-by-anomalies" in bp_js
 
-        # 3. warehouse.js checks anomalies count for row buttons
+        # 3. warehouse.js checks anomalies count and imports revision functions
         res_wh_js = client.get("/static/js/warehouse.js")
         assert res_wh_js.status_code == 200
         wh_js = res_wh_js.text
         assert "getWarehouseAnomaliesCount" in wh_js
-        assert "btn-split-blueprint" in wh_js
-        assert "data-blocked-by-anomalies" in wh_js
+        assert "openBlueprintRevision" in wh_js
 
         # 4. main.js initializes the tooltip and guards tab clicks
         res_main_js = client.get("/static/js/main.js")

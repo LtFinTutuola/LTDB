@@ -6,6 +6,31 @@
 
 const API_BASE = '/api/v1';
 
+function _sanitizeDetail(detail) {
+    if (!detail || typeof detail !== 'string') {
+        return "Si è verificato un errore imprevisto durante l'elaborazione.";
+    }
+    const lower = detail.toLowerCase();
+    if (
+        detail.includes('[SQL:') ||
+        lower.includes('sqlite3') ||
+        lower.includes('operationalerror') ||
+        lower.includes('integrityerror') ||
+        lower.includes('traceback') ||
+        lower.includes('syntax error') ||
+        lower.includes('parameters:')
+    ) {
+        if (lower.includes('unique constraint') || lower.includes('duplicate')) {
+            return "Impossibile completare l'operazione: esiste già un elemento con questo codice o identificativo.";
+        }
+        if (lower.includes('foreign key')) {
+            return "Impossibile completare l'operazione: l'elemento è collegato ad altri record a magazzino o vendite.";
+        }
+        return "Si è verificato un errore durante l'accesso al database. Riprova più tardi.";
+    }
+    return detail;
+}
+
 async function _handleResponse(res) {
     if (res.status === 401 && window.location.pathname !== '/login') {
         window.location.replace('/login?next=' + encodeURIComponent(window.location.pathname));
@@ -16,7 +41,7 @@ async function _handleResponse(res) {
             const body = await res.json();
             detail = body.detail || detail;
         } catch { /* ignore parse error, use default */ }
-        throw new Error(detail);
+        throw new Error(_sanitizeDetail(detail));
     }
     const ct = res.headers.get('Content-Type') || '';
     if (ct.includes('application/json')) return res.json();

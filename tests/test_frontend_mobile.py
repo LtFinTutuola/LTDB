@@ -403,8 +403,7 @@ def test_staging_mobile_elements_and_css(db_session):
     assert "form-staging-mobile" in js
     assert "mob-staging-photo" in js
     assert "mob-staging-btn-search" in js
-    assert "mob-staging-btn-manual" in js
-    assert "mob-staging-btn-retry" in js
+    assert "mob-staging-btn-upload" in js
     assert "mob-staging-name" in js
     assert "mob-staging-macro-cat" in js
     assert "mob-staging-sub-cat" in js

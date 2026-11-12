@@ -33,14 +33,20 @@ export async function renderStagingPanel(data, jobId) {
     _jobId = jobId;
     _stagingData = JSON.parse(JSON.stringify(data)); // deep copy
     _operationsQueue = [];
+    _initPhotoUrlModalListeners();
 
     if (_stagingData.brand_id && !_stagingData.brand_name) {
-        try {
-            const brands = await api.getBrands();
-            const b = brands.find(x => x.id === _stagingData.brand_id);
-            if (b) _stagingData.brand_name = b.name;
-        } catch (e) {
-            console.error("Failed to fetch brands", e);
+        const local = (window.__LTDB_BRANDS__ || []).find(x => x.id === _stagingData.brand_id);
+        if (local) _stagingData.brand_name = local.name;
+        if (!_stagingData.brand_name) {
+            try {
+                const res = await api.getBrands();
+                const brands = Array.isArray(res) ? res : (res?.data || res?.brands || []);
+                const b = brands.find(x => x.id === _stagingData.brand_id);
+                if (b) _stagingData.brand_name = b.name;
+            } catch (e) {
+                console.error("Failed to fetch brands", e);
+            }
         }
     }
 
@@ -331,8 +337,6 @@ function _buildMobileStagingPanel() {
                             <div style="display: flex; gap: 6px; margin-top: 4px;">
                                 <button type="button" id="mob-staging-btn-search" class="btn-photo-action" title="Cerca su Google">🔍 Cerca</button>
                                 <button type="button" id="mob-staging-btn-upload" class="btn-photo-action" title="Carica Foto">📁 Carica</button>
-                                <button type="button" id="mob-staging-btn-manual" class="btn-photo-action" title="Inserisci URL">🔗 URL</button>
-                                <button type="button" id="mob-staging-btn-retry" class="btn-photo-action" title="Riprova con AI">🔄 Riprova</button>
                             </div>
                         </div>
                     </div>
@@ -604,13 +608,11 @@ function _buildPhotoCarousel(bpId, items, photoProposals) {
     }
 
     return `
-    <div class="blueprint-card__photo-col" style="display:flex;flex-direction:column;">
+    <div class="blueprint-card__photo-col" style="display:flex;flex-direction:column;align-self:flex-start;">
         ${imgHtml}
         ${navHtml}
-        <button class="btn-search-photo" data-item-id="${_esc(currentItem.item_id)}" data-search-query="${_esc(searchQuery)}" style="margin-top:auto;" title="Cerca su Google">🔍 Cerca</button>
-        <button class="btn-upload-photo" data-item-id="${_esc(currentItem.item_id)}" data-job-id="${_esc(_jobId)}" style="margin-top:4px;" title="Carica foto dal dispositivo">📁 Carica Foto</button>
-        <button class="btn-manual-photo" data-item-id="${_esc(currentItem.item_id)}" data-job-id="${_esc(_jobId)}" style="margin-top:4px;">🔗 Inserisci URL</button>
-        <button class="btn-retry-photo" data-item-id="${_esc(currentItem.item_id)}" data-job-id="${_esc(_jobId)}" style="margin-top:4px;">🔄 Riprova</button>
+        <button type="button" class="btn-search-photo" data-item-id="${_esc(currentItem.item_id)}" data-search-query="${_esc(searchQuery)}" data-job-id="${_esc(_jobId)}" title="Cerca su Google">🔍 Cerca</button>
+        <button type="button" class="btn-upload-photo" data-item-id="${_esc(currentItem.item_id)}" data-job-id="${_esc(_jobId)}" title="Carica foto dal dispositivo">📁 Carica Foto</button>
     </div>`;
 }
 
@@ -656,18 +658,12 @@ function _attachListeners() {
         sel.addEventListener('change', _handleSubCatChange);
     });
 
-    // Photo retry, search, manual url, and upload
+    // Photo search and upload
     content.querySelectorAll('.btn-upload-photo').forEach(btn => {
         btn.addEventListener('click', _handleUploadPhoto);
     });
-    content.querySelectorAll('.btn-retry-photo').forEach(btn => {
-        btn.addEventListener('click', _handleRetryPhoto);
-    });
     content.querySelectorAll('.btn-search-photo').forEach(btn => {
         btn.addEventListener('click', _handleSearchPhoto);
-    });
-    content.querySelectorAll('.btn-manual-photo').forEach(btn => {
-        btn.addEventListener('click', _handleManualPhoto);
     });
 
     // Carousel nav
@@ -730,13 +726,7 @@ function _attachMobileListeners(panel) {
     if (btnUpload) btnUpload.addEventListener('click', _handleUploadPhoto);
 
     const btnSearch = panel.querySelector('#mob-staging-btn-search');
-    if (btnSearch) btnSearch.addEventListener('click', _handleSearchPhoto);
-
-    const btnManual = panel.querySelector('#mob-staging-btn-manual');
-    if (btnManual) btnManual.addEventListener('click', _handleManualPhoto);
-
-    const btnRetry = panel.querySelector('#mob-staging-btn-retry');
-    if (btnRetry) btnRetry.addEventListener('click', _handleRetryPhoto);
+    if (btnSearch) btnSearch.addEventListener('click', _handleSearchPhotoMobile);
 
     // Mobile panel barcode scanner
     const btnScanBarcode = panel.querySelector('#btn-scan-mob-staging-barcode');
@@ -811,17 +801,9 @@ export function openStagingMobilePanel(bp, item) {
     }
     const btnSearch = document.getElementById('mob-staging-btn-search');
     if (btnSearch) {
+        btnSearch.dataset.itemId = item.item_id;
+        btnSearch.dataset.jobId = _jobId;
         btnSearch.dataset.searchQuery = searchQuery;
-    }
-    const btnManual = document.getElementById('mob-staging-btn-manual');
-    if (btnManual) {
-        btnManual.dataset.itemId = item.item_id;
-        btnManual.dataset.jobId = _jobId;
-    }
-    const btnRetry = document.getElementById('mob-staging-btn-retry');
-    if (btnRetry) {
-        btnRetry.dataset.itemId = item.item_id;
-        btnRetry.dataset.jobId = _jobId;
     }
 
     // 2. Categories
@@ -1248,40 +1230,96 @@ async function _handleUploadPhoto(e) {
     });
 }
 
-async function _handleRetryPhoto(e) {
-    const btn = e.currentTarget;
-    const itemId = btn.dataset.itemId;
-    const jobId = btn.dataset.jobId;
-    const feedback = prompt('Descrivi la foto che stai cercando (opzionale):');
-    btn.disabled = true;
-    btn.textContent = '⏳';
-    try {
-        const result = await api.retryPhoto(jobId, itemId, feedback || null);
-        if (result?.data) {
-            if (result.data.photo_id) {
-                api.invalidatePhotoCache(result.data.photo_id);
-            } else if (result.data.photo_url) {
-                api.invalidatePhotoCache(result.data.photo_url);
-            }
-            _updatePhotoProposal(itemId, result.data);
-            _render();
+let _activePhotoModalParams = null;
+
+function _initPhotoUrlModalListeners() {
+    const modal = document.getElementById('modal-staging-photo-url');
+    if (!modal || modal._isBound) return;
+    modal._isBound = true;
+
+    const btnConfirm = document.getElementById('btn-confirm-staging-photo-url');
+    const btnCancel = document.getElementById('btn-cancel-staging-photo-url');
+    const btnClose = document.getElementById('btn-close-staging-photo-url');
+    const input = document.getElementById('staging-modal-photo-url-input');
+
+    btnConfirm?.addEventListener('click', _handleConfirmPhotoUrlModal);
+    btnCancel?.addEventListener('click', closePhotoUrlModal);
+    btnClose?.addEventListener('click', closePhotoUrlModal);
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closePhotoUrlModal();
+    });
+
+    input?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            _handleConfirmPhotoUrlModal();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            closePhotoUrlModal();
         }
-    } catch (err) {
-        addMessage(`❌ Retry foto fallito: ${err.message}`, 'error');
-        btn.disabled = false;
-        btn.textContent = '🔄 Riprova';
-    }
+    });
 }
 
-async function _handleManualPhoto(e) {
-    const btn = e.currentTarget;
-    const itemId = btn.dataset.itemId;
-    const jobId = btn.dataset.jobId;
-    const url = prompt('Inserisci URL immagine:');
-    if (!url) return;
+export function openPhotoUrlModal(itemId, jobId, isMobile = false) {
+    _initPhotoUrlModalListeners();
+    _activePhotoModalParams = { itemId, jobId, isMobile };
+    const modal = document.getElementById('modal-staging-photo-url');
+    if (!modal) {
+        const url = prompt('Inserisci URL immagine da Google:');
+        if (url) {
+            _submitPhotoUrlDirect(itemId, jobId, url, isMobile);
+        }
+        return;
+    }
 
-    btn.disabled = true;
-    btn.textContent = '⏳';
+    const input = document.getElementById('staging-modal-photo-url-input');
+    const errEl = document.getElementById('staging-modal-photo-url-error');
+    const btnConfirm = document.getElementById('btn-confirm-staging-photo-url');
+
+    if (input) input.value = '';
+    if (errEl) {
+        errEl.textContent = '';
+        errEl.style.display = 'none';
+    }
+    if (btnConfirm) {
+        btnConfirm.disabled = false;
+        btnConfirm.textContent = 'Applica Foto';
+    }
+
+    modal.classList.add('active');
+    setTimeout(() => input?.focus(), 100);
+}
+
+export function closePhotoUrlModal() {
+    const modal = document.getElementById('modal-staging-photo-url');
+    if (modal) modal.classList.remove('active');
+    _activePhotoModalParams = null;
+}
+
+async function _handleConfirmPhotoUrlModal() {
+    if (!_activePhotoModalParams) return;
+    const { itemId, jobId, isMobile } = _activePhotoModalParams;
+    const input = document.getElementById('staging-modal-photo-url-input');
+    const errEl = document.getElementById('staging-modal-photo-url-error');
+    const btnConfirm = document.getElementById('btn-confirm-staging-photo-url');
+
+    const url = input ? input.value.trim() : '';
+    if (!url) {
+        if (errEl) {
+            errEl.textContent = 'Inserisci un URL valido prima di applicare.';
+            errEl.style.display = 'block';
+        }
+        input?.focus();
+        return;
+    }
+
+    if (btnConfirm) {
+        btnConfirm.disabled = true;
+        btnConfirm.textContent = 'Salvataggio...';
+    }
+    if (errEl) errEl.style.display = 'none';
+
     try {
         const result = await api.retryPhoto(jobId, itemId, null, url);
         if (result?.data) {
@@ -1291,24 +1329,67 @@ async function _handleManualPhoto(e) {
                 api.invalidatePhotoCache(result.data.photo_url);
             }
             _updatePhotoProposal(itemId, result.data);
-            _render();
+
+            if (isMobile) {
+                const photoImg = document.getElementById('mob-staging-photo');
+                const photoPlaceholder = document.getElementById('mob-staging-photo-placeholder');
+                const newUrl = result.data.url || result.data.photo_url;
+                if (photoImg && photoPlaceholder && newUrl) {
+                    photoImg.src = newUrl;
+                    photoImg.style.display = 'block';
+                    photoPlaceholder.style.display = 'none';
+                }
+            } else {
+                _render();
+            }
+
+            closePhotoUrlModal();
+            addMessage('✅ Foto aggiornata con successo!', 'success');
         }
     } catch (err) {
-        addMessage(`❌ Aggiornamento fallito: ${err.message}`, 'error');
-        btn.disabled = false;
-        btn.textContent = '🔗 Inserisci URL';
+        if (errEl) {
+            errEl.textContent = `Errore: ${err.message || "Impossibile scaricare l'immagine"}`;
+            errEl.style.display = 'block';
+        }
+        if (btnConfirm) {
+            btnConfirm.disabled = false;
+            btnConfirm.textContent = 'Applica Foto';
+        }
     }
 }
 
 function _handleSearchPhoto(e) {
     const btn = e.currentTarget;
     const query = btn.dataset.searchQuery;
+    const itemId = btn.dataset.itemId;
+    const jobId = btn.dataset.jobId || _jobId;
     if (!query) {
         addMessage('⚠️ Nessuna query di ricerca disponibile.', 'warn');
         return;
     }
     const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
     window.open(searchUrl, '_blank', 'noopener,noreferrer');
+
+    if (itemId) {
+        openPhotoUrlModal(itemId, jobId, false);
+    }
+}
+
+function _handleSearchPhotoMobile(e) {
+    const btn = e.currentTarget;
+    const query = btn.dataset.searchQuery;
+    const itemId = btn.dataset.itemId || _currentMobileItem?.item_id;
+    const jobId = btn.dataset.jobId || _jobId;
+    if (!query) {
+        addMessage('⚠️ Nessuna query di ricerca disponibile.', 'warn');
+        return;
+    }
+    const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
+    window.open(searchUrl, '_blank', 'noopener,noreferrer');
+
+    if (itemId) {
+        openPhotoUrlModal(itemId, jobId, true);
+    }
 }
 
 // ---- Operations queue ----

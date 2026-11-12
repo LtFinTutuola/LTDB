@@ -60,6 +60,12 @@ app.add_middleware(
 )
 
 
+from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi import HTTPException
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from src.utils.error_sanitizer import sanitize_error_detail
+
+
 @app.exception_handler(LoginRedirect)
 async def login_redirect_handler(request: Request, exc: LoginRedirect):
     """
@@ -70,6 +76,28 @@ async def login_redirect_handler(request: Request, exc: LoginRedirect):
     response = RedirectResponse(url=f"/login?next={next_path}", status_code=303)
     response.delete_cookie(key=settings.AUTH_COOKIE_NAME, path="/")
     return response
+
+
+@app.exception_handler(SQLAlchemyError)
+async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
+    """
+    Global handler for database exceptions to prevent leaking raw SQL queries or DB internals.
+    """
+    logger.log_execution("main", "db_error", "err", path=request.url.path, exc=exc)
+    clean_msg = sanitize_error_detail(str(exc))
+    status_code = 409 if isinstance(exc, IntegrityError) else 500
+    return JSONResponse(status_code=status_code, content={"detail": clean_msg})
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """
+    Sanitizes server-side 5xx errors while preserving friendly 4xx client validation messages.
+    """
+    detail = exc.detail
+    if exc.status_code >= 500:
+        detail = sanitize_error_detail(detail)
+    return JSONResponse(status_code=exc.status_code, content={"detail": detail})
 
 
 # Static files (JS, CSS) with cache validation headers

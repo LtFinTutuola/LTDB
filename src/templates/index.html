@@ -2023,6 +2023,79 @@
     </div>
 </div>
 
+<!-- Modal: Typo Warning Alert -->
+<div id="modal-typo-warning" class="modal-backdrop">
+    <div class="modal-card" style="max-width: 520px;">
+        <div class="modal-header">
+            <h3 class="modal-title" style="color: var(--warning, #e6a23c);">
+                <span class="material-symbols-rounded">warning</span>
+                Possibile Errore nel Codice Fornitore
+            </h3>
+            <button id="btn-close-typo-warning" class="modal-close" type="button" title="Chiudi">
+                <span class="material-symbols-rounded">close</span>
+            </button>
+        </div>
+        <div class="modal-body" style="font-size: 14px; line-height: 1.5; color: var(--text-primary);">
+            <p style="margin-bottom: 12px;">
+                Il codice fornitore inserito risulta molto simile a un codice già esistente a catalogo per questo marchio.
+                Potrebbe trattarsi di un refuso di battitura durante l'inserimento.
+            </p>
+            <div style="background: var(--bg-app); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px;">
+                <div>
+                    <span style="color: var(--text-secondary); font-size: 12px; text-transform: uppercase; font-weight: 600;">Codice inserito:</span><br>
+                    <code id="typo-modal-suspect-code" style="font-size: 14px; font-weight: 700; color: var(--error);"></code>
+                </div>
+                <div>
+                    <span style="color: var(--text-secondary); font-size: 12px; text-transform: uppercase; font-weight: 600;">Modello simile già esistente:</span><br>
+                    <code id="typo-modal-suggested-code" style="font-size: 14px; font-weight: 700; color: var(--accent);"></code>
+                    <span id="typo-modal-blueprint-name" style="color: var(--text-secondary); font-size: 13px; margin-left: 6px;"></span>
+                </div>
+                <div>
+                    <span style="color: var(--text-secondary); font-size: 12px; text-transform: uppercase; font-weight: 600;">Motivo segnalazione:</span><br>
+                    <em id="typo-modal-reason" style="color: var(--text-primary); font-size: 13px;"></em>
+                </div>
+            </div>
+            <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">
+                Si consiglia di verificare il cartellino del prodotto prima di procedere per evitare la creazione di duplicati indesiderati.
+            </p>
+        </div>
+        <div class="modal-footer" style="display: flex; justify-content: space-between; gap: 10px;">
+            <button type="button" id="btn-typo-modal-confirm" class="btn-secondary" style="font-size: 13px;">Procedi comunque</button>
+            <button type="button" id="btn-typo-modal-edit" class="btn-primary" style="font-size: 13px;">Verifica / Modifica Codice</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Staging Photo URL Input -->
+<div id="modal-staging-photo-url" class="modal-backdrop">
+    <div class="modal-card" style="max-width: 500px;">
+        <div class="modal-header">
+            <h3 class="modal-title" style="color: var(--text-primary);">
+                <span class="material-symbols-rounded" style="color: var(--accent);">add_photo_alternate</span>
+                Inserisci URL Foto Prodotto
+            </h3>
+            <button id="btn-close-staging-photo-url" class="modal-close" type="button" title="Chiudi">
+                <span class="material-symbols-rounded">close</span>
+            </button>
+        </div>
+        <div class="modal-body" style="font-size: 14px; line-height: 1.5; color: var(--text-primary);">
+            <p style="margin-bottom: 12px; color: var(--text-secondary); font-size: 13px;">
+                È stata aperta una ricerca immagini su Google in una nuova scheda.<br>
+                Fai clic destro sull'immagine desiderata, seleziona <strong>"Copia indirizzo dell'immagine"</strong> e incollalo nel campo sottostante:
+            </p>
+            <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                <label for="staging-modal-photo-url-input" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">URL Immagine *</label>
+                <input type="url" id="staging-modal-photo-url-input" class="form-control" placeholder="https://..." style="width: 100%; box-sizing: border-box;" required>
+            </div>
+            <div id="staging-modal-photo-url-error" style="color: var(--error); font-size: 12px; margin-top: 8px; display: none;"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" id="btn-cancel-staging-photo-url" class="btn-secondary">Annulla</button>
+            <button type="button" id="btn-confirm-staging-photo-url" class="btn-primary">Applica Foto</button>
+        </div>
+    </div>
+</div>
+
 {% include 'partials/workspace.html' %}
 {% endblock %}
 
@@ -2030,6 +2103,6 @@
 <script>
     window.__LTDB_BRANDS__ = {{ brands_json | safe }};
 </script>
-<script type="module" src="/static/js/main.js?v=20261109_1"></script>
+<script type="module" src="/static/js/main.js?v=20261112_3"></script>
 {% endblock %}
 

@@ -166,6 +166,75 @@ async function submitSingleItemForm() {
     }
 }
 
+function showTypoWarningModal(d, onEdit, onConfirm) {
+    const modal = document.getElementById('modal-typo-warning');
+    if (!modal) {
+        const proceed = window.confirm(
+            `⚠️ Possibile refuso nel codice fornitore:\n` +
+            `Codice inserito: ${d.suspect_code || ''}\n` +
+            `Modello simile esistente: ${d.suggested_match || ''} (${d.blueprint_name || ''})\n` +
+            `${d.reason || ''}\n\n` +
+            `Clicca 'Annulla' per correggere il codice, o 'OK' per procedere comunque.`
+        );
+        if (proceed) onConfirm();
+        else onEdit();
+        return;
+    }
+
+    const suspectEl = document.getElementById('typo-modal-suspect-code');
+    const suggestedEl = document.getElementById('typo-modal-suggested-code');
+    const bpNameEl = document.getElementById('typo-modal-blueprint-name');
+    const reasonEl = document.getElementById('typo-modal-reason');
+
+    if (suspectEl) suspectEl.textContent = d.suspect_code || '-';
+    if (suggestedEl) suggestedEl.textContent = d.suggested_match || '-';
+    if (bpNameEl) bpNameEl.textContent = d.blueprint_name ? `(${d.blueprint_name})` : '';
+    if (reasonEl) reasonEl.textContent = d.reason || 'Distanza minima da un codice esistente';
+
+    const btnEdit = document.getElementById('btn-typo-modal-edit');
+    const btnConfirm = document.getElementById('btn-typo-modal-confirm');
+    const btnClose = document.getElementById('btn-close-typo-warning');
+
+    const cleanup = () => {
+        modal.classList.remove('active');
+        btnEdit?.removeEventListener('click', handleEdit);
+        btnConfirm?.removeEventListener('click', handleConfirm);
+        btnClose?.removeEventListener('click', handleEdit);
+        modal.removeEventListener('click', handleBackdrop);
+        document.removeEventListener('keydown', handleKey);
+    };
+
+    const handleEdit = () => {
+        cleanup();
+        onEdit();
+    };
+
+    const handleConfirm = () => {
+        cleanup();
+        onConfirm();
+    };
+
+    const handleBackdrop = (e) => {
+        if (e.target === modal) {
+            handleEdit();
+        }
+    };
+
+    const handleKey = (e) => {
+        if (e.key === 'Escape') {
+            handleEdit();
+        }
+    };
+
+    btnEdit?.addEventListener('click', handleEdit);
+    btnConfirm?.addEventListener('click', handleConfirm);
+    btnClose?.addEventListener('click', handleEdit);
+    modal.addEventListener('click', handleBackdrop);
+    document.addEventListener('keydown', handleKey);
+
+    modal.classList.add('active');
+}
+
 function startPolling(jobId, statusEl, btn) {
     if (_pollingInterval) clearInterval(_pollingInterval);
     _activeJobId = jobId;
@@ -189,46 +258,38 @@ function startPolling(jobId, statusEl, btn) {
                 _activeJobId = null;
                 btn.disabled = false;
                 const d = statusData.data || {};
-                statusEl.innerHTML = `
-                    <div class="typo-warning-banner" style="background:var(--bg-warning, #fff3cd); border:1px solid #ffeeba; color:#856404; padding:12px; border-radius:6px; margin-top:10px;">
-                        <strong>⚠️ Possibile Refuso Rilevato nel Codice Fornitore:</strong><br>
-                        Codice inserito: <code>${d.suspect_code || ''}</code><br>
-                        Suggerimento / Modello simile: <code>${d.suggested_match || ''}</code> (${d.blueprint_name || ''})<br>
-                        <em>${d.reason || ''}</em>
-                        <div style="margin-top:10px; display:flex; gap:8px;">
-                            <button type="button" class="btn btn-secondary btn-sm" id="btn-typo-edit">1. Modifica Codice</button>
-                            <button type="button" class="btn btn-primary btn-sm" id="btn-typo-confirm">2. Conferma Codice Inserito</button>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('btn-typo-edit')?.addEventListener('click', () => {
-                    const vendorInput = document.getElementById('single-vendor');
-                    if (vendorInput) {
-                        vendorInput.focus();
-                        vendorInput.select();
+
+                showTypoWarningModal(
+                    d,
+                    () => {
+                        const vendorInput = document.getElementById('single-vendor');
+                        if (vendorInput) {
+                            vendorInput.focus();
+                            vendorInput.select();
+                        }
+                        statusEl.innerHTML = `<span style="color:var(--text-muted);">Verifica il codice fornitore e premi di nuovo Importa.</span>`;
+                    },
+                    async () => {
+                        statusEl.innerHTML = `<span class="spinner"></span> Invio con conferma in corso...`;
+                        btn.disabled = true;
+                        try {
+                            const payload = {
+                                brand_id: _val('single-brand'),
+                                vendor_code: _val('single-vendor'),
+                                article_name: _val('single-name') || null,
+                                barcode: _val('single-barcode') || null,
+                                quantity: parseInt(_val('single-qty') || '1', 10),
+                                colors: _val('single-colors') ? _val('single-colors').split(',').map(s => s.trim()).filter(Boolean) : [],
+                                typo_warning_confirmed: true
+                            };
+                            const { job_id } = await api.ingestSingleItem(payload);
+                            startPolling(job_id, statusEl, btn);
+                        } catch (e) {
+                            statusEl.innerHTML = `<span style="color:var(--error);">❌ Errore: ${e.message}</span>`;
+                            btn.disabled = false;
+                        }
                     }
-                    statusEl.innerHTML = `<span style="color:var(--text-muted);">Correggi il codice e premi di nuovo Importa.</span>`;
-                });
-                document.getElementById('btn-typo-confirm')?.addEventListener('click', async () => {
-                    statusEl.innerHTML = `<span class="spinner"></span> Invio con conferma in corso...`;
-                    btn.disabled = true;
-                    try {
-                        const payload = {
-                            brand_id: _val('single-brand'),
-                            vendor_code: _val('single-vendor'),
-                            article_name: _val('single-name') || null,
-                            barcode: _val('single-barcode') || null,
-                            quantity: parseInt(_val('single-qty') || '1', 10),
-                            colors: _val('single-colors') ? _val('single-colors').split(',').map(s => s.trim()).filter(Boolean) : [],
-                            typo_warning_confirmed: true
-                        };
-                        const { job_id } = await api.ingestSingleItem(payload);
-                        startPolling(job_id, statusEl, btn);
-                    } catch (e) {
-                        statusEl.innerHTML = `<span style="color:var(--error);">❌ Errore: ${e.message}</span>`;
-                        btn.disabled = false;
-                    }
-                });
+                );
             } else if (statusData.status === 'ERROR') {
                 clearInterval(_pollingInterval);
                 _pollingInterval = null;

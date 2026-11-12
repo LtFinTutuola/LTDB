@@ -239,9 +239,6 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
             </td>
             <td class="warehouse-desktop-only" style="text-align: right;">
                 <div class="action-buttons" style="justify-content: flex-end;">
-                    <button type="button" class="action-btn btn-split-blueprint" title="Separa Articoli / Correggi Regola Blueprint">
-                        <span class="material-symbols-rounded" style="font-size: 18px;">call_split</span>
-                    </button>
                     <button type="button" class="action-btn btn-edit-article" title="Modifica Articolo">
                         <span class="material-symbols-rounded" style="font-size: 18px;">edit</span>
                     </button>
@@ -258,27 +255,6 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
             photoEl.addEventListener('click', (e) => {
                 e.stopPropagation();
                 openImageModal(photoUrl, item.article_name);
-            });
-        }
-
-        // Split/Revise Blueprint button click (Desktop only)
-        const splitBtn = tr.querySelector('.btn-split-blueprint');
-        if (splitBtn) {
-            if (getWarehouseAnomaliesCount() > 0) {
-                splitBtn.classList.add('disabled');
-                splitBtn.setAttribute('aria-disabled', 'true');
-                splitBtn.setAttribute('data-blocked-by-anomalies', 'true');
-                splitBtn.setAttribute('data-blocked-msg', ANOMALY_BLOCKED_MESSAGE);
-                splitBtn.setAttribute('title', ANOMALY_BLOCKED_MESSAGE);
-            }
-            splitBtn.addEventListener('click', (e) => {
-                if (splitBtn.classList.contains('disabled') || splitBtn.getAttribute('aria-disabled') === 'true') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    return;
-                }
-                e.stopPropagation();
-                openBlueprintRevision(item.blueprint_id, _refreshWarehouseView);
             });
         }
 

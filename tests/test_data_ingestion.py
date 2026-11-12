@@ -1117,6 +1117,8 @@ async def test_stage_extracted_items_hydrates_agent_matched_existing_blueprints(
     )
 
     blueprints = res["blueprints"]
+    assert res["brand_id"] == str(brand.id)
+    assert res["brand_name"] == brand.name
     assert len(blueprints) == 1
     staged_bp = blueprints[0]
     assert staged_bp["id"] == str(existing_bp.id)
