@@ -13,6 +13,7 @@ import {
 let _controlsBound = false;
 let _editingItem = null;
 let _deletingItem = null;
+let _isDeletingArticle = false;
 let _currentMobileArticle = null;
 let _currentPage = 1;
 const _pageSize = 50;
@@ -153,6 +154,9 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
     items.forEach(item => {
         const tr = document.createElement('tr');
         tr.className = 'warehouse-row';
+        if (item.blueprint_id) tr.dataset.blueprintId = item.blueprint_id;
+        const colorVal = item.colors && item.colors.length > 0 ? item.colors[0] : '';
+        if (colorVal) tr.dataset.color = colorVal;
 
         const stockLabel = item.stock > 0 ? `Disponibile (${item.stock})` : 'Esaurito';
         const stockClass = item.stock > 5 ? 'available' : (item.stock > 0 ? 'low' : 'zero');
@@ -1325,10 +1329,17 @@ async function _handleSaveEditArticle(e) {
 }
 
 function openDeleteArticleModal(item) {
+    if (_isDeletingArticle) return;
     _deletingItem = item;
     const modalDelete = document.getElementById('modal-delete-article');
     const deleteMsg = document.getElementById('delete-article-msg');
+    const btnConfirm = document.getElementById('btn-confirm-delete-article');
     if (!modalDelete) return;
+
+    if (btnConfirm) {
+        btnConfirm.disabled = false;
+        btnConfirm.textContent = 'Elimina';
+    }
 
     if (deleteMsg) {
         deleteMsg.textContent = `Sei sicuro di voler eliminare l'articolo "${item.article_name}" dal magazzino?`;
@@ -1339,33 +1350,70 @@ function openDeleteArticleModal(item) {
 function closeDeleteArticleModal() {
     const modalDelete = document.getElementById('modal-delete-article');
     if (modalDelete) modalDelete.classList.remove('active');
+    const btnConfirm = document.getElementById('btn-confirm-delete-article');
+    if (btnConfirm) {
+        btnConfirm.disabled = false;
+        btnConfirm.textContent = 'Elimina';
+    }
     _deletingItem = null;
 }
 
 async function _handleConfirmDeleteArticle() {
-    if (!_deletingItem) return;
+    if (!_deletingItem || _isDeletingArticle) return;
+    _isDeletingArticle = true;
+
+    const itemToDelete = _deletingItem;
+    const blueprintId = itemToDelete.blueprint_id;
+    const color = itemToDelete.colors && itemToDelete.colors.length > 0 ? itemToDelete.colors[0] : null;
     const btnConfirm = document.getElementById('btn-confirm-delete-article');
-    const color = _deletingItem.colors && _deletingItem.colors.length > 0 ? _deletingItem.colors[0] : null;
 
     if (btnConfirm) {
         btnConfirm.disabled = true;
         btnConfirm.textContent = 'Eliminazione...';
     }
 
+    // Optimistically mark matching row(s) to prevent repeated clicks
+    const matchingRows = document.querySelectorAll(
+        color
+            ? `tr.warehouse-row[data-blueprint-id="${blueprintId}"][data-color="${color}"]`
+            : `tr.warehouse-row[data-blueprint-id="${blueprintId}"]`
+    );
+    matchingRows.forEach(row => {
+        row.style.opacity = '0.35';
+        row.style.pointerEvents = 'none';
+    });
+
     try {
-        await api.deleteCatalogItem(_deletingItem.blueprint_id, color);
+        await api.deleteCatalogItem(blueprintId, color);
         _showToast('Articolo eliminato con successo.');
+
+        // Always close modal and detail overlays immediately
         closeDeleteArticleModal();
 
         const detailOverlay = document.getElementById('article-fullscreen-modal');
         if (detailOverlay) detailOverlay.style.display = 'none';
-
         closeArticleMobilePanel();
 
         await _refreshWarehouseView();
     } catch (err) {
-        _showToast(err.message || 'Errore durante l\'eliminazione.', 'error');
+        const isNotFound = err.message && (err.message.includes('404') || err.message.toLowerCase().includes('not found'));
+        if (isNotFound) {
+            _showToast('Articolo non presente o già rimosso dal magazzino.', 'system');
+        } else {
+            _showToast(err.message || 'Errore durante l\'eliminazione.', 'error');
+        }
+
+        // Always close modal on error so the user is never trapped by the backdrop
+        closeDeleteArticleModal();
+
+        const detailOverlay = document.getElementById('article-fullscreen-modal');
+        if (detailOverlay) detailOverlay.style.display = 'none';
+        closeArticleMobilePanel();
+
+        // Resync view to eliminate any stale records
+        await _refreshWarehouseView();
     } finally {
+        _isDeletingArticle = false;
         if (btnConfirm) {
             btnConfirm.disabled = false;
             btnConfirm.textContent = 'Elimina';

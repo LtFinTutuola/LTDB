@@ -754,6 +754,66 @@ class TestWarehouseEditAndDelete:
         assert db_session.query(ArticleMovement).filter_by(article_id=art.id).first() is None
         assert db_session.query(ArticlePhoto).filter_by(article_blueprint_id=bp.id).first() is None
 
+    def test_delete_consecutive_articles_in_catalog(self, db_session):
+        client = TestClient(app)
+        brand = _make_brand(db_session)
+        bp1 = _make_blueprint(db_session, brand.id, article_name="Articolo Consecutivo 1")
+        bp2 = _make_blueprint(db_session, brand.id, article_name="Articolo Consecutivo 2")
+
+        # First deletion
+        res1 = client.delete(f"/api/v1/catalog/{bp1.id}")
+        assert res1.status_code == 200
+        assert res1.json()["deleted_blueprint"] is True
+
+        # Consecutive second deletion immediately after
+        res2 = client.delete(f"/api/v1/catalog/{bp2.id}")
+        assert res2.status_code == 200
+        assert res2.json()["deleted_blueprint"] is True
+
+        # Verify both blueprints are gone from the database
+        assert db_session.query(ArticleBlueprint).filter(ArticleBlueprint.id.in_([bp1.id, bp2.id])).count() == 0
+
+    def test_delete_consecutive_color_variants_of_same_blueprint(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article, ArticleStatus
+        from src.models.pim import ArticlePhoto
+
+        brand = _make_brand(db_session)
+        bp = _make_blueprint(db_session, brand.id, article_name="Borsa Bicolore")
+        sup = Supplier(company_name="SupBicolore")
+        db_session.add(sup)
+        db_session.commit()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-BICOLORE", document_date=date(2026, 2, 1))
+        db_session.add(batch)
+        db_session.commit()
+
+        art_nero = Article(batch_id=batch.id, article_blueprint_id=bp.id, colors=["nero"], status=ArticleStatus.AVAILABLE)
+        art_marrone = Article(batch_id=batch.id, article_blueprint_id=bp.id, colors=["marrone"], status=ArticleStatus.AVAILABLE)
+        photo_nero = ArticlePhoto(article_blueprint_id=bp.id, canonical_color_name="nero", photo_data=b"nerobytes")
+        photo_marrone = ArticlePhoto(article_blueprint_id=bp.id, canonical_color_name="marrone", photo_data=b"marronebytes")
+        db_session.add_all([art_nero, art_marrone, photo_nero, photo_marrone])
+        db_session.commit()
+
+        client = TestClient(app)
+
+        # First deletion: color variant 'nero'
+        res1 = client.delete(f"/api/v1/catalog/{bp.id}?color=nero")
+        assert res1.status_code == 200
+        data1 = res1.json()
+        assert data1["deleted_blueprint"] is False
+        assert data1["deleted_articles_count"] == 1
+
+        # Second deletion immediately after: remaining color variant 'marrone'
+        res2 = client.delete(f"/api/v1/catalog/{bp.id}?color=marrone")
+        assert res2.status_code == 200
+        data2 = res2.json()
+        assert data2["deleted_blueprint"] is True
+        assert data2["deleted_articles_count"] == 1
+
+        # Blueprint is fully removed
+        assert db_session.query(ArticleBlueprint).filter_by(id=bp.id).first() is None
+        assert db_session.query(Article).filter_by(article_blueprint_id=bp.id).count() == 0
+
     def test_delete_catalog_endpoint_and_404(self, db_session):
         client = TestClient(app)
         brand = _make_brand(db_session)
@@ -765,8 +825,10 @@ class TestWarehouseEditAndDelete:
         assert data["blueprint_id"] == bp.id
         assert data["deleted_blueprint"] is True
 
+        # Second deletion of the same item returns 404 (handled gracefully by frontend)
         res_404 = client.delete(f"/api/v1/catalog/{bp.id}")
         assert res_404.status_code == 404
+        assert "not found" in res_404.json()["detail"].lower()
 
     def test_warehouse_ui_elements_rendered(self, db_session):
         client = TestClient(app)
@@ -781,6 +843,9 @@ class TestWarehouseEditAndDelete:
         assert "Mostra solo articoli disponibili" in res.text
         assert "modal-edit-article" in res.text
         assert "modal-delete-article" in res.text
+        assert "btn-confirm-delete-article" in res.text
+        assert "btn-cancel-delete-article" in res.text
+        assert "delete-article-msg" in res.text
         assert res.text.index('data-tab="import-article"') < res.text.index('data-tab="import-ddt"')
 
 
