@@ -64,16 +64,24 @@ class ArticleRepository(BaseRepository[Article, ArticleCreate, ArticleCreate]):
         return db_movement
     def get_reconciliation_candidates(self, db: Session, search_code: str, is_exchange: bool) -> List[Article]:
         from src.models.wms import ArticleStatus
-        from sqlalchemy import or_
-        
+        from sqlalchemy import or_, func
+        from src.utils.vendor_code_normalizer import sterilize_separators
+
         target_status = ArticleStatus.SOLD if is_exchange else ArticleStatus.AVAILABLE
-        
+        clean_code = (search_code or "").strip()
+        if not clean_code:
+            return []
+
+        code_lower = clean_code.lower()
+        sterilized_lower = sterilize_separators(clean_code).lower()
+
         return (
             db.query(self.model)
             .filter(
                 or_(
-                    self.model.supplier_code == search_code,
-                    self.model.ean == search_code
+                    func.lower(self.model.supplier_code) == code_lower,
+                    func.lower(self.model.ean) == code_lower,
+                    func.lower(self.model.supplier_code) == sterilized_lower,
                 ),
                 self.model.status == target_status
             )

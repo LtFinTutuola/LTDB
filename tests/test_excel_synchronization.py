@@ -832,3 +832,135 @@ def test_push_batch_historical_pattern_rejected(db_session):
     today_records = excel_synchronization_repo.get_all_by_date(db_session, today)
     assert len(today_records) == 0
 
+
+def test_find_candidates_with_whitespace_and_casing(db_session):
+    blueprint_id, batch_id = create_base_data(db_session)
+    
+    art = Article(
+        article_blueprint_id=blueprint_id,
+        batch_id=batch_id,
+        supplier_code="ABC-999-XYZ",
+        ean="8050164357849",
+        colors=["Nero"],
+        status=ArticleStatus.AVAILABLE,
+    )
+    db_session.add(art)
+    db_session.commit()
+    db_session.refresh(art)
+
+    # 1. Barcode with leading and trailing whitespaces
+    res_barcode_spaces = find_candidates(db_session, search_code="  8050164357849  ", is_exchange=False)
+    assert len(res_barcode_spaces) >= 1
+    assert res_barcode_spaces[0]["article_id"] == str(art.id)
+
+    # 2. Lowercase supplier code
+    res_supplier_lower = find_candidates(db_session, search_code="abc-999-xyz", is_exchange=False)
+    assert len(res_supplier_lower) >= 1
+    assert res_supplier_lower[0]["article_id"] == str(art.id)
+
+    # 3. Supplier code with whitespace
+    res_supplier_spaces = find_candidates(db_session, search_code="  ABC-999-XYZ  ", is_exchange=False)
+    assert len(res_supplier_spaces) >= 1
+    assert res_supplier_spaces[0]["article_id"] == str(art.id)
+
+
+def test_find_candidates_unified_search_by_article_name(db_session):
+    from unittest.mock import patch, MagicMock, AsyncMock
+    from src.agents.warehouse_search_agent.state import SearchQueryPlan
+
+    blueprint_id, batch_id = create_base_data(db_session)
+    
+    art = Article(
+        article_blueprint_id=blueprint_id,
+        batch_id=batch_id,
+        supplier_code="UNIQUE-SUPP-123",
+        ean="9998887776665",
+        colors=["Rosso"],
+        status=ArticleStatus.AVAILABLE,
+    )
+    db_session.add(art)
+    db_session.commit()
+    db_session.refresh(art)
+
+    mock_plan = SearchQueryPlan(
+        brand="Test Brand",
+        category=None,
+        color=None,
+        keywords=["test"],
+    )
+
+    with patch("src.agents.warehouse_search_agent.nodes.query_plan_node.LLMClient") as MockPlanLLM:
+        mock_client = MagicMock()
+        mock_client.call = AsyncMock(return_value=mock_plan.model_dump_json())
+        MockPlanLLM.return_value = mock_client
+
+        candidates = find_candidates(db_session, search_code="test", is_exchange=False)
+        assert len(candidates) >= 1
+        matching_cand = next((c for c in candidates if c["article_id"] == str(art.id)), None)
+        assert matching_cand is not None
+        assert "Test" in matching_cand["article_name"]
+
+
+def test_find_candidates_exchange_returns_only_sold_articles(db_session):
+    blueprint_id, batch_id = create_base_data(db_session)
+    
+    sold_art = Article(
+        article_blueprint_id=blueprint_id,
+        batch_id=batch_id,
+        supplier_code="RET-CODE-456",
+        ean="1112223334445",
+        colors=["Giallo"],
+        status=ArticleStatus.SOLD,
+    )
+    avail_art = Article(
+        article_blueprint_id=blueprint_id,
+        batch_id=batch_id,
+        supplier_code="RET-CODE-456",
+        ean="1112223334445",
+        colors=["Giallo"],
+        status=ArticleStatus.AVAILABLE,
+    )
+    db_session.add_all([sold_art, avail_art])
+    db_session.commit()
+    db_session.refresh(sold_art)
+    db_session.refresh(avail_art)
+
+    # When is_exchange=True (return/exchange), must only pick SOLD article
+    candidates_exchange = find_candidates(db_session, search_code="RET-CODE-456", is_exchange=True)
+    assert len(candidates_exchange) == 1
+    assert candidates_exchange[0]["article_id"] == str(sold_art.id)
+
+    # When is_exchange=False (normal sale), must only pick AVAILABLE article
+    candidates_sale = find_candidates(db_session, search_code="RET-CODE-456", is_exchange=False)
+    assert len(candidates_sale) == 1
+    assert candidates_sale[0]["article_id"] == str(avail_art.id)
+
+
+def test_reconciliation_candidates_endpoint(db_session):
+    from fastapi.testclient import TestClient
+    from src.main import app
+    client = TestClient(app)
+
+    blueprint_id, batch_id = create_base_data(db_session)
+    
+    art = Article(
+        article_blueprint_id=blueprint_id,
+        batch_id=batch_id,
+        supplier_code="ROUTER-SUPP-789",
+        ean="5556667778889",
+        colors=["Blu"],
+        status=ArticleStatus.AVAILABLE,
+    )
+    db_session.add(art)
+    db_session.commit()
+    db_session.refresh(art)
+
+    # Query with barcode and spaces via HTTP endpoint
+    response = client.get("/api/v1/excel-synchronization/reconciliation-candidates?search_code=%205556667778889%20&is_exchange=false")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert len(data) >= 1
+    assert data[0]["article_id"] == str(art.id)
+    assert "inventory" in data[0]
+
+

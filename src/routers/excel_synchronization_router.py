@@ -163,16 +163,16 @@ def get_daily_sales(
 
 
 @router.get("/reconciliation-candidates", status_code=status.HTTP_200_OK)
-def get_reconciliation_candidates(
+async def get_reconciliation_candidates(
     search_code: str,
     is_exchange: bool = False,
     db: Session = Depends(get_db)
 ):
     """
-    Gets reconciliation candidates grouped by color (FIFO order).
+    Gets reconciliation candidates grouped by color (FIFO order) using unified search.
     """
     try:
-        candidates = excel_synchronization_service.find_candidates(db, search_code, is_exchange)
+        candidates = await excel_synchronization_service.find_candidates_async(db, search_code, is_exchange)
         if not candidates:
             raise HTTPException(status_code=404, detail="No reconciliation candidates found")
         return {"status": "success", "data": candidates}

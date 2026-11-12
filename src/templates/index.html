@@ -1997,6 +1997,32 @@
     </div>
 </div>
 
+<!-- Modal: Confirm Zero Stock -->
+<div id="modal-confirm-zero-stock" class="modal-backdrop">
+    <div class="modal-card" style="max-width: 480px;">
+        <div class="modal-header">
+            <h3 class="modal-title" style="color: var(--warning, #e6a23c);">
+                <span class="material-symbols-rounded">warning</span>
+                Attenzione: Azzeramento Quantità
+            </h3>
+            <button id="btn-close-zero-stock" class="modal-close" type="button">
+                <span class="material-symbols-rounded">close</span>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p id="zero-stock-msg" style="font-size: 14px; line-height: 1.5; color: var(--text-primary);">
+                Stai impostando la quantità di questo articolo a <strong>0</strong>.<br><br>
+                Se l'articolo è stato venduto e deve ancora essere riconciliato con le vendite (Cassa/Excel), azzerando la giacenza <strong>non sarà più possibile riconciliarlo in automatico</strong>.<br><br>
+                Vuoi procedere comunque con l'azzeramento?
+            </p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" id="btn-cancel-zero-stock" class="btn-secondary">Annulla</button>
+            <button type="button" id="btn-confirm-zero-stock" class="btn-primary" style="background: var(--warning, #e6a23c); border-color: var(--warning, #e6a23c); color: #fff;">Procedi comunque</button>
+        </div>
+    </div>
+</div>
+
 {% include 'partials/workspace.html' %}
 {% endblock %}
 

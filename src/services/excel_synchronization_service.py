@@ -323,55 +323,141 @@ def ingest_daily_sales(db: Session, file_path: str, target_date: date) -> List[s
 from sqlalchemy import func
 from src.models.pim import ArticlePhoto
 
+async def find_candidates_async(db: Session, search_code: str, is_exchange: bool) -> List[Dict[str, Any]]:
+    """
+    Finds reconciliation candidates using the unified warehouse search engine (search_service).
+    Returns candidates matching the search code (EAN, vendor code, skeleton, or free text query)
+    grouped by color variant with FIFO physical article assignment.
+    """
+    from src.services import search_service
+    from src.models.wms import Article, ArticleStatus
+
+    clean_code = (search_code or "").strip()
+    if not clean_code:
+        return []
+
+    target_status = ArticleStatus.SOLD if is_exchange else ArticleStatus.AVAILABLE
+    candidates: List[Dict[str, Any]] = []
+
+    try:
+        search_res = await search_service.execute_search(
+            db,
+            query=clean_code,
+            in_stock_only=(not is_exchange),
+            page_size=50,
+        )
+        search_items = search_res.get("results", [])
+
+        for item in search_items:
+            variant_color = item.colors[0].strip().lower() if item.colors else None
+
+            # Find matching physical articles for this blueprint and status
+            q = (
+                db.query(Article)
+                .filter(
+                    Article.article_blueprint_id == item.blueprint_id,
+                    Article.status == target_status,
+                )
+                .order_by(Article.created_at.asc())
+            )
+            all_target_articles = q.all()
+
+            matching_articles: List[Article] = []
+            for a in all_target_articles:
+                a_colors = [str(c).strip().lower() for c in (a.colors or []) if c and str(c).strip()]
+                if variant_color and variant_color != "unknown":
+                    if variant_color in a_colors:
+                        matching_articles.append(a)
+                else:
+                    if not a_colors or a_colors == ["unknown"]:
+                        matching_articles.append(a)
+
+            # If no color match but there are available articles and item has no specific color constraint
+            if not matching_articles and not variant_color and all_target_articles:
+                matching_articles = all_target_articles
+
+            if not matching_articles:
+                continue
+
+            selected_article = matching_articles[0]  # FIFO
+            inventory = len(matching_articles)
+            photo_url = f"/api/v1/ingestion/photos/{item.photo_id}" if item.photo_id else None
+
+            candidates.append({
+                "article_id": str(selected_article.id),
+                "article_name": item.article_name,
+                "article_description": item.description,
+                "brand_name": item.brand_name,
+                "category_name": item.category_name,
+                "colors": selected_article.colors or item.colors,
+                "inventory": inventory,
+                "photo_serving_endpoint_url": photo_url,
+            })
+    except Exception as e:
+        logger.log_execution("excel_synchronization_service", "unified_search_failed", "warning", exc=e, query=clean_code)
+
+    # Fallback to direct WMS repo query if search_service yielded 0 candidates
+    if not candidates:
+        legacy_articles = wms_repo.get_reconciliation_candidates(db, clean_code, is_exchange)
+        grouped = {}
+        inventory_counts = {}
+
+        for a in legacy_articles:
+            colors_list = [c.lower() for c in (a.colors or [])]
+            color_key = ", ".join(colors_list) if colors_list else "unknown"
+
+            if color_key not in grouped:
+                grouped[color_key] = a  # FIFO relies on query order_by created_at asc
+                inventory_counts[color_key] = 1
+            else:
+                inventory_counts[color_key] += 1
+
+        for color_key, article in grouped.items():
+            colors_list = [c.lower() for c in (article.colors or [])]
+            photo = None
+            if colors_list:
+                photo = db.query(ArticlePhoto).filter(
+                    ArticlePhoto.article_blueprint_id == article.article_blueprint_id,
+                    func.lower(ArticlePhoto.canonical_color_name).in_(colors_list),
+                ).first()
+
+            if not photo:
+                photo = db.query(ArticlePhoto).filter(
+                    ArticlePhoto.article_blueprint_id == article.article_blueprint_id
+                ).first()
+
+            photo_url = f"/api/v1/ingestion/photos/{photo.id}" if photo else None
+            blueprint = article.blueprint
+            candidates.append({
+                "article_id": str(article.id),
+                "article_name": blueprint.article_name if blueprint else None,
+                "article_description": blueprint.description if blueprint else None,
+                "brand_name": blueprint.brand.name if blueprint and blueprint.brand else None,
+                "category_name": blueprint.category.name if blueprint and blueprint.category else None,
+                "colors": article.colors,
+                "inventory": inventory_counts[color_key],
+                "photo_serving_endpoint_url": photo_url,
+            })
+
+    return candidates
+
+
 def find_candidates(db: Session, search_code: str, is_exchange: bool) -> List[Dict[str, Any]]:
     """
-    Finds reconciliation candidates for a given search code (vendor code or EAN) and transaction type.
-    Groups results by color and returns the oldest (FIFO) article for each color variant.
+    Synchronous wrapper for find_candidates_async, providing backward compatibility for sync callers.
     """
-    articles = wms_repo.get_reconciliation_candidates(db, search_code, is_exchange)
-    
-    # Group by color string
-    grouped = {}
-    inventory_counts = {}
-    
-    for a in articles:
-        colors_list = [c.lower() for c in (a.colors or [])]
-        color_key = ", ".join(colors_list) if colors_list else "unknown"
-        
-        if color_key not in grouped:
-            grouped[color_key] = a # FIFO relies on query order_by created_at asc
-            inventory_counts[color_key] = 1
-        else:
-            inventory_counts[color_key] += 1
-            
-    results = []
-    for color_key, article in grouped.items():
-        colors_list = [c.lower() for c in (article.colors or [])]
-        photo = None
-        if colors_list:
-            photo = db.query(ArticlePhoto).filter(
-                ArticlePhoto.article_blueprint_id == article.article_blueprint_id,
-                func.lower(ArticlePhoto.canonical_color_name).in_(colors_list)
-            ).first()
-        
-        if not photo:
-            photo = db.query(ArticlePhoto).filter(ArticlePhoto.article_blueprint_id == article.article_blueprint_id).first()
-            
-        photo_url = f"/api/v1/ingestion/photos/{photo.id}" if photo else None
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
 
-        blueprint = article.blueprint
-        results.append({
-            "article_id": str(article.id),
-            "article_name": blueprint.article_name if blueprint else None,
-            "article_description": blueprint.description if blueprint else None,
-            "brand_name": blueprint.brand.name if blueprint and blueprint.brand else None,
-            "category_name": blueprint.category.name if blueprint and blueprint.category else None,
-            "colors": article.colors,
-            "inventory": inventory_counts[color_key],
-            "photo_serving_endpoint_url": photo_url
-        })
-    
-    return results
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            return pool.submit(asyncio.run, find_candidates_async(db, search_code, is_exchange)).result()
+    else:
+        return asyncio.run(find_candidates_async(db, search_code, is_exchange))
 
 def get_pending_sales(db: Session, target_date: Optional[date] = None) -> List[Dict[str, Any]]:
     """

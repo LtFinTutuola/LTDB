@@ -1239,6 +1239,58 @@ function closeEditArticleModal() {
     _editingItem = null;
 }
 
+function confirmZeroStock() {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('modal-confirm-zero-stock');
+        const btnCancel = document.getElementById('btn-cancel-zero-stock');
+        const btnClose = document.getElementById('btn-close-zero-stock');
+        const btnConfirm = document.getElementById('btn-confirm-zero-stock');
+
+        if (!modal) {
+            const ok = window.confirm(
+                "Attenzione: Stai impostando la quantità a 0.\n\n" +
+                "Se l'articolo è stato venduto e deve ancora essere riconciliato con le vendite (Cassa/Excel), " +
+                "azzerando la giacenza non sarà più possibile riconciliarlo in automatico.\n\n" +
+                "Vuoi procedere comunque con l'azzeramento?"
+            );
+            resolve(ok);
+            return;
+        }
+
+        const cleanup = () => {
+            modal.classList.remove('active');
+            btnCancel?.removeEventListener('click', onCancel);
+            btnClose?.removeEventListener('click', onCancel);
+            btnConfirm?.removeEventListener('click', onConfirm);
+            modal.removeEventListener('click', onBackdrop);
+        };
+
+        const onCancel = () => {
+            cleanup();
+            resolve(false);
+        };
+
+        const onConfirm = () => {
+            cleanup();
+            resolve(true);
+        };
+
+        const onBackdrop = (e) => {
+            if (e.target === modal) {
+                cleanup();
+                resolve(false);
+            }
+        };
+
+        btnCancel?.addEventListener('click', onCancel);
+        btnClose?.addEventListener('click', onCancel);
+        btnConfirm?.addEventListener('click', onConfirm);
+        modal.addEventListener('click', onBackdrop);
+
+        modal.classList.add('active');
+    });
+}
+
 async function _handleSaveEditArticle(e) {
     e.preventDefault();
     if (!_editingItem) return;
@@ -1287,6 +1339,11 @@ async function _handleSaveEditArticle(e) {
     if (tags.length === 0) {
         _showToast('Inserisci almeno un tag.', 'error');
         return;
+    }
+
+    if (newQty === 0 && (_editingItem.stock ?? 0) > 0) {
+        const confirmed = await confirmZeroStock();
+        if (!confirmed) return;
     }
 
     const color = _editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : null;
@@ -1557,6 +1614,11 @@ async function _handleSaveArticleMobile(e) {
     if (tags.length === 0) {
         _showToast('Inserisci almeno un tag.', 'error');
         return;
+    }
+
+    if (newQty === 0 && (_currentMobileArticle.stock ?? 0) > 0) {
+        const confirmed = await confirmZeroStock();
+        if (!confirmed) return;
     }
 
     const color = _currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : null;
