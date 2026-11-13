@@ -1200,18 +1200,19 @@ class TestUpdateBlueprintQuantityAndCategory:
         assert "mob-art-qty" in res.text
         assert "mob-art-macro-cat" in res.text
         assert "mob-art-sub-cat" in res.text
-        # Photo elements in Desktop edit modal
+        # Photo elements in Desktop edit modal (unified 2-button flow + URL modal)
         assert "edit-art-photo-wrap" in res.text
         assert "btn-edit-art-upload-photo" in res.text
         assert "btn-edit-art-search-google" in res.text
-        assert "btn-edit-art-manual-url" in res.text
-        assert "btn-edit-art-ai-search" in res.text
-        # Photo elements in Mobile edit panel
+        assert "btn-edit-art-manual-url" not in res.text
+        assert "btn-edit-art-ai-search" not in res.text
+        assert "modal-catalog-photo-url" in res.text
+        # Photo elements in Mobile edit panel (unified 2-button flow)
         assert "mob-art-photo-wrap" in res.text
         assert "btn-mob-art-upload-photo" in res.text
         assert "btn-mob-art-search-google" in res.text
-        assert "btn-mob-art-manual-url" in res.text
-        assert "btn-mob-art-ai-search" in res.text
+        assert "btn-mob-art-manual-url" not in res.text
+        assert "btn-mob-art-ai-search" not in res.text
 
 
 class TestCatalogPhotoEndpoints:

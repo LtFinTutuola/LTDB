@@ -254,7 +254,7 @@ async def test_url_guard_preserves_previous_url_on_rejection():
     req = PhotoRetryRequest(item_id="item_x", user_feedback="wrong color")
 
     with patch("src.services.photo_service.LLMClient", return_value=mock_llm_client), \
-         patch("src.agents.article_blueprints_agent.nodes.color_photo_search_node.httpx.AsyncClient", return_value=mock_httpx_client):
+         patch("src.agents.photo_search_agent.nodes.validate_guard_node.httpx.AsyncClient", return_value=mock_httpx_client):
         res = await retry_photo_search(db, job_id, req)
 
     # The guard rejected the new URL: previous valid URL must be preserved
@@ -270,7 +270,7 @@ async def test_url_guard_preserves_previous_url_on_rejection():
 async def test_url_guard_rejects_hallucinated_url():
     """URL Guard must reject URLs that return non-image or error status codes."""
     from unittest.mock import AsyncMock, MagicMock, patch
-    from src.agents.article_blueprints_agent.nodes.color_photo_search_node import _validate_photo_url
+    from src.agents.photo_search_agent.nodes.validate_guard_node import _validate_photo_url
 
     mock_response = MagicMock()
     mock_response.status_code = 404
@@ -287,7 +287,7 @@ async def test_url_guard_rejects_hallucinated_url():
 
     mock_client.stream = MagicMock(return_value=MockStreamContext())
 
-    with patch("src.agents.article_blueprints_agent.nodes.color_photo_search_node.httpx.AsyncClient", return_value=mock_client):
+    with patch("src.agents.photo_search_agent.nodes.validate_guard_node.httpx.AsyncClient", return_value=mock_client):
         result = await _validate_photo_url("https://img.giglio.com/images/prodotti/FAKEURL_1.jpg")
     assert result is False
 
@@ -295,7 +295,7 @@ async def test_url_guard_rejects_hallucinated_url():
 async def test_url_guard_accepts_valid_image_url():
     """URL Guard must accept URLs that return a valid image content-type."""
     from unittest.mock import AsyncMock, MagicMock, patch
-    from src.agents.article_blueprints_agent.nodes.color_photo_search_node import _validate_photo_url
+    from src.agents.photo_search_agent.nodes.validate_guard_node import _validate_photo_url
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -312,14 +312,14 @@ async def test_url_guard_accepts_valid_image_url():
 
     mock_client.stream = MagicMock(return_value=MockStreamContext())
 
-    with patch("src.agents.article_blueprints_agent.nodes.color_photo_search_node.httpx.AsyncClient", return_value=mock_client):
+    with patch("src.agents.photo_search_agent.nodes.validate_guard_node.httpx.AsyncClient", return_value=mock_client):
         result = await _validate_photo_url("https://assets.armani.com/real_product.jpg")
     assert result is True
 
 @pytest.mark.asyncio
 async def test_url_guard_rejects_null_response(monkeypatch):
     """URL Guard must return False if model responded with NULL (no grounding found)."""
-    from src.agents.article_blueprints_agent.nodes.color_photo_search_node import _validate_photo_url
+    from src.agents.photo_search_agent.nodes.validate_guard_node import _validate_photo_url
 
     result = await _validate_photo_url("NULL")
     assert result is False
@@ -330,10 +330,9 @@ async def test_url_guard_rejects_null_response(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_search_photo_for_item_includes_search_query():
-    """Verify that _search_photo_for_item populates search_query with the LLM-generated string."""
-    import asyncio
+    """Verify that PhotoSearchAgent populates search_query with the LLM-generated string."""
     from unittest.mock import AsyncMock, patch
-    from src.agents.article_blueprints_agent.nodes.color_photo_search_node import _search_photo_for_item
+    from src.agents.photo_search_agent import PhotoSearchAgent
 
     mock_client = AsyncMock()
     mock_client.call = AsyncMock(return_value="Prada borsa saffiano nera packshot")
@@ -341,11 +340,15 @@ async def test_search_photo_for_item_includes_search_query():
 
     item = {"item_id": "test_item_1", "colors": ["nero"]}
     bp = {"article_name": "borsa", "materials": ["saffiano"]}
-    sem = asyncio.Semaphore(1)
 
-    with patch("src.agents.article_blueprints_agent.nodes.color_photo_search_node._validate_photo_url", return_value=True):
-        res = await _search_photo_for_item(mock_client, item, bp, "Prada", sem)
+    agent = PhotoSearchAgent(llm_client=mock_client)
+    with patch("src.agents.photo_search_agent.nodes.validate_guard_node._validate_photo_url", return_value=True):
+        out = await agent.aexecute({
+            "items_with_blueprints": [{"item": item, "blueprint": bp}],
+            "brand_name": "Prada",
+        })
 
+    res = out["photo_proposals"][0]
     assert res["search_query"] == "Prada borsa saffiano nera packshot"
     assert res["photo_url"] == "https://example.com/photo.jpg"
 

@@ -232,7 +232,6 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
     records: list[dict] = []
     warnings: list[str] = []
     attached_bps: list[dict] = []
-    attached_items: list[dict] = []
     resolved_update: dict = {}
 
     def _attach(cluster: dict, cand: dict, norm_code: Optional[str]) -> None:
@@ -240,8 +239,6 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
             it["article_blueprint_id"] = cand["id"]
             if norm_code:
                 it["normalized_vendor_code"] = norm_code
-            it["needs_photo_only"] = True
-            attached_items.append(it)
         cat_info = cand.get("category")
         sub_cat_info = cand.get("sub_category")
         if not cat_info and not sub_cat_info and (cand.get("category_id") or cand.get("category_name")):
@@ -668,7 +665,6 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
     result: dict[str, Any] = {
         "new_blueprints": new_blueprints,
         "output_blueprints": list(state.output_blueprints) + attached_bps,
-        "photo_only_items": list(state.photo_only_items) + attached_items,
         "resolved_blueprints": {**state.resolved_blueprints, **resolved_update},
         "heuristic_reconciliations": records,
         "warnings": list(state.warnings) + warnings,

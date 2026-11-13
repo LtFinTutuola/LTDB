@@ -15,7 +15,7 @@ export function _esc(str) {
 export function addMessage(text, type = 'system') {
     const toast = document.createElement('div');
     toast.style.position = 'fixed';
-    toast.style.bottom = '20px';
+    toast.style.top = '20px';
     toast.style.right = '20px';
     toast.style.padding = '12px 24px';
     toast.style.borderRadius = 'var(--radius-md)';

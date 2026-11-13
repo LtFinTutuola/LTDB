@@ -1775,18 +1775,12 @@
                     </div>
 
                     <!-- Photo Action Bar -->
-                    <div class="mobile-art-photo-actions" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 14px;">
-                        <button type="button" id="btn-mob-art-search-google" class="btn-photo-action" title="Cerca su Google Immagini">
+                    <div class="mobile-art-photo-actions" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 14px;">
+                        <button type="button" id="btn-mob-art-search-google" class="btn-photo-action" title="Cerca su Google Immagini e applica URL">
                             🔍 Cerca
                         </button>
                         <button type="button" id="btn-mob-art-upload-photo" class="btn-photo-action" title="Carica foto (fotocamera o galleria)">
                             📁 Carica
-                        </button>
-                        <button type="button" id="btn-mob-art-manual-url" class="btn-photo-action" title="Inserisci URL immagine">
-                            🔗 URL
-                        </button>
-                        <button type="button" id="btn-mob-art-ai-search" class="btn-photo-action" title="Riprova ricerca con l'AI">
-                            🔄 Riprova
                         </button>
                     </div>
 
@@ -1888,18 +1882,12 @@
                     </div>
                     <div style="flex: 1; display: flex; flex-direction: column; gap: 6px;">
                         <span style="font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase;">Foto Articolo</span>
-                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;">
-                            <button type="button" id="btn-edit-art-search-google" class="btn-photo-action" title="Cerca immagini su Google in nuova scheda">
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">
+                            <button type="button" id="btn-edit-art-search-google" class="btn-photo-action" title="Cerca immagini su Google e applica URL">
                                 🔍 Cerca
                             </button>
                             <button type="button" id="btn-edit-art-upload-photo" class="btn-photo-action" title="Carica foto dal computer o dispositivo">
                                 📁 Carica Foto
-                            </button>
-                            <button type="button" id="btn-edit-art-manual-url" class="btn-photo-action" title="Inserisci URL immagine da web">
-                                🔗 Inserisci URL
-                            </button>
-                            <button type="button" id="btn-edit-art-ai-search" class="btn-photo-action" title="Riprova ricerca con l'AI">
-                                🔄 Riprova
                             </button>
                         </div>
                     </div>
@@ -2092,6 +2080,36 @@
         <div class="modal-footer">
             <button type="button" id="btn-cancel-staging-photo-url" class="btn-secondary">Annulla</button>
             <button type="button" id="btn-confirm-staging-photo-url" class="btn-primary">Applica Foto</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Catalog Photo URL Input -->
+<div id="modal-catalog-photo-url" class="modal-backdrop">
+    <div class="modal-card" style="max-width: 500px;">
+        <div class="modal-header">
+            <h3 class="modal-title" style="color: var(--text-primary);">
+                <span class="material-symbols-rounded" style="color: var(--accent);">add_photo_alternate</span>
+                Inserisci URL Foto Prodotto
+            </h3>
+            <button id="btn-close-catalog-photo-url" class="modal-close" type="button" title="Chiudi">
+                <span class="material-symbols-rounded">close</span>
+            </button>
+        </div>
+        <div class="modal-body" style="font-size: 14px; line-height: 1.5; color: var(--text-primary);">
+            <p style="margin-bottom: 12px; color: var(--text-secondary); font-size: 13px;">
+                È stata aperta una ricerca immagini su Google in una nuova scheda.<br>
+                Fai clic destro sull'immagine desiderata, seleziona <strong>"Copia indirizzo dell'immagine"</strong> e incollalo nel campo sottostante:
+            </p>
+            <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                <label for="catalog-modal-photo-url-input" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">URL Immagine *</label>
+                <input type="url" id="catalog-modal-photo-url-input" class="form-control" placeholder="https://..." style="width: 100%; box-sizing: border-box;" required>
+            </div>
+            <div id="catalog-modal-photo-url-error" style="color: var(--error); font-size: 12px; margin-top: 8px; display: none;"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" id="btn-cancel-catalog-photo-url" class="btn-secondary">Annulla</button>
+            <button type="button" id="btn-confirm-catalog-photo-url" class="btn-primary">Applica Foto</button>
         </div>
     </div>
 </div>

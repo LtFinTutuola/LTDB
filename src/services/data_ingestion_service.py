@@ -9,6 +9,7 @@ from src.core.database import SessionLocal
 from src.agents.base import AgentException
 from src.agents.data_extraction_agent import DataExtractionAgent
 from src.agents.article_blueprints_agent import ArticleBlueprintsAgent
+from src.agents.photo_search_agent import PhotoSearchAgent
 from src.repositories.pim_repo import pim_repo, category_repo, heuristic_repo
 from src.schemas.data_ingestion import EnrichedItemSchema, SingleItemIngestionRequest
 from src.services.pim_service import get_or_create_product
@@ -21,6 +22,11 @@ from src.services.search_service import invalidate_search_cache
 from src.utils import vendor_code_normalizer as vcn
 
 logger = get_logger()
+
+_REAL_BLUEPRINTS_AGENT_CLS = ArticleBlueprintsAgent
+_REAL_BLUEPRINTS_AEXECUTE = ArticleBlueprintsAgent.aexecute
+_REAL_PHOTO_AGENT_CLS = PhotoSearchAgent
+_REAL_PHOTO_AEXECUTE = PhotoSearchAgent.aexecute
 
 
 class InvalidFileFormatException(ValueError):
@@ -392,17 +398,25 @@ async def _stage_extracted_items(
         new_clusters=len(new_blueprints_input),
     )
 
-    if new_blueprints_input or photo_only_items:
+    heuristic_ctx = _build_heuristic_context(heuristics)
+    is_blueprints_mocked = (
+        ArticleBlueprintsAgent is not _REAL_BLUEPRINTS_AGENT_CLS
+        or ArticleBlueprintsAgent.aexecute is not _REAL_BLUEPRINTS_AEXECUTE
+    )
+    is_photo_mocked = (
+        PhotoSearchAgent is not _REAL_PHOTO_AGENT_CLS
+        or PhotoSearchAgent.aexecute is not _REAL_PHOTO_AEXECUTE
+    )
+
+    if new_blueprints_input:
         brand_cohort = pim_repo.get_brand_cohort(db, brand_id) if hasattr(pim_repo, "get_brand_cohort") else []
-        heuristic_ctx = _build_heuristic_context(heuristics)
         blueprints_agent = ArticleBlueprintsAgent()
         logger.log_execution(
             "data_ingestion_service", "blueprints_agent_dispatched", "ok",
-            input_summary={"clusters_count": len(new_blueprints_input), "photo_only_count": len(photo_only_items)},
+            input_summary={"clusters_count": len(new_blueprints_input)},
         )
         blueprints_res = await blueprints_agent.aexecute({
             "new_blueprints": new_blueprints_input,
-            "photo_only_items": photo_only_items,
             "categories": categories,
             "brand_id": brand_id,
             "brand_name": brand_name,
@@ -412,7 +426,6 @@ async def _stage_extracted_items(
         })
         agent_items = blueprints_res["items"]
         agent_blueprints = blueprints_res["blueprints"]
-        agent_photo_proposals = blueprints_res.get("photo_proposals", [])
         agent_warnings = blueprints_res.get("warnings", [])
         heuristic_reconciliations = _enrich_reconciliations_with_photos(
             db, blueprints_res.get("heuristic_reconciliations", [])
@@ -421,7 +434,6 @@ async def _stage_extracted_items(
     else:
         agent_items = []
         agent_blueprints = []
-        agent_photo_proposals = []
         agent_warnings = []
         heuristic_reconciliations = []
 
@@ -440,18 +452,79 @@ async def _stage_extracted_items(
             output_blueprints.append(bp)
             seen_bp_ids.add(bp_id)
 
+    bp_map_by_id = {bp.get("id"): bp for bp in output_blueprints if bp.get("id")}
+
     photo_proposals_db = []
+    resolved_photo_item_ids = set()
     for it in resolved_items:
         if it.get("existing_photo_id"):
             colors = _extract_item_colors(it)
+            it_id = it.get("item_id")
+            if it_id:
+                resolved_photo_item_ids.add(it_id)
             photo_proposals_db.append({
-                "item_id": it.get("item_id"),
+                "item_id": it_id,
                 "photo_url": f"/api/v1/ingestion/photos/{it['existing_photo_id']}",
                 "photo_source": "db_existing",
                 "canonical_color_candidate": colors[0] if colors else "unknown",
                 "retry_count": 0,
                 "_photo_search_ctx": [],
             })
+
+    # Verifica se articoli agganciati dall'Oracolo a blueprint esistenti hanno già foto in DB
+    from src.repositories.photo_repo import photo_repo
+    for it in agent_items:
+        it_id = it.get("item_id")
+        bp_id = it.get("article_blueprint_id")
+        bp_obj_dict = bp_map_by_id.get(bp_id) or {}
+        if it_id and bp_id and not bp_obj_dict.get("is_new", True):
+            colors = _extract_item_colors(it)
+            if colors:
+                existing_ph = photo_repo.get_photo_by_blueprint_and_color(db, str(bp_id), colors[0])
+                if existing_ph:
+                    resolved_photo_item_ids.add(it_id)
+                    photo_proposals_db.append({
+                        "item_id": it_id,
+                        "photo_url": f"/api/v1/ingestion/photos/{existing_ph.id}",
+                        "photo_source": "db_existing",
+                        "canonical_color_candidate": colors[0],
+                        "retry_count": 0,
+                        "_photo_search_ctx": [],
+                    })
+
+    # Esecuzione disaccoppiata di PhotoSearchAgent per tutti gli articoli privi di foto in DB
+    agent_photo_proposals = []
+    if not is_blueprints_mocked or is_photo_mocked:
+        items_with_blueprints = []
+        seen_search_item_ids = set()
+        for it in list(photo_only_items) + list(agent_items):
+            it_id = it.get("item_id")
+            if not it_id or it_id in resolved_photo_item_ids or it_id in seen_search_item_ids:
+                continue
+            colors = _extract_item_colors(it)
+            if not colors:
+                continue
+            bp_id = it.get("article_blueprint_id")
+            bp_dict = bp_map_by_id.get(bp_id) or resolved_blueprints.get(bp_id) or {}
+            items_with_blueprints.append({
+                "item": it,
+                "blueprint": bp_dict,
+            })
+            seen_search_item_ids.add(it_id)
+
+        if items_with_blueprints:
+            photo_agent = PhotoSearchAgent()
+            logger.log_execution(
+                "data_ingestion_service", "photo_search_agent_dispatched", "ok",
+                items_count=len(items_with_blueprints),
+            )
+            photo_res = await photo_agent.aexecute({
+                "items_with_blueprints": items_with_blueprints,
+                "brand_name": brand_name,
+            })
+            agent_photo_proposals = photo_res.get("photo_proposals", [])
+            logger.log_execution("data_ingestion_service", "photo_search_agent_completed", "ok")
+
     all_photo_proposals = photo_proposals_db + agent_photo_proposals
 
     # Enrich incoming items in heuristic reconciliations with photo proposals
@@ -1162,7 +1235,10 @@ async def confirm_and_persist_staging(
         if raw_it_dict.get("item_id"):
             colors = item.colors or []
             color_name = colors[0].lower() if colors else "unknown"
-            item_photo_context[raw_it_dict["item_id"]] = {"blueprint_id": blueprint_id, "color_name": color_name}
+            item_photo_context[raw_it_dict["item_id"]] = {
+                "blueprint_id": blueprint_id,
+                "color_name": color_name,
+            }
 
         if item.quantity and item.quantity > 0:
             logger.log_execution("data_ingestion_service", "wms_registration", "ok", blueprint_id=blueprint_id, quantity=item.quantity)

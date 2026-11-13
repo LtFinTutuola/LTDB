@@ -18,7 +18,3 @@ class BlueprintsGraphState(BaseModel):
     output_blueprints: List[dict] = Field(default_factory=list, description="Final list of blueprints (existing and new).")
     warnings: List[str] = Field(default_factory=list, description="Non-fatal warnings.")
     heuristic_reconciliations: List[dict] = Field(default_factory=list, description="Heuristic induction & HITL reconciliation proposals.")
-    
-    # Photo Search
-    photo_only_items: List[dict] = Field(default_factory=list, description="Items con blueprint già noto ma senza foto. Solo color_photo_search_node li processa.")
-    photo_proposals: List[dict] = Field(default_factory=list, description="Proposte fotografiche per ogni item processato (sia new che photo_only).")

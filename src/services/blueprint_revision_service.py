@@ -24,15 +24,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.agents.article_blueprints_agent import ArticleBlueprintsAgent
-from src.agents.article_blueprints_agent.nodes.color_photo_search_node import (
-    _extract_best_url,
-    _validate_photo_url,
-    _SYSTEM_PROMPT_QUERY_GEN,
-    _SYSTEM_PROMPT_SEARCH,
-)
 from src.agents.base import AgentException
 from src.agents.codes_deduction_agent import CodesDeductionAgent
 from src.agents.llm_client import LLMClient
+from src.agents.photo_search_agent import PhotoSearchAgent
 from src.core.logger import get_logger
 from src.models.pim import ArticleBlueprint, ArticlePhoto, Brand, BrandHeuristic, Category
 from src.models.staging import JobStatus, JobType, StagingArea
@@ -1301,7 +1296,6 @@ async def _build_split_operation_plan(
             agent = ArticleBlueprintsAgent()
             agent_res = await agent.aexecute({
                 "new_blueprints": new_clusters_for_agent,
-                "photo_only_items": [],
                 "categories": categories_hierarchy,
                 "brand_name": brand_name,
                 "resolved_blueprints": {},
@@ -1727,44 +1721,20 @@ async def retry_or_set_staged_blueprint_photo(
         if art_groups:
             vendor_code = art_groups[0].get("supplier_code", "")
 
-        bp_info = (
-            f"Brand: {brand_name}\n"
-            f"Article Name: {article_name}\n"
-            f"Vendor Code: {vendor_code}\n"
-            f"Color: {norm_color}\n"
-            f"Description: {card.get('description', '')}"
-        )
-
-        if request.user_feedback:
-            prompt_content = f"L'utente ha fornito questo feedback:\n'{request.user_feedback}'\n\nUsa queste informazioni sull'articolo per generare una query di ricerca:\n{bp_info}"
-        else:
-            prompt_content = f"Genera una query di ricerca Google mirata per trovare l'immagine del prodotto:\n{bp_info}"
-
         client = LLMClient()
-        generated_query = await client.call(
-            model_name="gemini-3.1-flash-lite",
-            system_prompt=_SYSTEM_PROMPT_QUERY_GEN,
-            prompt=prompt_content,
-            pipeline_stage="Blueprint Revision - Photo Search Query Gen",
-            temperature=0.3,
-        )
-        generated_query = (generated_query or "").strip()
-
-        search_prompt = f"Esegui una ricerca su internet e trova una foto reale del prodotto usando questa query:\n{generated_query}"
-        raw_res, extracted_urls = await client.call_with_grounding(
-            model_name="gemini-3.1-flash-lite",
-            system_prompt=_SYSTEM_PROMPT_SEARCH,
-            prompt=search_prompt,
-            pipeline_stage="Blueprint Revision - Photo Search Grounded",
-            temperature=0.2,
-        )
-
-        raw_res_stripped = (raw_res or "").strip()
-        candidate_url = None if raw_res_stripped.upper() == "NULL" else _extract_best_url(extracted_urls, raw_res_stripped)
-        if candidate_url:
-            is_valid = await _validate_photo_url(candidate_url)
-            if not is_valid:
-                candidate_url = None
+        agent = PhotoSearchAgent(llm_client=client)
+        res = await agent.aexecute({
+            "item_id": target_id,
+            "brand_name": brand_name,
+            "vendor_code": vendor_code,
+            "color": norm_color,
+            "article_name": article_name,
+            "description": card.get("description", ""),
+            "user_feedback": request.user_feedback,
+            "mode": "revision",
+        })
+        prop = res.get("proposal", {})
+        candidate_url = prop.get("photo_url")
 
         if not candidate_url:
             raise HTTPException(

@@ -885,54 +885,7 @@ function _bindArticleModals() {
             const q = `${_editingItem.brand_name || ''} ${_extractBaseArticleName(_editingItem)} ${color}`.trim();
             const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`;
             window.open(searchUrl, '_blank', 'noopener,noreferrer');
-        });
-    }
-
-    const btnUrlDesktop = document.getElementById('btn-edit-art-manual-url');
-    if (btnUrlDesktop) {
-        btnUrlDesktop.addEventListener('click', async () => {
-            if (!_editingItem) return;
-            const url = prompt('Inserisci l\'URL dell\'immagine da impostare:');
-            if (!url || !url.trim()) return;
-            const color = document.getElementById('edit-article-color')?.value.trim() || (_editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '');
-            _showToast('Download foto in corso...', 'info');
-            try {
-                const res = await api.setCatalogPhotoUrl(_editingItem.blueprint_id, url.trim(), color);
-                if (res && res.photo_id) {
-                    api.invalidatePhotoCache(res.photo_id);
-                    _editingItem.photo_id = res.photo_id;
-                    _updateArticlePhotoPreview('desktop', res.photo_id, true);
-                    _showToast('Foto impostata con successo!');
-                    await _refreshWarehouseView();
-                }
-            } catch (err) {
-                _showToast(err.message || 'Impossibile scaricare la foto dall\'URL.', 'error');
-            }
-        });
-    }
-
-    const btnAiDesktop = document.getElementById('btn-edit-art-ai-search');
-    if (btnAiDesktop) {
-        btnAiDesktop.addEventListener('click', async () => {
-            if (!_editingItem) return;
-            const feedback = prompt('Descrivi la foto da cercare su Internet con l\'AI (opzionale):');
-            const color = document.getElementById('edit-article-color')?.value.trim() || (_editingItem.colors && _editingItem.colors.length > 0 ? _editingItem.colors[0] : '');
-            _showToast('Ricerca AI su Internet in corso...', 'info');
-            btnAiDesktop.disabled = true;
-            try {
-                const res = await api.searchCatalogPhoto(_editingItem.blueprint_id, color, feedback || null);
-                if (res && res.photo_id) {
-                    api.invalidatePhotoCache(res.photo_id);
-                    _editingItem.photo_id = res.photo_id;
-                    _updateArticlePhotoPreview('desktop', res.photo_id, true);
-                    _showToast('Foto trovata e impostata con successo!');
-                    await _refreshWarehouseView();
-                }
-            } catch (err) {
-                _showToast(err.message || 'Nessuna foto trovata con l\'AI.', 'error');
-            } finally {
-                btnAiDesktop.disabled = false;
-            }
+            _openCatalogPhotoUrlModal('desktop', _editingItem);
         });
     }
 
@@ -983,54 +936,7 @@ function _bindArticleModals() {
             const q = `${_currentMobileArticle.brand_name || ''} ${_extractBaseArticleName(_currentMobileArticle)} ${color}`.trim();
             const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`;
             window.open(searchUrl, '_blank', 'noopener,noreferrer');
-        });
-    }
-
-    const btnUrlMobile = document.getElementById('btn-mob-art-manual-url');
-    if (btnUrlMobile) {
-        btnUrlMobile.addEventListener('click', async () => {
-            if (!_currentMobileArticle) return;
-            const url = prompt('Inserisci l\'URL dell\'immagine da impostare:');
-            if (!url || !url.trim()) return;
-            const color = document.getElementById('mob-art-color')?.value.trim() || (_currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '');
-            _showToast('Download foto in corso...', 'info');
-            try {
-                const res = await api.setCatalogPhotoUrl(_currentMobileArticle.blueprint_id, url.trim(), color);
-                if (res && res.photo_id) {
-                    api.invalidatePhotoCache(res.photo_id);
-                    _currentMobileArticle.photo_id = res.photo_id;
-                    _updateArticlePhotoPreview('mobile', res.photo_id, true);
-                    _showToast('Foto impostata con successo!');
-                    await _refreshWarehouseView();
-                }
-            } catch (err) {
-                _showToast(err.message || 'Impossibile scaricare la foto dall\'URL.', 'error');
-            }
-        });
-    }
-
-    const btnAiMobile = document.getElementById('btn-mob-art-ai-search');
-    if (btnAiMobile) {
-        btnAiMobile.addEventListener('click', async () => {
-            if (!_currentMobileArticle) return;
-            const feedback = prompt('Descrivi la foto da cercare su Internet con l\'AI (opzionale):');
-            const color = document.getElementById('mob-art-color')?.value.trim() || (_currentMobileArticle.colors && _currentMobileArticle.colors.length > 0 ? _currentMobileArticle.colors[0] : '');
-            _showToast('Ricerca AI su Internet in corso...', 'info');
-            btnAiMobile.disabled = true;
-            try {
-                const res = await api.searchCatalogPhoto(_currentMobileArticle.blueprint_id, color, feedback || null);
-                if (res && res.photo_id) {
-                    api.invalidatePhotoCache(res.photo_id);
-                    _currentMobileArticle.photo_id = res.photo_id;
-                    _updateArticlePhotoPreview('mobile', res.photo_id, true);
-                    _showToast('Foto trovata e impostata con successo!');
-                    await _refreshWarehouseView();
-                }
-            } catch (err) {
-                _showToast(err.message || 'Nessuna foto trovata con l\'AI.', 'error');
-            } finally {
-                btnAiMobile.disabled = false;
-            }
+            _openCatalogPhotoUrlModal('mobile', _currentMobileArticle);
         });
     }
 }
@@ -1745,4 +1651,113 @@ function showArticleFullscreen(item) {
     }
 
     overlay.style.display = 'flex';
+}
+
+let _activeCatalogPhotoModal = null;
+
+function _closeCatalogPhotoUrlModal() {
+    const modal = document.getElementById('modal-catalog-photo-url');
+    if (modal) modal.classList.remove('active');
+    _activeCatalogPhotoModal = null;
+}
+
+function _initCatalogPhotoUrlModalListeners() {
+    const modal = document.getElementById('modal-catalog-photo-url');
+    if (!modal || modal._isBound) return;
+    modal._isBound = true;
+
+    const btnConfirm = document.getElementById('btn-confirm-catalog-photo-url');
+    const btnCancel = document.getElementById('btn-cancel-catalog-photo-url');
+    const btnClose = document.getElementById('btn-close-catalog-photo-url');
+    const input = document.getElementById('catalog-modal-photo-url-input');
+
+    btnConfirm?.addEventListener('click', _handleConfirmCatalogPhotoUrlModal);
+    btnCancel?.addEventListener('click', _closeCatalogPhotoUrlModal);
+    btnClose?.addEventListener('click', _closeCatalogPhotoUrlModal);
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) _closeCatalogPhotoUrlModal();
+    });
+
+    input?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            _handleConfirmCatalogPhotoUrlModal();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            _closeCatalogPhotoUrlModal();
+        }
+    });
+}
+
+function _openCatalogPhotoUrlModal(mode, article) {
+    _initCatalogPhotoUrlModalListeners();
+    _activeCatalogPhotoModal = { mode, article };
+
+    const modal = document.getElementById('modal-catalog-photo-url');
+    if (!modal) return;
+
+    const input = document.getElementById('catalog-modal-photo-url-input');
+    const errEl = document.getElementById('catalog-modal-photo-url-error');
+    const btnConfirm = document.getElementById('btn-confirm-catalog-photo-url');
+
+    if (input) input.value = '';
+    if (errEl) {
+        errEl.textContent = '';
+        errEl.style.display = 'none';
+    }
+    if (btnConfirm) {
+        btnConfirm.disabled = false;
+        btnConfirm.textContent = 'Applica Foto';
+    }
+
+    modal.classList.add('active');
+    setTimeout(() => input?.focus(), 100);
+}
+
+async function _handleConfirmCatalogPhotoUrlModal() {
+    if (!_activeCatalogPhotoModal) return;
+    const { mode, article } = _activeCatalogPhotoModal;
+    const input = document.getElementById('catalog-modal-photo-url-input');
+    const errEl = document.getElementById('catalog-modal-photo-url-error');
+    const btnConfirm = document.getElementById('btn-confirm-catalog-photo-url');
+
+    const url = input ? input.value.trim() : '';
+    if (!url) {
+        if (errEl) {
+            errEl.textContent = 'Inserisci un URL valido prima di applicare.';
+            errEl.style.display = 'block';
+        }
+        return;
+    }
+
+    if (errEl) errEl.style.display = 'none';
+    if (btnConfirm) {
+        btnConfirm.disabled = true;
+        btnConfirm.textContent = 'Download in corso...';
+    }
+
+    const colorInputId = mode === 'mobile' ? 'mob-art-color' : 'edit-article-color';
+    const color = document.getElementById(colorInputId)?.value.trim() || (article.colors && article.colors.length > 0 ? article.colors[0] : '');
+
+    try {
+        const res = await api.setCatalogPhotoUrl(article.blueprint_id, url, color);
+        if (res && res.photo_id) {
+            api.invalidatePhotoCache(res.photo_id);
+            article.photo_id = res.photo_id;
+            _updateArticlePhotoPreview(mode, res.photo_id, true);
+            _closeCatalogPhotoUrlModal();
+            _showToast('Foto impostata con successo!');
+            await _refreshWarehouseView();
+        }
+    } catch (err) {
+        if (errEl) {
+            errEl.textContent = `Errore: ${err.message || "Impossibile scaricare la foto dall'URL."}`;
+            errEl.style.display = 'block';
+        }
+        if (btnConfirm) {
+            btnConfirm.disabled = false;
+            btnConfirm.textContent = 'Applica Foto';
+        }
+    }
 }
