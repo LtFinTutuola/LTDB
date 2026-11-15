@@ -30,12 +30,27 @@ let _currentMobileItem = null;
 const LIST_FIELDS = new Set(['colors', 'tags', 'materials']);
 
 async function _ensureCategoryHierarchy(data) {
-    let brandId = data?.brand_id || null;
-    if (!brandId && data?.brand_name) {
+    let brandId = data?.brand_id || data?.data?.brand_id || null;
+    let brandName = data?.brand_name || data?.data?.brand_name || null;
+    if (!brandId && (data?.blueprints || data?.data?.blueprints)?.length > 0) {
+        const bps = data?.blueprints || data?.data?.blueprints || [];
+        brandId = bps[0]?.brand_id || null;
+    }
+    if (!brandId && brandName) {
         const local = (window.__LTDB_BRANDS__ || []).find(
-            x => (x.name || '').trim().toLowerCase() === String(data.brand_name).trim().toLowerCase()
+            x => (x.name || '').trim().toLowerCase() === String(brandName).trim().toLowerCase()
         );
         if (local) brandId = local.id;
+        if (!brandId) {
+            try {
+                const res = await api.getBrands();
+                const brands = Array.isArray(res) ? res : (res?.data || res?.brands || []);
+                const b = brands.find(x => (x.name || '').trim().toLowerCase() === String(brandName).trim().toLowerCase());
+                if (b) brandId = b.id;
+            } catch (e) {
+                console.error("Failed to fetch brands", e);
+            }
+        }
     }
     if (!brandId) {
         _categoryHierarchy = {};
@@ -76,18 +91,28 @@ function _resolveBlueprintCategoryLabels(bp) {
     let catDesc = _extractCatLabel(bp?.category);
     let subCatDesc = _extractCatLabel(bp?.sub_category);
     const hasHierarchy = Boolean(_categoryHierarchy && Object.keys(_categoryHierarchy).length > 0);
-    if (hasHierarchy && catDesc) {
+    if (hasHierarchy) {
         const macroKeys = Object.keys(_categoryHierarchy);
-        const isDirectMacro = macroKeys.some(m => m.trim().toLowerCase() === catDesc.toLowerCase());
-        if (!isDirectMacro) {
-            for (const m of macroKeys) {
-                const subs = Object.keys(_categoryHierarchy[m]?.sub_categories || {});
-                if (subs.some(s => s.trim().toLowerCase() === catDesc.toLowerCase())) {
-                    if (!subCatDesc || subCatDesc.toLowerCase() === catDesc.toLowerCase()) {
-                        subCatDesc = catDesc;
+        const matchedDirectMacro = macroKeys.find(m => m.trim().toLowerCase() === catDesc.toLowerCase());
+        if (matchedDirectMacro) {
+            catDesc = matchedDirectMacro;
+            const subs = Object.keys(_categoryHierarchy[matchedDirectMacro]?.sub_categories || {});
+            const matchedSub = subs.find(s => s.trim().toLowerCase() === subCatDesc.toLowerCase());
+            if (matchedSub) {
+                subCatDesc = matchedSub;
+            }
+        } else {
+            // Check if catDesc was actually a subcategory name, or if subCatDesc matches any macro's subcategory
+            const candidateSub = catDesc || subCatDesc;
+            if (candidateSub) {
+                for (const m of macroKeys) {
+                    const subs = Object.keys(_categoryHierarchy[m]?.sub_categories || {});
+                    const matchedSub = subs.find(s => s.trim().toLowerCase() === candidateSub.toLowerCase());
+                    if (matchedSub) {
+                        subCatDesc = matchedSub;
+                        catDesc = m;
+                        break;
                     }
-                    catDesc = m;
-                    break;
                 }
             }
         }
