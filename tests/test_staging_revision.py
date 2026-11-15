@@ -619,3 +619,126 @@ def test_update_blueprint_invalid_sub_category_parent(client, db_session):
     response = client.put(f"/api/v1/ingestion/staging/{job_id}", json=payload)
     assert response.status_code == 400
     assert "does not belong to category" in response.json()["detail"]
+
+
+def test_reassign_item_to_db_blueprint_uses_category_names(client, db_session):
+    job_id, brand_id, _, _, _, _, _ = _seed_staging_job(db_session)
+    macro = Category(name="Borse", description="Descrizione lunga macro Borse")
+    db_session.add(macro)
+    db_session.flush()
+    sub = Category(name="Hobo Bag", description="Descrizione lunga sub Hobo Bag", parent_id=macro.id)
+    db_session.add(sub)
+    db_session.flush()
+
+    db_bp = ArticleBlueprint(
+        brand_id=brand_id,
+        category_id=sub.id,
+        article_name="Hobo Esistente",
+        description="Desc",
+        extended_description="Ext",
+        tags=["hobo"],
+        materials=["pelle"],
+    )
+    db_session.add(db_bp)
+    db_session.commit()
+
+    payload = {
+        "operations": [
+            {"op": "reassign_item", "item_id": "item-1", "target_blueprint_id": str(db_bp.id)}
+        ]
+    }
+    response = client.put(f"/api/v1/ingestion/staging/{job_id}", json=payload)
+    assert response.status_code == 200
+    data = response.json()["data"]
+    added_bp = next(bp for bp in data["blueprints"] if bp["id"] == str(db_bp.id))
+    assert added_bp["category"] == {"id": str(macro.id), "description": "Borse"}
+    assert added_bp["sub_category"] == {"id": str(sub.id), "description": "Hobo Bag"}
+
+
+def test_confirm_heuristic_reconciliation_uses_category_names(client, db_session):
+    brand = Brand(name="Reconcile Brand")
+    db_session.add(brand)
+    db_session.flush()
+
+    macro = Category(name="Borse", description="Descrizione lunga macro Borse")
+    db_session.add(macro)
+    db_session.flush()
+    sub = Category(name="Hobo Bag", description="Descrizione lunga sub Hobo Bag", parent_id=macro.id)
+    db_session.add(sub)
+    db_session.flush()
+
+    db_bp = ArticleBlueprint(
+        brand_id=brand.id,
+        category_id=sub.id,
+        normalized_vendor_code="CA138C-#",
+        article_name="Borsa Hobo con manico regolabile",
+        description="Desc",
+        extended_description="Ext",
+        tags=["hobo"],
+        materials=["pelle"],
+    )
+    db_session.add(db_bp)
+    db_session.flush()
+
+    staging_bp_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+    rec_id = str(uuid.uuid4())
+    staging_data = {
+        "brand_id": str(brand.id),
+        "brand_name": brand.name,
+        "blueprints": [
+            {
+                "id": staging_bp_id,
+                "is_new": True,
+                "article_name": "Hobo Caleidos",
+                "description": "Desc",
+                "extended_description": "Ext",
+                "category": {"id": str(macro.id), "description": "Borse"},
+                "sub_category": {"id": str(sub.id), "description": "Hobo Bag"},
+                "tags": ["hobo"],
+                "materials": [],
+            }
+        ],
+        "items": [
+            {
+                "item_id": "item-rec-1",
+                "vendor_code": "CA138C-01DB",
+                "quantity": 1,
+                "article_blueprint_id": staging_bp_id,
+            }
+        ],
+        "heuristic_reconciliations": [
+            {
+                "reconciliation_id": rec_id,
+                "status": "PENDING_USER_CONFIRMATION",
+                "requires_confirmation": True,
+                "kind": "DISAMBIGUATION",
+                "staging_blueprint_ids": [staging_bp_id],
+                "incoming_items": [{"item_id": "item-rec-1", "vendor_code": "CA138C-01DB"}],
+                "merge_target_blueprint_id": str(db_bp.id),
+                "matched_db_blueprints": [{"id": str(db_bp.id), "article_name": db_bp.article_name}],
+            }
+        ],
+    }
+    job = StagingArea(
+        id=job_id,
+        status=JobStatus.COMPLETED.value,
+        file_path="/dummy/path.pdf",
+        data=staging_data,
+        revision_count=0,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    payload = {
+        "operations": [
+            {"op": "confirm_heuristic_reconciliation", "reconciliation_id": rec_id}
+        ]
+    }
+    response = client.put(f"/api/v1/ingestion/staging/{job_id}", json=payload)
+    assert response.status_code == 200
+    data = response.json()["data"]
+    resolved_bp = next(bp for bp in data["blueprints"] if bp["id"] == str(db_bp.id))
+    assert resolved_bp["is_new"] is False
+    assert resolved_bp["category"] == {"id": str(macro.id), "description": "Borse"}
+    assert resolved_bp["sub_category"] == {"id": str(sub.id), "description": "Hobo Bag"}

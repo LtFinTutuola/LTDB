@@ -1038,10 +1038,10 @@ def _resolve_blueprint_ref(
                 parent_cat = db.query(Category).filter(Category.id == db_bp.category.parent_id).first()
 
             if parent_cat:
-                cat_dict = {"id": str(parent_cat.id), "description": parent_cat.description}
-                sub_cat_dict = {"id": str(db_bp.category.id), "description": db_bp.category.description}
+                cat_dict = {"id": str(parent_cat.id), "description": parent_cat.name}
+                sub_cat_dict = {"id": str(db_bp.category.id), "description": db_bp.category.name}
             else:
-                cat_dict = {"id": str(db_bp.category.id), "description": db_bp.category.description}
+                cat_dict = {"id": str(db_bp.category.id), "description": db_bp.category.name}
 
         # Auto-add to staging with is_new=False and full attributes
         staging_data["blueprints"].append({

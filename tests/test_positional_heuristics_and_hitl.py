@@ -705,6 +705,7 @@ class TestHeuristicInductionAndHITL:
 
     def test_resolve_blueprint_ref_populates_full_metadata(self, db_session):
         brand, cat, batch = self._setup_catalog(db_session, "BrandMetaResolve")
+        cat.description = "Descrizione estesa macro Borse"
         sub_cat = Category(name="SubBorse", description="Borse a Spalla", parent_id=cat.id)
         db_session.add(sub_cat)
         db_session.commit()
@@ -732,12 +733,39 @@ class TestHeuristicInductionAndHITL:
         assert staged_bp["id"] == str(bp_db.id)
         assert staged_bp["is_new"] is False
         assert staged_bp["article_name"] == "Mandarina Duck MD20 Shoulder"
-        assert staged_bp["category"] == {"id": str(cat.id), "description": cat.description}
-        assert staged_bp["sub_category"] == {"id": str(sub_cat.id), "description": sub_cat.description}
+        assert staged_bp["category"] == {"id": str(cat.id), "description": cat.name}
+        assert staged_bp["sub_category"] == {"id": str(sub_cat.id), "description": sub_cat.name}
         assert staged_bp["tags"] == ["tracolla", "md20"]
         assert staged_bp["materials"] == ["poliestere", "metallo"]
         assert staged_bp["extended_description"] == "Borsa a tracolla classica in jacquard resistente"
         assert staged_bp["normalized_vendor_code"] == "MD20_SHOULDER"
+
+    def test_resolve_blueprint_ref_macro_only_uses_category_name(self, db_session):
+        brand, cat, _ = self._setup_catalog(db_session, "BrandMacroResolve")
+        cat.description = "Descrizione lunga della macro categoria Borse"
+        db_session.commit()
+
+        bp_db = ArticleBlueprint(
+            brand_id=brand.id,
+            category_id=cat.id,
+            normalized_vendor_code="MACRO_ONLY_01",
+            article_name="Borsa Macro",
+            description="Borsa",
+            extended_description="Borsa estesa",
+            tags=["borsa"],
+            materials=["pelle"],
+        )
+        db_session.add(bp_db)
+        db_session.commit()
+
+        staging_data = {"blueprints": [], "items": []}
+        from src.services.staging_revision_service import _resolve_blueprint_ref
+        resolved_id = _resolve_blueprint_ref(str(bp_db.id), {}, staging_data, db_session, 0, "test")
+
+        assert resolved_id == str(bp_db.id)
+        staged_bp = staging_data["blueprints"][0]
+        assert staged_bp["category"] == {"id": str(cat.id), "description": cat.name}
+        assert staged_bp["sub_category"] is None
 
     def test_enrich_reconciliations_with_photos_populates_db_and_incoming_photos(self, db_session):
         brand, cat, batch = self._setup_catalog(db_session, "BrandPhotoEnrich")
