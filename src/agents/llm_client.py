@@ -35,6 +35,115 @@ def _load_gemini_config() -> dict:
         return yaml.safe_load(f)
 
 
+def _safe_dump(obj: Any) -> Any:
+    """Safely convert a Pydantic/SDK model to JSON-serializable primitives."""
+    if obj is None:
+        return None
+    if isinstance(obj, (dict, list, str, int, float, bool)):
+        return obj
+    model_dump = getattr(obj, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump(mode="json", exclude_none=True)
+            if isinstance(dumped, (dict, list, str, int, float, bool)):
+                return dumped
+        except Exception:
+            pass
+    return None
+
+
+def _extract_response_telemetry(response: Any) -> dict[str, Any]:
+    """Extract token usage, grounding metadata, and tool/part details from a GenAI response."""
+    meta = getattr(response, "usage_metadata", None)
+    input_tokens = getattr(meta, "prompt_token_count", None) if meta else None
+    output_tokens = getattr(meta, "candidates_token_count", None) if meta else None
+    tool_use_prompt_tokens = getattr(meta, "tool_use_prompt_token_count", None) if meta else None
+    thoughts_tokens = getattr(meta, "thoughts_token_count", None) if meta else None
+    total_tokens = getattr(meta, "total_token_count", None) if meta else None
+
+    candidates = getattr(response, "candidates", None) or []
+    candidate = candidates[0] if candidates else None
+
+    finish_reason = None
+    finish_message = None
+    gm = None
+    url_context_metadata = None
+    citation_metadata = None
+    tool_parts: list[dict[str, Any]] = []
+
+    if candidate is not None:
+        raw_finish = getattr(candidate, "finish_reason", None)
+        finish_reason = str(raw_finish) if raw_finish is not None else None
+        finish_message = getattr(candidate, "finish_message", None)
+        if not isinstance(finish_message, (str, type(None))):
+            finish_message = str(finish_message)
+        gm = getattr(candidate, "grounding_metadata", None)
+        url_context_metadata = _safe_dump(getattr(candidate, "url_context_metadata", None))
+        citation_metadata = _safe_dump(getattr(candidate, "citation_metadata", None))
+
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or []
+        for part in parts:
+            part_info: dict[str, Any] = {}
+            for field in ("tool_call", "tool_response", "function_call", "function_response"):
+                val = _safe_dump(getattr(part, field, None))
+                if val is not None:
+                    part_info[field] = val
+            if part_info:
+                tool_parts.append(part_info)
+
+    extracted_urls: list[str] = []
+    web_queries: list[str] = []
+    image_queries: list[str] = []
+    retrieval_queries: list[str] = []
+    grounding_metadata = _safe_dump(gm)
+
+    if gm is not None:
+        for chunk in getattr(gm, "grounding_chunks", None) or []:
+            web = getattr(chunk, "web", None)
+            if web is not None:
+                uri = getattr(web, "uri", None) or getattr(web, "title", None)
+                if uri:
+                    extracted_urls.append(uri)
+
+        web_queries = list(getattr(gm, "web_search_queries", None) or [])
+        image_queries = list(getattr(gm, "image_search_queries", None) or [])
+        retrieval_queries = list(getattr(gm, "retrieval_queries", None) or [])
+
+    query_usage = len(web_queries) + len(image_queries) + len(retrieval_queries)
+    has_grounding_evidence = bool(
+        query_usage > 0
+        or extracted_urls
+        or (
+            isinstance(grounding_metadata, dict)
+            and (
+                grounding_metadata.get("grounding_chunks")
+                or grounding_metadata.get("grounding_supports")
+                or grounding_metadata.get("retrieval_metadata")
+            )
+        )
+        or (isinstance(tool_use_prompt_tokens, int) and tool_use_prompt_tokens > 0)
+        or tool_parts
+    )
+
+    return {
+        "input_tokens": input_tokens if isinstance(input_tokens, int) else 0,
+        "output_tokens": output_tokens if isinstance(output_tokens, int) else 0,
+        "tool_use_prompt_tokens": tool_use_prompt_tokens if isinstance(tool_use_prompt_tokens, int) else 0,
+        "thoughts_tokens": thoughts_tokens if isinstance(thoughts_tokens, int) else 0,
+        "total_tokens": total_tokens if isinstance(total_tokens, int) else 0,
+        "query_usage": query_usage,
+        "grounding_detected": has_grounding_evidence,
+        "extracted_urls": extracted_urls,
+        "grounding_metadata": grounding_metadata,
+        "url_context_metadata": url_context_metadata,
+        "citation_metadata": citation_metadata,
+        "tool_parts": tool_parts,
+        "finish_reason": finish_reason,
+        "finish_message": finish_message,
+    }
+
+
 class LLMCallRecord:
     """Lightweight container for a single LLM call's telemetry."""
 
@@ -151,34 +260,48 @@ class LLMClient:
 
         # --- Telemetry ---
         call_id = str(uuid.uuid4())
-        meta = response.usage_metadata
-        input_tokens = meta.prompt_token_count if meta else 0
-        output_tokens = meta.candidates_token_count if meta else 0
-
-        query_usage = 0
-        if response.candidates and response.candidates[0].grounding_metadata:
-            gm = response.candidates[0].grounding_metadata
-            if hasattr(gm, "web_search_queries") and gm.web_search_queries:
-                query_usage = len(gm.web_search_queries)
+        telemetry = _extract_response_telemetry(response)
+        output_text = response.text or ""
 
         record = LLMCallRecord(
             call_id=call_id,
             pipeline_stage=pipeline_stage,
             model_name=model_name,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            query_usage=query_usage,
+            input_tokens=telemetry["input_tokens"],
+            output_tokens=telemetry["output_tokens"],
+            query_usage=telemetry["query_usage"],
             prompt=prompt,
-            output=response.text or "",
+            output=output_text,
         )
         self._logs.append(record)
-        
-        logger.log_llm("LLMClient", "generate_content", "ok", 
-                       call_id=call_id, pipeline_stage=pipeline_stage, model_name=model_name,
-                       tokens_in=input_tokens, tokens_out=output_tokens, query_usage=query_usage,
-                       prompt=prompt, output=response.text or "")
 
-        return response.text or ""
+        log_kwargs: dict[str, Any] = {
+            "call_id": call_id,
+            "pipeline_stage": pipeline_stage,
+            "model_name": model_name,
+            "tokens_in": telemetry["input_tokens"],
+            "tokens_out": telemetry["output_tokens"],
+            "tool_use_prompt_tokens": telemetry["tool_use_prompt_tokens"],
+            "thoughts_tokens": telemetry["thoughts_tokens"],
+            "query_usage": telemetry["query_usage"],
+            "temperature": temperature,
+            "max_output_tokens": max_output_tokens,
+            "system_prompt": system_prompt,
+            "prompt": prompt,
+            "output": output_text,
+            "finish_reason": telemetry["finish_reason"],
+        }
+        if tools or telemetry["grounding_detected"]:
+            log_kwargs["tools"] = [_safe_dump(t) if _safe_dump(t) is not None else t for t in (tools or [])]
+            log_kwargs["grounding_detected"] = telemetry["grounding_detected"]
+            log_kwargs["grounding_metadata"] = telemetry["grounding_metadata"]
+            log_kwargs["extracted_urls"] = telemetry["extracted_urls"]
+            if telemetry["tool_parts"]:
+                log_kwargs["tool_parts"] = telemetry["tool_parts"]
+
+        logger.log_llm("LLMClient", "generate_content", "ok", **log_kwargs)
+
+        return output_text
 
     async def call_with_grounding(
         self,
@@ -213,46 +336,54 @@ class LLMClient:
             config=gen_config,
         )
 
-        # Extract grounding URLs
-        extracted_urls: list[str] = []
-        if response.candidates and response.candidates[0].grounding_metadata:
-            gm = response.candidates[0].grounding_metadata
-            if hasattr(gm, "grounding_chunks"):
-                for chunk in gm.grounding_chunks:
-                    if hasattr(chunk, "web") and chunk.web:
-                        uri = getattr(chunk.web, "uri", None) or getattr(chunk.web, "title", None)
-                        if uri:
-                            extracted_urls.append(uri)
-
-        # Telemetry
+        # --- Telemetry ---
         call_id = str(uuid.uuid4())
-        meta = response.usage_metadata
-        input_tokens = meta.prompt_token_count if meta else 0
-        output_tokens = meta.candidates_token_count if meta else 0
-        query_usage = 0
-        if response.candidates and response.candidates[0].grounding_metadata:
-            gm = response.candidates[0].grounding_metadata
-            if hasattr(gm, "web_search_queries") and gm.web_search_queries:
-                query_usage = len(gm.web_search_queries)
+        telemetry = _extract_response_telemetry(response)
+        extracted_urls = telemetry["extracted_urls"]
+        output_text = response.text or ""
 
         record = LLMCallRecord(
             call_id=call_id,
             pipeline_stage=pipeline_stage,
             model_name=model_name,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            query_usage=query_usage,
+            input_tokens=telemetry["input_tokens"],
+            output_tokens=telemetry["output_tokens"],
+            query_usage=telemetry["query_usage"],
             prompt=prompt,
-            output=response.text or "",
+            output=output_text,
         )
         self._logs.append(record)
-        
-        logger.log_llm("LLMClient", "generate_content_grounded", "ok", 
-                       call_id=call_id, pipeline_stage=pipeline_stage, model_name=model_name,
-                       tokens_in=input_tokens, tokens_out=output_tokens, query_usage=query_usage,
-                       prompt=prompt, output=response.text or "", extracted_urls=extracted_urls)
 
-        return response.text or "", extracted_urls
+        logger.log_llm(
+            "LLMClient",
+            "generate_content_grounded",
+            "ok",
+            call_id=call_id,
+            pipeline_stage=pipeline_stage,
+            model_name=model_name,
+            tokens_in=telemetry["input_tokens"],
+            tokens_out=telemetry["output_tokens"],
+            tool_use_prompt_tokens=telemetry["tool_use_prompt_tokens"],
+            thoughts_tokens=telemetry["thoughts_tokens"],
+            total_tokens=telemetry["total_tokens"],
+            query_usage=telemetry["query_usage"],
+            grounding_detected=telemetry["grounding_detected"],
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            tools=config_kwargs["tools"],
+            system_prompt=system_prompt,
+            prompt=prompt,
+            output=output_text,
+            extracted_urls=extracted_urls,
+            grounding_metadata=telemetry["grounding_metadata"],
+            url_context_metadata=telemetry["url_context_metadata"],
+            citation_metadata=telemetry["citation_metadata"],
+            tool_parts=telemetry["tool_parts"],
+            finish_reason=telemetry["finish_reason"],
+            finish_message=telemetry["finish_message"],
+        )
+
+        return output_text, extracted_urls
 
     def get_logs(self) -> list[dict]:
         """Return all recorded LLM call telemetry as a list of dicts."""
