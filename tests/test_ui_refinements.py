@@ -137,14 +137,21 @@ def test_staging_and_warehouse_javascript_validity():
     if not node_bin:
         pytest.skip("Node.js is not installed on system")
 
-    # Verify that the core files parse as valid ES modules without SyntaxErrors
+    # Verify that all core UI ES modules parse cleanly without SyntaxErrors
     check_code = """
-    try {
-        await import('./src/static/js/staging.js');
-    } catch (e) {
-        if (e instanceof SyntaxError) {
-            console.error('SyntaxError in staging.js:', e);
-            process.exit(1);
+    for (const file of [
+        './src/static/js/main.js',
+        './src/static/js/staging.js',
+        './src/static/js/warehouse.js',
+        './src/static/js/blueprint_revision.js',
+    ]) {
+        try {
+            await import(file);
+        } catch (e) {
+            if (e instanceof SyntaxError) {
+                console.error('SyntaxError in ' + file + ':', e);
+                process.exit(1);
+            }
         }
     }
     """
@@ -153,10 +160,7 @@ def test_staging_and_warehouse_javascript_validity():
         capture_output=True,
         text=True,
     )
-    assert res.returncode == 0, f"staging.js syntax check failed: {res.stderr}"
-
-
-
+    assert res.returncode == 0, f"JS module syntax check failed: {res.stderr}"
 
 
 def test_staging_photo_buttons_directly_under_preview():
@@ -166,3 +170,76 @@ def test_staging_photo_buttons_directly_under_preview():
         if 'class="btn-search-photo"' in line or 'class="btn-upload-photo"' in line:
             assert "margin-top:auto" not in line
     assert "window.__LTDB_BRANDS__" in content
+
+
+def test_staging_and_blueprint_revision_category_hierarchy_per_brand():
+    """
+    Verify category hierarchies in staging.js and blueprint_revision.js are cached per brand_id
+    (never latched on empty/other brand state) and always preserve a selected fallback option.
+    """
+    from pathlib import Path
+
+    staging_js = Path("src/static/js/staging.js").read_text(encoding="utf-8")
+    assert "_categoryHierarchyByBrand" in staging_js
+    assert "_ensureCategoryHierarchy" in staging_js
+    assert "if (_stagingData.brand_id && !_categoryHierarchy)" not in staging_js
+    assert "_extractCatLabel" in staging_js
+    assert "_buildMacroOptionsHtml" in staging_js
+    assert "_buildSubCatOptionsHtml" in staging_js
+    assert "if (catDesc && !matchedMacro)" in staging_js
+    assert "if (selectedSub && !matchedSub)" in staging_js
+
+    bp_rev_js = Path("src/static/js/blueprint_revision.js").read_text(encoding="utf-8")
+    assert "_categoryHierarchyByBrand" in bp_rev_js
+    assert "_categoryHierarchyBrandId" in bp_rev_js
+    assert "if (brandId && !_categoryHierarchy)" not in bp_rev_js
+    assert "if (catName && !matchedKey)" in bp_rev_js
+    assert "if (subCatName && !matchedSub)" in bp_rev_js
+
+
+def test_toast_positioning_avoids_staging_footer_and_header_actions():
+    """
+    Toast notifications in main.js and warehouse.js must use top-center non-blocking positioning
+    so they never obscure 'Conferma e importa' (bottom-right) or header action buttons (top-right).
+    """
+    from pathlib import Path
+
+    main_js = Path("src/static/js/main.js").read_text(encoding="utf-8")
+    assert "ltdb-toast-container" in main_js
+    assert "toast.style.bottom = '20px'" not in main_js
+    assert "toast.style.right = '20px'" not in main_js
+    assert "container.style.top = '16px'" in main_js
+    assert "container.style.left = '50%'" in main_js
+    assert "container.style.pointerEvents = 'none'" in main_js
+
+    wh_js = Path("src/static/js/warehouse.js").read_text(encoding="utf-8")
+    assert "toast.style.bottom = '24px'" not in wh_js
+    assert "toast.style.right = '24px'" not in wh_js
+    assert "toast.style.top = '16px'" in wh_js
+    assert "toast.style.left = '50%'" in wh_js
+    assert "toast.style.pointerEvents = 'none'" in wh_js
+
+
+def test_blueprint_revision_photo_flow_unified_with_staging():
+    """
+    Verify blueprint_revision.js removes legacy 'Inserisci URL' / 'Riprova' buttons and unifies
+    photo selection around 'Cerca' (Google Images + URL modal) and 'Carica Foto'.
+    """
+    from pathlib import Path
+
+    bp_rev_js = Path("src/static/js/blueprint_revision.js").read_text(encoding="utf-8")
+    assert "btn-manual-photo" not in bp_rev_js
+    assert "btn-retry-photo" not in bp_rev_js
+    assert "🔗 Inserisci URL" not in bp_rev_js
+    assert "🔄 Riprova" not in bp_rev_js
+    assert "btn-search-photo" in bp_rev_js
+    assert "btn-upload-photo" in bp_rev_js
+    assert "_openBpRevPhotoUrlModal" in bp_rev_js
+    assert "modal-bp-rev-photo-url" in bp_rev_js
+
+    workspace_css = Path("src/static/css/workspace.css").read_text(encoding="utf-8")
+    assert ".btn-retry-photo" not in workspace_css
+    assert ".btn-manual-photo" not in workspace_css
+
+    index_html = Path("src/templates/index.html").read_text(encoding="utf-8")
+    assert "main.js?v=20261113_1" in index_html

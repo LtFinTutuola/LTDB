@@ -73,8 +73,10 @@ function _esc(str) {
 function _showToast(message, type = 'success') {
     const toast = document.createElement('div');
     toast.style.position = 'fixed';
-    toast.style.bottom = '24px';
-    toast.style.right = '24px';
+    toast.style.top = '16px';
+    toast.style.left = '50%';
+    toast.style.transform = 'translateX(-50%)';
+    toast.style.maxWidth = 'calc(100vw - 32px)';
     toast.style.padding = '12px 20px';
     toast.style.borderRadius = 'var(--radius-sm)';
     toast.style.background = type === 'error' ? 'var(--error)' : 'var(--bg-elevated)';
@@ -82,6 +84,7 @@ function _showToast(message, type = 'success') {
     toast.style.border = type === 'error' ? '1px solid var(--error)' : '1px solid var(--border-color)';
     toast.style.boxShadow = '0 8px 16px rgba(0,0,0,0.3)';
     toast.style.zIndex = '13000';
+    toast.style.pointerEvents = 'none';
     toast.style.fontSize = '13px';
     toast.style.display = 'flex';
     toast.style.alignItems = 'center';

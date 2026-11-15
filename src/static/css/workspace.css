@@ -338,10 +338,8 @@
     color: var(--error);
 }
 
-.btn-retry-photo,
 .btn-search-photo,
-.btn-upload-photo,
-.btn-manual-photo {
+.btn-upload-photo {
     background: var(--bg-surface);
     border: 1px solid rgba(255, 255, 255, 0.12);
     color: var(--text-secondary);
@@ -358,10 +356,8 @@
     gap: 6px;
 }
 
-.btn-retry-photo:hover,
 .btn-search-photo:hover,
-.btn-upload-photo:hover,
-.btn-manual-photo:hover {
+.btn-upload-photo:hover {
     border-color: var(--accent);
     color: var(--accent);
     background: var(--bg-elevated);

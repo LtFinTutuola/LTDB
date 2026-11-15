@@ -29,6 +29,8 @@ let _activeAfterPhotoIndices = {};
 let _skipRuleDeduction = false;
 let _relatedBlueprintIds = [];
 let _categoryHierarchy = null;
+let _categoryHierarchyBrandId = null;
+const _categoryHierarchyByBrand = {};
 
 
 
@@ -417,6 +419,7 @@ export async function openBlueprintRevision(blueprintId, onComplete = null, opti
     _currentRuleResponse = null;
     _currentStagingJob = null;
     _categoryHierarchy = null;
+    _categoryHierarchyBrandId = null;
     _relatedBlueprintIds = Array.isArray(options.relatedBlueprintIds) ? options.relatedBlueprintIds : [];
 
 
@@ -1109,16 +1112,30 @@ async function _renderStep3BeforeAfterStaging() {
     if (!panel || !_currentStagingJob) return;
 
     const brandId = _currentStagingJob.brand_id || _currentContext?.brand_id;
-    if (brandId && !_categoryHierarchy) {
-        try {
-            const res = await api.getBrandCategories(brandId);
-            _categoryHierarchy = res.data || res || {};
-        } catch (e) {
-            console.error("Impossibile caricare le categorie del brand per la staging area:", e);
-            _categoryHierarchy = {};
+    if (brandId) {
+        if (_categoryHierarchyByBrand[brandId] && Object.keys(_categoryHierarchyByBrand[brandId]).length > 0) {
+            _categoryHierarchy = _categoryHierarchyByBrand[brandId];
+            _categoryHierarchyBrandId = brandId;
+        } else if (_categoryHierarchyBrandId !== brandId || !_categoryHierarchy || Object.keys(_categoryHierarchy).length === 0) {
+            try {
+                const res = await api.getBrandCategories(brandId);
+                const fetched = (res && typeof res === 'object' && res.data && typeof res.data === 'object' && !res.sub_categories)
+                    ? res.data
+                    : (res || {});
+                _categoryHierarchy = (fetched && typeof fetched === 'object') ? fetched : {};
+                _categoryHierarchyBrandId = brandId;
+                if (Object.keys(_categoryHierarchy).length > 0) {
+                    _categoryHierarchyByBrand[brandId] = _categoryHierarchy;
+                }
+            } catch (e) {
+                console.error("Impossibile caricare le categorie del brand per la staging area:", e);
+                _categoryHierarchy = {};
+                _categoryHierarchyBrandId = null;
+            }
         }
-    } else if (!_categoryHierarchy) {
+    } else {
         _categoryHierarchy = {};
+        _categoryHierarchyBrandId = null;
     }
 
     const plan = _currentStagingJob.reconciliation_plan || {};
@@ -1314,10 +1331,8 @@ function _renderPhotoColHtml(targetId, articleGroups = [], articleName = '') {
                 ${imgHtml}
             </div>
             ${navHtml}
-            <button type="button" class="btn-search-photo btn-secondary" data-target-id="${_esc(targetId)}" data-search-query="${_esc(searchQuery)}" style="margin-top:${articleGroups.length > 1 ? '4px' : '8px'};padding:4px 8px;font-size:11px;width:100%;" title="Cerca su Google">🔍 Cerca</button>
+            <button type="button" class="btn-search-photo btn-secondary" data-target-id="${_esc(targetId)}" data-color="${_esc(colorLabel)}" data-search-query="${_esc(searchQuery)}" style="margin-top:${articleGroups.length > 1 ? '4px' : '8px'};padding:4px 8px;font-size:11px;width:100%;" title="Cerca immagini su Google e applica URL">🔍 Cerca</button>
             <button type="button" class="btn-upload-photo btn-secondary" data-target-id="${_esc(targetId)}" data-color="${_esc(colorLabel)}" style="margin-top:4px;padding:4px 8px;font-size:11px;width:100%;" title="Carica foto dal dispositivo">📁 Carica Foto</button>
-            <button type="button" class="btn-manual-photo btn-secondary" data-target-id="${_esc(targetId)}" data-color="${_esc(colorLabel)}" style="margin-top:4px;padding:4px 8px;font-size:11px;width:100%;">🔗 Inserisci URL</button>
-            <button type="button" class="btn-retry-photo btn-secondary" data-target-id="${_esc(targetId)}" data-color="${_esc(colorLabel)}" style="margin-top:4px;padding:4px 8px;font-size:11px;width:100%;">🔄 Riprova</button>
         </div>
     `;
 }
@@ -1331,20 +1346,35 @@ function _renderCategoryDropdownsHtml(targetId, currentCat, currentSubCat) {
     let subCatOpts = '<option value="">-- Nessuna Sotto Categoria --</option>';
 
     if (hasHierarchy) {
+        let matchedKey = null;
         catOpts += Object.keys(_categoryHierarchy)
             .sort((a, b) => a.localeCompare(b, 'it', { sensitivity: 'base' }))
-            .map((c) => `<option value="${_esc(c)}" ${c.toLowerCase() === catName.toLowerCase() ? 'selected' : ''}>${_esc(c)}</option>`)
+            .map((c) => {
+                const isSel = Boolean(catName) && c.toLowerCase() === catName.toLowerCase();
+                if (isSel) matchedKey = c;
+                return `<option value="${_esc(c)}" ${isSel ? 'selected' : ''}>${_esc(c)}</option>`;
+            })
             .join('');
+        if (catName && !matchedKey) {
+            catOpts += `<option value="${_esc(catName)}" selected>${_esc(catName)}</option>`;
+        }
 
-        const matchedKey = Object.keys(_categoryHierarchy).find((k) => k.toLowerCase() === catName.toLowerCase());
         const subCats = (matchedKey && _categoryHierarchy[matchedKey])
             ? (_categoryHierarchy[matchedKey].sub_categories || {})
             : {};
         const subKeys = Object.keys(subCats).sort((a, b) => a.localeCompare(b, 'it', { sensitivity: 'base' }));
 
+        let matchedSub = false;
         subCatOpts += subKeys
-            .map((sc) => `<option value="${_esc(sc)}" ${sc.toLowerCase() === subCatName.toLowerCase() ? 'selected' : ''}>${_esc(sc)}</option>`)
+            .map((sc) => {
+                const isSel = Boolean(subCatName) && sc.toLowerCase() === subCatName.toLowerCase();
+                if (isSel) matchedSub = true;
+                return `<option value="${_esc(sc)}" ${isSel ? 'selected' : ''}>${_esc(sc)}</option>`;
+            })
             .join('');
+        if (subCatName && !matchedSub) {
+            subCatOpts += `<option value="${_esc(subCatName)}" selected>${_esc(subCatName)}</option>`;
+        }
     } else {
         if (catName) {
             catOpts += `<option value="${_esc(catName)}" selected>${_esc(catName)}</option>`;
@@ -1508,6 +1538,146 @@ function _renderSplitBeforeAfterCardHtml(splitOp, badgeTitle, isPrimary) {
     `;
 }
 
+let _activeBpRevPhotoModal = null;
+
+function _closeBpRevPhotoUrlModal() {
+    const modal = document.getElementById('modal-bp-rev-photo-url');
+    if (modal) modal.classList.remove('active');
+    _activeBpRevPhotoModal = null;
+}
+
+function _ensureBpRevPhotoUrlModal() {
+    let modal = document.getElementById('modal-bp-rev-photo-url');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'modal-bp-rev-photo-url';
+        modal.className = 'modal-backdrop';
+        modal.innerHTML = `
+            <div class="modal-card" style="max-width: 500px;">
+                <div class="modal-header">
+                    <h3 class="modal-title" style="color: var(--text-primary);">
+                        <span class="material-symbols-rounded" style="color: var(--accent);">add_photo_alternate</span>
+                        Inserisci URL Foto Prodotto
+                    </h3>
+                    <button id="btn-close-bp-rev-photo-url" class="modal-close" type="button" title="Chiudi">
+                        <span class="material-symbols-rounded">close</span>
+                    </button>
+                </div>
+                <div class="modal-body" style="font-size: 14px; line-height: 1.5; color: var(--text-primary);">
+                    <p style="margin-bottom: 12px; color: var(--text-secondary); font-size: 13px;">
+                        È stata aperta una ricerca immagini su Google in una nuova scheda.<br>
+                        Fai clic destro sull'immagine desiderata, seleziona <strong>"Copia indirizzo dell'immagine"</strong> e incollalo nel campo sottostante:
+                    </p>
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                        <label for="bp-rev-modal-photo-url-input" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">URL Immagine *</label>
+                        <input type="url" id="bp-rev-modal-photo-url-input" class="form-control" placeholder="https://..." style="width: 100%; box-sizing: border-box;" required>
+                    </div>
+                    <div id="bp-rev-modal-photo-url-error" style="color: var(--error); font-size: 12px; margin-top: 8px; display: none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" id="btn-cancel-bp-rev-photo-url" class="btn-secondary">Annulla</button>
+                    <button type="button" id="btn-confirm-bp-rev-photo-url" class="btn-primary">Applica Foto</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+
+    if (!modal._isBound) {
+        modal._isBound = true;
+        const btnConfirm = document.getElementById('btn-confirm-bp-rev-photo-url');
+        const btnCancel = document.getElementById('btn-cancel-bp-rev-photo-url');
+        const btnClose = document.getElementById('btn-close-bp-rev-photo-url');
+        const input = document.getElementById('bp-rev-modal-photo-url-input');
+
+        btnConfirm?.addEventListener('click', _handleConfirmBpRevPhotoUrlModal);
+        btnCancel?.addEventListener('click', _closeBpRevPhotoUrlModal);
+        btnClose?.addEventListener('click', _closeBpRevPhotoUrlModal);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) _closeBpRevPhotoUrlModal();
+        });
+        input?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                _handleConfirmBpRevPhotoUrlModal();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                _closeBpRevPhotoUrlModal();
+            }
+        });
+    }
+    return modal;
+}
+
+function _openBpRevPhotoUrlModal(targetId, color, card) {
+    const modal = _ensureBpRevPhotoUrlModal();
+    _activeBpRevPhotoModal = { targetId, color, card };
+
+    const input = document.getElementById('bp-rev-modal-photo-url-input');
+    const errEl = document.getElementById('bp-rev-modal-photo-url-error');
+    const btnConfirm = document.getElementById('btn-confirm-bp-rev-photo-url');
+
+    if (input) input.value = '';
+    if (errEl) {
+        errEl.textContent = '';
+        errEl.style.display = 'none';
+    }
+    if (btnConfirm) {
+        btnConfirm.disabled = false;
+        btnConfirm.textContent = 'Applica Foto';
+    }
+
+    modal.classList.add('active');
+    setTimeout(() => input?.focus(), 100);
+}
+
+async function _handleConfirmBpRevPhotoUrlModal() {
+    if (!_activeBpRevPhotoModal || !_currentJobId) return;
+    const { targetId, color, card } = _activeBpRevPhotoModal;
+    const input = document.getElementById('bp-rev-modal-photo-url-input');
+    const errEl = document.getElementById('bp-rev-modal-photo-url-error');
+    const btnConfirm = document.getElementById('btn-confirm-bp-rev-photo-url');
+
+    const url = input ? input.value.trim() : '';
+    if (!url) {
+        if (errEl) {
+            errEl.textContent = 'Inserisci un URL valido prima di applicare.';
+            errEl.style.display = 'block';
+        }
+        input?.focus();
+        return;
+    }
+
+    if (btnConfirm) {
+        btnConfirm.disabled = true;
+        btnConfirm.textContent = 'Salvataggio...';
+    }
+    if (errEl) errEl.style.display = 'none';
+
+    try {
+        const res = await api.retryBlueprintRevisionPhoto(_currentJobId, {
+            target_blueprint_id: targetId,
+            color: color,
+            new_url: url,
+        });
+        if (res && res.photo_url) {
+            _applyPhotoUpdateToCard(card, targetId, color, res.photo_url);
+            _refreshPhotoCol(targetId, card);
+            _closeBpRevPhotoUrlModal();
+            addMessage('✅ Foto aggiornata con successo!', 'success');
+        }
+    } catch (err) {
+        if (errEl) {
+            errEl.textContent = `Errore: ${err.message || "Impossibile scaricare l'immagine"}`;
+            errEl.style.display = 'block';
+        }
+        if (btnConfirm) {
+            btnConfirm.disabled = false;
+            btnConfirm.textContent = 'Applica Foto';
+        }
+    }
+}
+
 function _bindPhotoColEvents(container) {
     if (!container) return;
 
@@ -1548,17 +1718,23 @@ function _bindPhotoColEvents(container) {
         });
     });
 
-    // 🔍 Cerca (Google Images)
+    // 🔍 Cerca (Google Images + unified URL modal)
     container.querySelectorAll('.btn-search-photo').forEach((btn) => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             const query = btn.dataset.searchQuery;
+            const targetId = btn.dataset.targetId;
+            const color = btn.dataset.color || '';
+            const card = findCard(targetId);
             if (!query) {
                 addMessage('Nessuna informazione sufficiente per la ricerca.', 'error');
                 return;
             }
             const searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}`;
             window.open(searchUrl, '_blank', 'noopener,noreferrer');
+            if (card && _currentJobId) {
+                _openBpRevPhotoUrlModal(targetId, color, card);
+            }
         });
     });
 
@@ -1580,7 +1756,7 @@ function _bindPhotoColEvents(container) {
                         if (res && res.photo_url) {
                             _applyPhotoUpdateToCard(card, targetId, color, res.photo_url);
                             _refreshPhotoCol(targetId, card);
-                            addMessage('Foto caricata con successo!', 'system');
+                            addMessage('✅ Foto caricata con successo!', 'success');
                         }
                     } catch (err) {
                         addMessage(`Upload foto fallito: ${err.message}`, 'error');
@@ -1592,74 +1768,6 @@ function _bindPhotoColEvents(container) {
                     addMessage(`Errore selezione foto: ${err.message || err}`, 'error');
                 },
             });
-        });
-    });
-
-    // 🔗 Inserisci URL
-    container.querySelectorAll('.btn-manual-photo').forEach((btn) => {
-        btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const targetId = btn.dataset.targetId;
-            const color = btn.dataset.color || '';
-            const card = findCard(targetId);
-            if (!card || !_currentJobId) return;
-
-            const url = prompt("Inserisci l'URL diretto dell'immagine:");
-            if (!url || !url.trim()) return;
-
-            btn.disabled = true;
-            btn.textContent = '...';
-            try {
-                const res = await api.retryBlueprintRevisionPhoto(_currentJobId, {
-                    target_blueprint_id: targetId,
-                    color: color,
-                    new_url: url.trim(),
-                });
-                if (res && res.photo_url) {
-                    _applyPhotoUpdateToCard(card, targetId, color, res.photo_url);
-                    _refreshPhotoCol(targetId, card);
-                    addMessage("Foto aggiornata dall'URL fornito!", 'system');
-                }
-            } catch (err) {
-                addMessage(`Errore nell'impostazione dell'URL: ${err.message}`, 'error');
-            } finally {
-                btn.disabled = false;
-                btn.textContent = '🔗 Inserisci URL';
-            }
-        });
-    });
-
-    // 🔄 Riprova (AI Grounded Search)
-    container.querySelectorAll('.btn-retry-photo').forEach((btn) => {
-        btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const targetId = btn.dataset.targetId;
-            const color = btn.dataset.color || '';
-            const card = findCard(targetId);
-            if (!card || !_currentJobId) return;
-
-            const feedback = prompt('Cosa non va nella foto attuale? (opzionale, aiuta la ricerca AI):');
-
-            btn.disabled = true;
-            btn.textContent = '...';
-            addMessage('Ricerca foto su Google con AI in corso...', 'system');
-            try {
-                const res = await api.retryBlueprintRevisionPhoto(_currentJobId, {
-                    target_blueprint_id: targetId,
-                    color: color,
-                    user_feedback: feedback ? feedback.trim() : null,
-                });
-                if (res && res.photo_url) {
-                    _applyPhotoUpdateToCard(card, targetId, color, res.photo_url);
-                    _refreshPhotoCol(targetId, card);
-                    addMessage("Nuova foto trovata con successo dall'AI!", 'system');
-                }
-            } catch (err) {
-                addMessage(`Ricerca AI non riuscita: ${err.message}`, 'error');
-            } finally {
-                btn.disabled = false;
-                btn.textContent = '🔄 Riprova';
-            }
         });
     });
 }

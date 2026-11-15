@@ -21,11 +21,115 @@ let _jobId = null;
 let _stagingData = null;
 let _operationsQueue = [];
 let _categoryHierarchy = null;
+let _categoryHierarchyBrandId = null;
+const _categoryHierarchyByBrand = {};
 let _currentMobileBp = null;
 let _currentMobileItem = null;
 
 // Fields treated as comma-separated arrays in the UI
 const LIST_FIELDS = new Set(['colors', 'tags', 'materials']);
+
+async function _ensureCategoryHierarchy(data) {
+    let brandId = data?.brand_id || null;
+    if (!brandId && data?.brand_name) {
+        const local = (window.__LTDB_BRANDS__ || []).find(
+            x => (x.name || '').trim().toLowerCase() === String(data.brand_name).trim().toLowerCase()
+        );
+        if (local) brandId = local.id;
+    }
+    if (!brandId) {
+        _categoryHierarchy = {};
+        _categoryHierarchyBrandId = null;
+        return;
+    }
+    const cached = _categoryHierarchyByBrand[brandId];
+    if (cached && Object.keys(cached).length > 0) {
+        _categoryHierarchy = cached;
+        _categoryHierarchyBrandId = brandId;
+        return;
+    }
+    try {
+        const res = await api.getBrandCategories(brandId);
+        const fetched = (res && typeof res === 'object' && res.data && typeof res.data === 'object' && !res.sub_categories)
+            ? res.data
+            : (res || {});
+        _categoryHierarchy = (fetched && typeof fetched === 'object') ? fetched : {};
+        _categoryHierarchyBrandId = brandId;
+        if (Object.keys(_categoryHierarchy).length > 0) {
+            _categoryHierarchyByBrand[brandId] = _categoryHierarchy;
+        }
+    } catch (e) {
+        console.error("Failed to fetch category hierarchy", e);
+        _categoryHierarchy = {};
+        _categoryHierarchyBrandId = null;
+    }
+}
+
+function _extractCatLabel(val) {
+    if (!val) return '';
+    if (typeof val === 'string') return val.trim();
+    if (typeof val === 'object') return String(val.description || val.name || '').trim();
+    return '';
+}
+
+function _resolveBlueprintCategoryLabels(bp) {
+    let catDesc = _extractCatLabel(bp?.category);
+    let subCatDesc = _extractCatLabel(bp?.sub_category);
+    const hasHierarchy = Boolean(_categoryHierarchy && Object.keys(_categoryHierarchy).length > 0);
+    if (hasHierarchy && catDesc) {
+        const macroKeys = Object.keys(_categoryHierarchy);
+        const isDirectMacro = macroKeys.some(m => m.trim().toLowerCase() === catDesc.toLowerCase());
+        if (!isDirectMacro) {
+            for (const m of macroKeys) {
+                const subs = Object.keys(_categoryHierarchy[m]?.sub_categories || {});
+                if (subs.some(s => s.trim().toLowerCase() === catDesc.toLowerCase())) {
+                    if (!subCatDesc || subCatDesc.toLowerCase() === catDesc.toLowerCase()) {
+                        subCatDesc = catDesc;
+                    }
+                    catDesc = m;
+                    break;
+                }
+            }
+        }
+    }
+    return { catDesc, subCatDesc, hasHierarchy };
+}
+
+function _buildMacroOptionsHtml(catDesc, hasHierarchy) {
+    if (!hasHierarchy) {
+        return catDesc ? `<option value="${_esc(catDesc)}" selected>${_esc(catDesc)}</option>` : '';
+    }
+    let matchedMacro = null;
+    let html = Object.keys(_categoryHierarchy).map(c => {
+        const isSel = Boolean(catDesc) && c.trim().toLowerCase() === catDesc.toLowerCase();
+        if (isSel) matchedMacro = c;
+        return `<option value="${_esc(c)}" ${isSel ? 'selected' : ''}>${_esc(c)}</option>`;
+    }).join('');
+    if (catDesc && !matchedMacro) {
+        html += `<option value="${_esc(catDesc)}" selected>${_esc(catDesc)}</option>`;
+    }
+    return html;
+}
+
+function _buildSubCatOptionsHtml(selectedMacro, selectedSub, hasHierarchy) {
+    const matchedMacro = Object.keys(_categoryHierarchy || {}).find(
+        c => c.trim().toLowerCase() === (selectedMacro || '').trim().toLowerCase()
+    ) || selectedMacro;
+    if (!hasHierarchy || !matchedMacro || !_categoryHierarchy[matchedMacro]) {
+        return selectedSub ? `<option value="${_esc(selectedSub)}" selected>${_esc(selectedSub)}</option>` : '';
+    }
+    const subs = Object.keys(_categoryHierarchy[matchedMacro].sub_categories || {});
+    let matchedSub = false;
+    let html = subs.map(sc => {
+        const isSel = Boolean(selectedSub) && sc.trim().toLowerCase() === selectedSub.trim().toLowerCase();
+        if (isSel) matchedSub = true;
+        return `<option value="${_esc(sc)}" ${isSel ? 'selected' : ''}>${_esc(sc)}</option>`;
+    }).join('');
+    if (selectedSub && !matchedSub) {
+        html += `<option value="${_esc(selectedSub)}" selected>${_esc(selectedSub)}</option>`;
+    }
+    return html;
+}
 
 // ---- Public API ----
 
@@ -50,17 +154,7 @@ export async function renderStagingPanel(data, jobId) {
         }
     }
 
-    if (_stagingData.brand_id && !_categoryHierarchy) {
-        try {
-            const res = await api.getBrandCategories(_stagingData.brand_id);
-            _categoryHierarchy = res.data || res;
-        } catch (e) {
-            console.error("Failed to fetch category hierarchy", e);
-            _categoryHierarchy = {};
-        }
-    } else if (!_categoryHierarchy) {
-        _categoryHierarchy = {};
-    }
+    await _ensureCategoryHierarchy(_stagingData);
 
     _render();
 }
@@ -233,25 +327,7 @@ function _buildMobileStagingList(grouped, photoProposals) {
     const brandName = _stagingData?.brand_name || 'Brand';
 
     for (const [bpId, { blueprint, items }] of grouped) {
-        let catDesc = blueprint.category?.description || (typeof blueprint.category === 'string' ? blueprint.category : '') || '';
-        let subCatDesc = blueprint.sub_category?.description || (typeof blueprint.sub_category === 'string' ? blueprint.sub_category : '') || '';
-
-        if (_categoryHierarchy && Object.keys(_categoryHierarchy).length > 0) {
-            const macroKeys = Object.keys(_categoryHierarchy);
-            const isDirectMacro = macroKeys.some(m => m.trim().toLowerCase() === catDesc.trim().toLowerCase());
-            if (!isDirectMacro && catDesc) {
-                for (const m of macroKeys) {
-                    const subs = Object.keys(_categoryHierarchy[m]?.sub_categories || {});
-                    if (subs.some(s => s.trim().toLowerCase() === catDesc.trim().toLowerCase())) {
-                        if (!subCatDesc || subCatDesc === catDesc) {
-                            subCatDesc = catDesc;
-                        }
-                        catDesc = m;
-                        break;
-                    }
-                }
-            }
-        }
+        const { catDesc, subCatDesc } = _resolveBlueprintCategoryLabels(blueprint);
         let catText = catDesc;
         if (subCatDesc) {
             catText = catText ? `${catText} ↳ ${subCatDesc}` : subCatDesc;
@@ -441,42 +517,9 @@ function _buildBlueprintCard(bp, items, photoProposals) {
         </span>
     `).join('');
 
-    let catDesc = bp.category?.description || (typeof bp.category === 'string' ? bp.category : '') || '';
-    let subCatDesc = bp.sub_category?.description || (typeof bp.sub_category === 'string' ? bp.sub_category : '') || '';
-
-    const hasHierarchy = _categoryHierarchy && Object.keys(_categoryHierarchy).length > 0;
-    if (hasHierarchy) {
-        const macroKeys = Object.keys(_categoryHierarchy);
-        const isDirectMacro = macroKeys.some(m => m.trim().toLowerCase() === catDesc.trim().toLowerCase());
-        if (!isDirectMacro && catDesc) {
-            for (const m of macroKeys) {
-                const subs = Object.keys(_categoryHierarchy[m]?.sub_categories || {});
-                if (subs.some(s => s.trim().toLowerCase() === catDesc.trim().toLowerCase())) {
-                    if (!subCatDesc || subCatDesc === catDesc) {
-                        subCatDesc = catDesc;
-                    }
-                    catDesc = m;
-                    break;
-                }
-            }
-        }
-    }
-
-    let catOpts = '';
-    let subCatOpts = '';
-    if (hasHierarchy) {
-        catOpts = Object.keys(_categoryHierarchy).map(c => 
-            `<option value="${_esc(c)}" ${c.trim().toLowerCase() === catDesc.trim().toLowerCase() ? 'selected' : ''}>${_esc(c)}</option>`
-        ).join('');
-        const matchedMacro = Object.keys(_categoryHierarchy).find(c => c.trim().toLowerCase() === catDesc.trim().toLowerCase()) || catDesc;
-        const subCats = matchedMacro && _categoryHierarchy[matchedMacro] ? Object.keys(_categoryHierarchy[matchedMacro].sub_categories || {}) : [];
-        subCatOpts = subCats.map(sc => 
-            `<option value="${_esc(sc)}" ${sc.trim().toLowerCase() === subCatDesc.trim().toLowerCase() ? 'selected' : ''}>${_esc(sc)}</option>`
-        ).join('');
-    } else {
-        if (catDesc) catOpts = `<option value="${_esc(catDesc)}" selected>${_esc(catDesc)}</option>`;
-        if (subCatDesc) subCatOpts = `<option value="${_esc(subCatDesc)}" selected>${_esc(subCatDesc)}</option>`;
-    }
+    const { catDesc, subCatDesc, hasHierarchy } = _resolveBlueprintCategoryLabels(bp);
+    const catOpts = _buildMacroOptionsHtml(catDesc, hasHierarchy);
+    const subCatOpts = _buildSubCatOptionsHtml(catDesc, subCatDesc, hasHierarchy);
 
     return `
     <div class="blueprint-card" data-bp-id="${_esc(bp.id)}">
@@ -809,51 +852,15 @@ export function openStagingMobilePanel(bp, item) {
     // 2. Categories
     const macroCatSelect = document.getElementById('mob-staging-macro-cat');
     const subCatSelect = document.getElementById('mob-staging-sub-cat');
-    let currentMacro = bp.category?.description || (typeof bp.category === 'string' ? bp.category : '') || '';
-    let currentSub = bp.sub_category?.description || (typeof bp.sub_category === 'string' ? bp.sub_category : '') || '';
+    const { catDesc: currentMacro, subCatDesc: currentSub, hasHierarchy } = _resolveBlueprintCategoryLabels(bp);
 
-    const hasHierarchy = _categoryHierarchy && Object.keys(_categoryHierarchy).length > 0;
-    if (hasHierarchy) {
-        const macroKeys = Object.keys(_categoryHierarchy);
-        const isDirectMacro = macroKeys.some(m => m.trim().toLowerCase() === currentMacro.trim().toLowerCase());
-        if (!isDirectMacro && currentMacro) {
-            for (const m of macroKeys) {
-                const subs = Object.keys(_categoryHierarchy[m]?.sub_categories || {});
-                if (subs.some(s => s.trim().toLowerCase() === currentMacro.trim().toLowerCase())) {
-                    if (!currentSub || currentSub === currentMacro) {
-                        currentSub = currentMacro;
-                    }
-                    currentMacro = m;
-                    break;
-                }
-            }
-        }
-    }
     if (macroCatSelect) {
-        let macroHtml = '<option value="">Macro Categoria...</option>';
-        if (hasHierarchy) {
-            macroHtml += Object.keys(_categoryHierarchy).map(c =>
-                `<option value="${_esc(c)}" ${c.trim().toLowerCase() === currentMacro.trim().toLowerCase() ? 'selected' : ''}>${_esc(c)}</option>`
-            ).join('');
-        } else if (currentMacro) {
-            macroHtml += `<option value="${_esc(currentMacro)}" selected>${_esc(currentMacro)}</option>`;
-        }
-        macroCatSelect.innerHTML = macroHtml;
+        macroCatSelect.innerHTML = '<option value="">Macro Categoria...</option>' + _buildMacroOptionsHtml(currentMacro, hasHierarchy);
     }
 
     function _updateSubCatDropdown(selectedMacro, selectedSub) {
         if (!subCatSelect) return;
-        let subHtml = '<option value="">Sotto Categoria...</option>';
-        const matchedMacro = Object.keys(_categoryHierarchy || {}).find(c => c.trim().toLowerCase() === (selectedMacro || '').trim().toLowerCase()) || selectedMacro;
-        if (hasHierarchy && matchedMacro && _categoryHierarchy[matchedMacro]) {
-            const subs = Object.keys(_categoryHierarchy[matchedMacro].sub_categories || {});
-            subHtml += subs.map(sc =>
-                `<option value="${_esc(sc)}" ${sc.trim().toLowerCase() === (selectedSub || '').trim().toLowerCase() ? 'selected' : ''}>${_esc(sc)}</option>`
-            ).join('');
-        } else if (selectedSub) {
-            subHtml += `<option value="${_esc(selectedSub)}" selected>${_esc(selectedSub)}</option>`;
-        }
-        subCatSelect.innerHTML = subHtml;
+        subCatSelect.innerHTML = '<option value="">Sotto Categoria...</option>' + _buildSubCatOptionsHtml(selectedMacro, selectedSub, hasHierarchy);
     }
 
     _updateSubCatDropdown(currentMacro, currentSub);
@@ -963,8 +970,8 @@ function _handleMobileSave(e) {
         _enqueueUpdate('blueprint', bp.id, 'article_name', newName);
     }
 
-    const curMacro = bp.category?.description || '';
-    const curSub = bp.sub_category?.description || '';
+    const curMacro = _extractCatLabel(bp.category);
+    const curSub = _extractCatLabel(bp.sub_category);
     if (newMacroCat !== curMacro) {
         bp.category = newMacroCat ? { description: newMacroCat } : null;
         _enqueueUpdate('blueprint', bp.id, 'category', bp.category);
@@ -1443,6 +1450,7 @@ async function _handleRefresh() {
         if (result && result.data) {
             _stagingData = result.data;
             _operationsQueue = [];
+            await _ensureCategoryHierarchy(_stagingData);
             _render();
             addMessage('🔄 Dati aggiornati dal server.', 'system');
         }

@@ -12,17 +12,40 @@ export function _esc(str) {
     })[m]);
 }
 
+function _getToastContainer() {
+    let container = document.getElementById('ltdb-toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'ltdb-toast-container';
+        container.style.position = 'fixed';
+        container.style.top = '16px';
+        container.style.left = '50%';
+        container.style.transform = 'translateX(-50%)';
+        container.style.display = 'flex';
+        container.style.flexDirection = 'column';
+        container.style.alignItems = 'center';
+        container.style.gap = '8px';
+        container.style.zIndex = '13000';
+        container.style.pointerEvents = 'none';
+        container.style.maxWidth = 'calc(100vw - 32px)';
+        document.body.appendChild(container);
+    }
+    return container;
+}
+
 export function addMessage(text, type = 'system') {
+    const container = _getToastContainer();
     const toast = document.createElement('div');
-    toast.style.position = 'fixed';
-    toast.style.top = '20px';
-    toast.style.right = '20px';
+    toast.className = 'ltdb-toast';
     toast.style.padding = '12px 24px';
     toast.style.borderRadius = 'var(--radius-md)';
     toast.style.background = type === 'error' ? 'var(--error)' : 'var(--bg-surface)';
     toast.style.color = type === 'error' ? '#fff' : 'var(--text-primary)';
-    toast.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
-    toast.style.zIndex = '9999';
+    toast.style.border = type === 'error' ? '1px solid var(--error)' : '1px solid var(--border-color)';
+    toast.style.boxShadow = '0 8px 20px rgba(0,0,0,0.28)';
+    toast.style.maxWidth = '100%';
+    toast.style.textAlign = 'center';
+    toast.style.pointerEvents = 'none';
     toast.style.transition = 'opacity 0.3s';
     
     if (typeof text === 'string') {
@@ -31,7 +54,7 @@ export function addMessage(text, type = 'system') {
         toast.appendChild(text);
     }
     
-    document.body.appendChild(toast);
+    container.appendChild(toast);
     
     setTimeout(() => {
         toast.style.opacity = '0';
