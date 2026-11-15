@@ -100,6 +100,18 @@ class SourceDocument(BaseModel):
     supplier_name: str
     document_date: date
 
+class ArticlePieceItem(BaseModel):
+    id: str
+    barcode: Optional[str] = None
+    supplier_code: Optional[str] = None
+    status: Optional[str] = None
+
+
+class ArticleBarcodeUpdate(BaseModel):
+    id: Optional[str] = None
+    barcode: Optional[str] = None
+
+
 class SearchResultItem(BaseModel):
     blueprint_id: str
     article_name: str
@@ -111,6 +123,8 @@ class SearchResultItem(BaseModel):
     extended_description: Optional[str] = None
     vendor_code: Optional[str] = None
     barcode: Optional[str] = None
+    barcodes: List[str] = Field(default_factory=list)
+    articles: List[ArticlePieceItem] = Field(default_factory=list)
     photo_id: Optional[str] = None
     colors: List[str] = Field(default_factory=list)
     tags: List[str] = Field(default_factory=list)
@@ -187,6 +201,7 @@ class CatalogUpdateRequest(BaseModel):
     dimensions: Optional[str] = None
     vendor_code: Optional[str] = None
     barcode: Optional[str] = None
+    articles: Optional[List[ArticleBarcodeUpdate]] = None
     color: Optional[str] = None
     new_color: Optional[str] = None
     colors: Optional[List[str]] = None

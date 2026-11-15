@@ -61,6 +61,8 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
     new_vendor_code = update_data.pop("vendor_code", None)
     has_barcode = "barcode" in update_data
     new_barcode = update_data.pop("barcode", None)
+    has_articles = "articles" in update_data
+    articles_update = update_data.pop("articles", None)
 
     has_new_color = "new_color" in update_data
     new_color = update_data.pop("new_color", None)
@@ -86,11 +88,11 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
         else:
             cleaned_new_colors = []
         wants_color_update = True
-    elif target_color is not None and not has_quantity and not has_vendor_code and not has_barcode and not has_category and not has_sub_category and not update_data:
+    elif target_color is not None and not has_quantity and not has_vendor_code and not has_barcode and not has_articles and not has_category and not has_sub_category and not update_data:
         cleaned_new_colors = [s.strip().lower() for s in str(target_color).split(',') if s.strip()]
         wants_color_update = True
 
-    if (not update_data and not has_vendor_code and not has_barcode 
+    if (not update_data and not has_vendor_code and not has_barcode and not has_articles
             and not has_category and not has_sub_category and not has_quantity
             and not wants_color_update):
         raise HTTPException(
@@ -168,6 +170,8 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
         should_regenerate_embedding = True
         updated_fields_list.append("category")
 
+    newly_activated_articles: list[Article] = []
+
     # --- Apply quantity (available stock) ---
     if has_quantity:
         if new_quantity is None or new_quantity < 0:
@@ -200,6 +204,7 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
             num_to_reactivate = min(diff, len(unavailable_articles))
             for art in unavailable_articles[:num_to_reactivate]:
                 art.status = ArticleStatus.AVAILABLE
+                newly_activated_articles.append(art)
 
             remaining_diff = diff - num_to_reactivate
             if remaining_diff > 0:
@@ -209,8 +214,12 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
                     or next((a.supplier_code for a in target_articles if a.supplier_code), None)
                 )
                 ean_code = (
-                    (new_barcode.strip() if new_barcode and new_barcode.strip() else None)
-                    or next((a.ean for a in target_articles if a.ean), None)
+                    None
+                    if has_articles
+                    else (
+                        (new_barcode.strip() if new_barcode and new_barcode.strip() else None)
+                        or next((a.ean for a in target_articles if a.ean), None)
+                    )
                 )
                 if wants_color_update:
                     color_list = cleaned_new_colors if cleaned_new_colors else None
@@ -219,7 +228,7 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
                 else:
                     color_list = target_articles[0].colors if target_articles and target_articles[0].colors else None
 
-                register_inbound_movement(
+                created_ids = register_inbound_movement(
                     db=db,
                     job_id=f"manual-{str(bp.id)[:8]}",
                     blueprint_id=str(bp.id),
@@ -229,6 +238,14 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
                     colors=color_list,
                     commit_changes=False
                 )
+                if created_ids:
+                    created_map = {
+                        str(a.id): a
+                        for a in db.query(Article).filter(Article.id.in_(created_ids)).all()
+                    }
+                    for cid in created_ids:
+                        if str(cid) in created_map:
+                            newly_activated_articles.append(created_map[str(cid)])
         elif diff < 0:
             # Sort available articles by creation date ASC (oldest to newest)
             available_articles.sort(key=lambda a: a.created_at or datetime.min)
@@ -265,8 +282,8 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
 
         updated_fields_list.append("quantity")
 
-    # --- Apply article variant fields (color / vendor_code / barcode) ---
-    if wants_color_update or has_vendor_code or has_barcode:
+    # --- Apply article variant fields (color / vendor_code / barcode / articles) ---
+    if wants_color_update or has_vendor_code or (has_barcode and not has_articles) or (has_articles and articles_update):
         articles = db.query(Article).filter(Article.article_blueprint_id == bp.id).all()
         if target_color and str(target_color).strip().lower() != "unknown":
             norm_color = str(target_color).strip().lower()
@@ -281,7 +298,7 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
         if not target_articles and articles:
             target_articles = articles
 
-        if not target_articles:
+        if not target_articles and (wants_color_update or has_vendor_code or (has_barcode and not has_articles)):
             from src.services.wms_service import register_inbound_movement
             sup_code = new_vendor_code.strip() if new_vendor_code and new_vendor_code.strip() else None
             ean_code = new_barcode.strip() if new_barcode and new_barcode.strip() else None
@@ -301,14 +318,34 @@ def update_blueprint(db: Session, blueprint_id: str, request: CatalogUpdateReque
                 if art_obj:
                     art_obj.status = ArticleStatus.UNAVAILABLE
             target_articles = db.query(Article).filter(Article.id.in_(created_ids)).all()
+            articles = target_articles
 
         for art in target_articles:
             if wants_color_update:
                 art.colors = cleaned_new_colors
             if has_vendor_code:
                 art.supplier_code = new_vendor_code.strip() if new_vendor_code and new_vendor_code.strip() else None
-            if has_barcode:
+            if has_barcode and not has_articles:
                 art.ean = new_barcode.strip() if new_barcode and new_barcode.strip() else None
+
+        if has_articles and isinstance(articles_update, list):
+            articles_by_id = {str(a.id): a for a in articles}
+            pending_new_barcodes: list[Optional[str]] = []
+            for entry in articles_update:
+                entry_id = entry.get("id") if isinstance(entry, dict) else getattr(entry, "id", None)
+                entry_bc = entry.get("barcode") if isinstance(entry, dict) else getattr(entry, "barcode", None)
+                clean_ean = entry_bc.strip() if entry_bc and str(entry_bc).strip() else None
+                if entry_id and str(entry_id) in articles_by_id:
+                    articles_by_id[str(entry_id)].ean = clean_ean
+                else:
+                    pending_new_barcodes.append(clean_ean)
+
+            for new_art, new_ean in zip(newly_activated_articles, pending_new_barcodes):
+                if new_ean is not None:
+                    new_art.ean = new_ean
+
+            if "barcode" not in updated_fields_list:
+                updated_fields_list.append("barcode")
 
         if wants_color_update:
             updated_fields_list.append("color")

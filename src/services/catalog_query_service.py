@@ -15,13 +15,53 @@ from sqlalchemy import func, text
 
 from src.models.pim import ArticleBlueprint, Brand, Category, ArticlePhoto
 from src.models.wms import Article, ArticleStatus, Batch
-from src.schemas.catalog import SearchResultItem
+from src.schemas.catalog import SearchResultItem, ArticlePieceItem
 from src.utils.text_normalize import fold_text
 
 
 # Standard page size
 DEFAULT_PAGE_SIZE = 50
 MAX_SEARCH_RESULTS_CAP = 200
+
+
+def _extract_variant_barcodes_and_pieces(
+    variant_articles: List[Article],
+    stock: int,
+) -> Tuple[Optional[str], List[str], List[ArticlePieceItem]]:
+    """
+    Extract primary barcode, deduplicated barcode list, and individual physical pieces
+    for a color variant.
+    When stock > 0, focuses on AVAILABLE pieces so the edit table matches active stock.
+    When stock == 0, preserves the historical/placeholder EAN in barcode/barcodes while
+    leaving articles empty.
+    """
+    available_articles = [a for a in variant_articles if a.status == ArticleStatus.AVAILABLE]
+
+    if stock > 0 and available_articles:
+        seen: Set[str] = set()
+        barcodes: List[str] = []
+        for a in available_articles:
+            ean = a.ean.strip() if a.ean and str(a.ean).strip() else ""
+            if ean and ean not in seen:
+                seen.add(ean)
+                barcodes.append(ean)
+        primary_barcode = barcodes[0] if barcodes else None
+        pieces = [
+            ArticlePieceItem(
+                id=str(a.id),
+                barcode=a.ean.strip() if a.ean and str(a.ean).strip() else None,
+                supplier_code=a.supplier_code,
+                status=a.status.value if hasattr(a.status, "value") else str(a.status),
+            )
+            for a in available_articles
+        ]
+        return primary_barcode, barcodes, pieces
+
+    fallback_barcode = next(
+        (a.ean.strip() for a in variant_articles if a.ean and str(a.ean).strip()),
+        None,
+    )
+    return fallback_barcode, ([fallback_barcode] if fallback_barcode else []), []
 
 
 def build_variant_rows_for_blueprints(
@@ -164,7 +204,7 @@ def build_variant_rows_for_blueprints(
 
             name = f"{bp.article_name} - {color.capitalize()}" if color and color != "unknown" else bp.article_name
             vendor_code = next((a.supplier_code for a in variant_articles if a.supplier_code), None)
-            barcode = next((a.ean for a in variant_articles if a.ean), None)
+            barcode, barcodes_list, pieces_list = _extract_variant_barcodes_and_pieces(variant_articles, stock)
 
             # Determine latest physical article creation timestamp for date-sorting
             latest_timestamp: datetime = datetime.min
@@ -187,6 +227,8 @@ def build_variant_rows_for_blueprints(
                 extended_description=bp.extended_description,
                 vendor_code=vendor_code,
                 barcode=barcode,
+                barcodes=barcodes_list,
+                articles=pieces_list,
                 photo_id=str(photo.id) if photo else None,
                 colors=[color] if color != "unknown" else [],
                 tags=list(bp.tags or []),
@@ -468,7 +510,7 @@ def query_paginated_catalog_variants(
                 var_arts = bp_arts
 
         vendor_code = next((a.supplier_code for a in var_arts if a.supplier_code), None)
-        barcode = next((a.ean for a in var_arts if a.ean), None)
+        barcode, barcodes_list, pieces_list = _extract_variant_barcodes_and_pieces(var_arts, int(r["stock"] or 0))
 
         bp_photos = photos_by_bp.get(bp_id, [])
         photo = None
@@ -512,6 +554,8 @@ def query_paginated_catalog_variants(
             extended_description=r["extended_description"],
             vendor_code=vendor_code,
             barcode=barcode,
+            barcodes=barcodes_list,
+            articles=pieces_list,
             photo_id=str(photo.id) if photo else None,
             colors=[color] if color and color != "unknown" else [],
             tags=tags,

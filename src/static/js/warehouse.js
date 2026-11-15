@@ -189,8 +189,11 @@ function _renderResults(items, container, emptyMessage = 'Nessun articolo presen
         if (item.vendor_code) {
             codeParts.push(`<div class="warehouse-row__code" title="Codice Fornitore"><span style="color: var(--text-muted);">Cod:</span> ${_esc(item.vendor_code)}</div>`);
         }
-        if (item.barcode) {
-            codeParts.push(`<div class="warehouse-row__code" title="Barcode EAN"><span style="color: var(--text-muted);">EAN:</span> ${_esc(item.barcode)}</div>`);
+        const barcodeDisplayHtml = _buildBarcodeDisplayHtml(item);
+        if (barcodeDisplayHtml) {
+            codeParts.push(
+                `<div class="warehouse-row__code"><span style="color: var(--text-muted);">EAN:</span>${barcodeDisplayHtml}</div>`
+            );
         }
         const codesHtml = codeParts.length > 0
             ? codeParts.join('')
@@ -767,22 +770,310 @@ function _bindSearchControls() {
         showToastFn: _showToast,
     });
 
-    // Camera Barcode Scanner for mobile article edit panel
-    const btnScanMobArt = document.getElementById('btn-scan-mob-art-barcode');
-    if (btnScanMobArt) {
-        setupBarcodeScanner({
-            cameraInputId: 'mob-art-barcode-camera-input',
-            triggerBtnIds: ['btn-scan-mob-art-barcode'],
-            onSuccess: (barcode) => {
-                const mobInput = document.getElementById('mob-art-barcode');
-                if (mobInput) {
-                    mobInput.value = barcode;
+    // Multi-barcode hover tooltip for warehouse table
+    _initMultiBarcodeTooltip();
+
+    // Camera Barcode Scanner for dynamic barcode rows (mobile edit panel)
+    setupBarcodeScanner({
+        cameraInputId: 'mob-art-barcode-camera-input',
+        triggerBtnIds: [],
+        onSuccess: (barcode) => {
+            if (_activeScanRowInput) {
+                _activeScanRowInput.value = barcode;
+                _activeScanRowInput.dispatchEvent(new Event('input', { bubbles: true }));
+                _activeScanRowInput = null;
+            }
+        },
+        onError: () => {
+            _activeScanRowInput = null;
+        },
+        showToastFn: _showToast,
+    });
+}
+
+let _activeScanRowInput = null;
+let _barcodeTooltipBound = false;
+
+function _initMultiBarcodeTooltip() {
+    if (_barcodeTooltipBound) return;
+    _barcodeTooltipBound = true;
+
+    let tooltip = document.getElementById('ltdb-barcode-tooltip');
+    if (!tooltip) {
+        tooltip = document.createElement('div');
+        tooltip.id = 'ltdb-barcode-tooltip';
+        tooltip.className = 'ltdb-barcode-tooltip';
+        document.body.appendChild(tooltip);
+    }
+
+    const positionTooltip = (anchor) => {
+        const rect = anchor.getBoundingClientRect();
+        tooltip.style.display = 'block';
+        const tipRect = tooltip.getBoundingClientRect();
+        let left = rect.left + (rect.width / 2) - (tipRect.width / 2);
+        let top = rect.top - tipRect.height - 8;
+        if (top < 8) {
+            top = rect.bottom + 8;
+        }
+        left = Math.max(8, Math.min(left, window.innerWidth - tipRect.width - 8));
+        tooltip.style.left = `${left}px`;
+        tooltip.style.top = `${top}px`;
+    };
+
+    document.addEventListener('mouseover', (e) => {
+        const badge = e.target.closest('.barcode-badge-more');
+        if (!badge) return;
+        let list = [];
+        try {
+            list = JSON.parse(badge.dataset.barcodes || '[]');
+        } catch {
+            list = [];
+        }
+        if (!Array.isArray(list) || list.length === 0) return;
+
+        tooltip.innerHTML = `
+            <div class="ltdb-barcode-tooltip__title">Barcode in stock (${list.length})</div>
+            <div class="ltdb-barcode-tooltip__list">
+                ${list.map((bc, idx) => `
+                    <div class="ltdb-barcode-tooltip__item">
+                        <span class="ltdb-barcode-tooltip__idx">#${idx + 1}</span>
+                        <span>${_esc(bc)}</span>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+        positionTooltip(badge);
+    });
+
+    document.addEventListener('mouseout', (e) => {
+        const badge = e.target.closest('.barcode-badge-more');
+        if (badge) {
+            if (e.relatedTarget && badge.contains(e.relatedTarget)) return;
+            tooltip.style.display = 'none';
+        }
+    });
+
+    document.addEventListener('scroll', () => {
+        tooltip.style.display = 'none';
+    }, true);
+}
+
+/**
+ * Shared renderer for compact barcode + '+N' hover badge (table row and detail modal).
+ * Shows the '+N' badge strictly when stock > 0 and there are multiple distinct barcodes.
+ */
+function _buildBarcodeDisplayHtml(item) {
+    const rawList = Array.isArray(item.barcodes) && item.barcodes.length > 0
+        ? item.barcodes
+        : (item.barcode ? [item.barcode] : []);
+    const distinctBarcodes = [...new Set(
+        rawList.map(bc => (typeof bc === 'string' ? bc.trim() : '')).filter(Boolean)
+    )];
+
+    if (distinctBarcodes.length === 0) {
+        return '';
+    }
+
+    const stockCount = Number(item.stock ?? 0);
+    const extraCount = (stockCount > 0 && distinctBarcodes.length > 1)
+        ? (distinctBarcodes.length - 1)
+        : 0;
+    const badgeHtml = extraCount > 0
+        ? `<span class="barcode-badge-more" data-barcodes="${_esc(JSON.stringify(distinctBarcodes))}">+${extraCount}</span>`
+        : '';
+
+    return `<span>${_esc(distinctBarcodes[0])}</span>${badgeHtml}`;
+}
+
+/**
+ * Shared tabular barcode controller for both desktop edit modal and mobile edit panel.
+ * Increasing quantity adds new empty barcode rows; decreasing quantity only trims unsaved
+ * newly added rows and never deletes already-registered barcodes.
+ */
+function _createBarcodeTableController({ tbodyId, emptyId, countBadgeId, qtyInputId, withScanBtn = false }) {
+    let initialPieces = [];
+
+    const _getEls = () => ({
+        tbody: document.getElementById(tbodyId),
+        emptyEl: document.getElementById(emptyId),
+        badgeEl: document.getElementById(countBadgeId),
+        qtyEl: document.getElementById(qtyInputId),
+    });
+
+    const _readCurrentRows = (tbody) => {
+        if (!tbody) return [];
+        return Array.from(tbody.querySelectorAll('.edit-barcode-row')).map(row => {
+            const inp = row.querySelector('.edit-piece-barcode');
+            return {
+                id: row.dataset.articleId || '',
+                barcode: inp ? inp.value : '',
+                isNew: row.dataset.isNew === 'true',
+            };
+        });
+    };
+
+    const _renderRows = (rows) => {
+        const { tbody, emptyEl, badgeEl } = _getEls();
+        if (!tbody) return;
+
+        const table = tbody.closest('table');
+        if (badgeEl) {
+            badgeEl.textContent = `${rows.length} barcode`;
+        }
+
+        if (rows.length === 0) {
+            tbody.innerHTML = '';
+            if (table) table.style.display = 'none';
+            if (emptyEl) emptyEl.style.display = 'block';
+            return;
+        }
+
+        if (table) table.style.display = 'table';
+        if (emptyEl) emptyEl.style.display = 'none';
+
+        tbody.innerHTML = rows.map((row, idx) => `
+            <tr class="edit-barcode-row" data-article-id="${_esc(row.id || '')}" data-is-new="${row.isNew ? 'true' : 'false'}">
+                <td>
+                    <span class="edit-barcode-piece-label">Pezzo #${idx + 1}</span>
+                    ${row.isNew || !row.id ? '<span class="edit-barcode-piece-tag">Nuovo</span>' : ''}
+                </td>
+                <td>
+                    <input type="text" class="form-control edit-piece-barcode" value="${_esc(row.barcode || '')}" placeholder="Es. 8000000000017">
+                </td>
+                ${withScanBtn ? `
+                <td style="text-align: center;">
+                    <button type="button" class="btn-scan-field btn-scan-piece-barcode" title="Scansiona barcode con fotocamera" style="padding: 4px 8px;">
+                        <span class="material-symbols-rounded" style="font-size: 16px;">photo_camera</span>
+                    </button>
+                </td>` : ''}
+            </tr>
+        `).join('');
+
+        if (withScanBtn) {
+            tbody.querySelectorAll('.btn-scan-piece-barcode').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const row = btn.closest('.edit-barcode-row');
+                    _activeScanRowInput = row ? row.querySelector('.edit-piece-barcode') : null;
+                    const camInput = document.getElementById('mob-art-barcode-camera-input');
+                    if (camInput) {
+                        camInput.value = '';
+                        camInput.click();
+                    }
+                });
+            });
+        }
+    };
+
+    const _syncToQty = (targetQty) => {
+        const { tbody } = _getEls();
+        const clamped = Math.max(0, Math.min(500, isNaN(targetQty) ? 0 : targetQty));
+        const rows = _readCurrentRows(tbody);
+
+        while (rows.length < clamped) {
+            const idx = rows.length;
+            if (idx < initialPieces.length) {
+                rows.push({
+                    id: initialPieces[idx].id || '',
+                    barcode: initialPieces[idx].barcode || '',
+                    isNew: !initialPieces[idx].id,
+                });
+            } else {
+                rows.push({ id: '', barcode: '', isNew: true });
+            }
+        }
+        // Only remove unsaved newly added rows (!r.id) when quantity decreases;
+        // already-registered barcode rows (r.id present) must never be deleted.
+        while (rows.length > clamped && rows.length > 0 && !rows[rows.length - 1].id) {
+            rows.pop();
+        }
+        _renderRows(rows);
+    };
+
+    const { qtyEl } = _getEls();
+    if (qtyEl) {
+        const onQtyChange = () => {
+            const val = parseInt(qtyEl.value, 10);
+            _syncToQty(isNaN(val) ? 0 : val);
+        };
+        qtyEl.addEventListener('input', onQtyChange);
+        qtyEl.addEventListener('change', onQtyChange);
+    }
+
+    return {
+        populate(item) {
+            const stockQty = Math.max(0, parseInt(item.stock ?? 0, 10) || 0);
+            if (Array.isArray(item.articles) && item.articles.length > 0) {
+                initialPieces = item.articles.map(a => ({
+                    id: a.id || '',
+                    barcode: a.barcode || '',
+                    isNew: !a.id,
+                }));
+            } else if (stockQty > 0) {
+                const fallbackBcs = Array.isArray(item.barcodes) && item.barcodes.length > 0
+                    ? item.barcodes
+                    : (item.barcode ? [item.barcode] : []);
+                initialPieces = Array.from({ length: stockQty }, (_, i) => ({
+                    id: '',
+                    barcode: fallbackBcs[i] || '',
+                    isNew: true,
+                }));
+            } else {
+                initialPieces = [];
+            }
+
+            const totalRows = Math.max(stockQty, initialPieces.length);
+            const initialRows = [];
+            for (let i = 0; i < totalRows; i++) {
+                if (i < initialPieces.length) {
+                    initialRows.push({ ...initialPieces[i] });
+                } else {
+                    initialRows.push({ id: '', barcode: '', isNew: true });
                 }
-            },
-            onError: () => {},
-            showToastFn: _showToast,
+            }
+            _renderRows(initialRows);
+        },
+        collectUpdates() {
+            const { tbody } = _getEls();
+            return _readCurrentRows(tbody).map(r => ({
+                id: r.id || null,
+                barcode: (r.barcode || '').trim() || null,
+            }));
+        },
+        reset() {
+            initialPieces = [];
+            _renderRows([]);
+        },
+    };
+}
+
+let _desktopBarcodeController = null;
+let _mobileBarcodeController = null;
+
+function _getDesktopBarcodeController() {
+    if (!_desktopBarcodeController) {
+        _desktopBarcodeController = _createBarcodeTableController({
+            tbodyId: 'edit-barcodes-tbody',
+            emptyId: 'edit-barcodes-empty',
+            countBadgeId: 'edit-barcode-count-badge',
+            qtyInputId: 'edit-article-qty',
+            withScanBtn: false,
         });
     }
+    return _desktopBarcodeController;
+}
+
+function _getMobileBarcodeController() {
+    if (!_mobileBarcodeController) {
+        _mobileBarcodeController = _createBarcodeTableController({
+            tbodyId: 'mob-barcodes-tbody',
+            emptyId: 'mob-barcodes-empty',
+            countBadgeId: 'mob-barcode-count-badge',
+            qtyInputId: 'mob-art-qty',
+            withScanBtn: true,
+        });
+    }
+    return _mobileBarcodeController;
 }
 
 // ============================================================================
@@ -1052,7 +1343,6 @@ function openEditArticleModal(item) {
     const inputName = document.getElementById('edit-article-name');
     const inputColor = document.getElementById('edit-article-color');
     const inputVendorCode = document.getElementById('edit-article-vendor-code');
-    const inputBarcode = document.getElementById('edit-article-barcode');
     const inputDesc = document.getElementById('edit-article-description');
     const inputExtDesc = document.getElementById('edit-article-ext-description');
     const inputTags = document.getElementById('edit-article-tags');
@@ -1066,12 +1356,13 @@ function openEditArticleModal(item) {
     if (inputName) inputName.value = _extractBaseArticleName(item);
     if (inputColor) inputColor.value = (item.colors && item.colors.length > 0) ? item.colors.join(', ') : '';
     if (inputVendorCode) inputVendorCode.value = item.vendor_code || '';
-    if (inputBarcode) inputBarcode.value = item.barcode || '';
     if (inputDesc) inputDesc.value = item.description || '';
     if (inputExtDesc) inputExtDesc.value = item.extended_description || '';
     if (inputTags) inputTags.value = (item.tags || []).join(', ');
     if (inputMaterials) inputMaterials.value = (item.materials || []).join(', ');
     if (inputQty) inputQty.value = item.stock ?? 0;
+
+    _getDesktopBarcodeController().populate(item);
 
     const brandId = _resolveBrandId(item);
     if (macroSelect && subSelect) {
@@ -1121,6 +1412,7 @@ function closeEditArticleModal() {
     const formEdit = document.getElementById('form-edit-article');
     if (modalEdit) modalEdit.classList.remove('active');
     if (formEdit) formEdit.reset();
+    _getDesktopBarcodeController().reset();
     _editingItem = null;
 }
 
@@ -1183,7 +1475,6 @@ async function _handleSaveEditArticle(e) {
     const inputName = document.getElementById('edit-article-name');
     const inputColor = document.getElementById('edit-article-color');
     const inputVendorCode = document.getElementById('edit-article-vendor-code');
-    const inputBarcode = document.getElementById('edit-article-barcode');
     const inputDesc = document.getElementById('edit-article-description');
     const inputExtDesc = document.getElementById('edit-article-ext-description');
     const inputTags = document.getElementById('edit-article-tags');
@@ -1196,7 +1487,8 @@ async function _handleSaveEditArticle(e) {
     const articleName = inputName ? inputName.value.trim() : '';
     const newColor = inputColor ? inputColor.value.trim() : '';
     const vendorCode = inputVendorCode ? inputVendorCode.value.trim() : '';
-    const barcode = inputBarcode ? inputBarcode.value.trim() : '';
+    const articlesUpdate = _getDesktopBarcodeController().collectUpdates();
+    const barcode = articlesUpdate.find(a => a.barcode)?.barcode || '';
     const description = inputDesc ? inputDesc.value.trim() : '';
     const extendedDescription = inputExtDesc ? inputExtDesc.value.trim() : '';
     const tags = (inputTags ? inputTags.value : '')
@@ -1240,6 +1532,7 @@ async function _handleSaveEditArticle(e) {
         materials: materials,
         vendor_code: vendorCode,
         barcode: barcode,
+        articles: articlesUpdate,
         color: color,
         new_color: newColor,
         quantity: newQty,
@@ -1382,7 +1675,6 @@ export function openArticleMobilePanel(item) {
     const nameInput = document.getElementById('mob-art-name');
     const colorInput = document.getElementById('mob-art-color');
     const vendorInput = document.getElementById('mob-art-vendor-code');
-    const barcodeInput = document.getElementById('mob-art-barcode');
     const descInput = document.getElementById('mob-art-description');
     const extDescInput = document.getElementById('mob-art-ext-description');
     const tagsInput = document.getElementById('mob-art-tags');
@@ -1421,7 +1713,6 @@ export function openArticleMobilePanel(item) {
     if (nameInput) nameInput.value = _extractBaseArticleName(item);
     if (colorInput) colorInput.value = (item.colors && item.colors.length > 0) ? item.colors.join(', ') : '';
     if (vendorInput) vendorInput.value = item.vendor_code || '';
-    if (barcodeInput) barcodeInput.value = item.barcode || '';
     if (descInput) descInput.value = item.description || '';
     if (extDescInput) extDescInput.value = item.extended_description || '';
     if (tagsInput) tagsInput.value = (item.tags || []).join(', ');
@@ -1429,6 +1720,8 @@ export function openArticleMobilePanel(item) {
 
     const inputQtyMobile = document.getElementById('mob-art-qty');
     if (inputQtyMobile) inputQtyMobile.value = item.stock ?? 0;
+
+    _getMobileBarcodeController().populate(item);
 
     const macroSelectMobile = document.getElementById('mob-art-macro-cat');
     const subSelectMobile = document.getElementById('mob-art-sub-cat');
@@ -1448,6 +1741,7 @@ export function openArticleMobilePanel(item) {
 export function closeArticleMobilePanel() {
     const container = document.getElementById('magazzino-container');
     if (container) container.classList.remove('mobile-panel-open');
+    _getMobileBarcodeController().reset();
     _currentMobileArticle = null;
 }
 
@@ -1458,7 +1752,6 @@ async function _handleSaveArticleMobile(e) {
     const nameInput = document.getElementById('mob-art-name');
     const colorInput = document.getElementById('mob-art-color');
     const vendorInput = document.getElementById('mob-art-vendor-code');
-    const barcodeInput = document.getElementById('mob-art-barcode');
     const descInput = document.getElementById('mob-art-description');
     const extDescInput = document.getElementById('mob-art-ext-description');
     const tagsInput = document.getElementById('mob-art-tags');
@@ -1471,7 +1764,8 @@ async function _handleSaveArticleMobile(e) {
     const articleName = nameInput ? nameInput.value.trim() : '';
     const newColor = colorInput ? colorInput.value.trim() : '';
     const vendorCode = vendorInput ? vendorInput.value.trim() : '';
-    const barcode = barcodeInput ? barcodeInput.value.trim() : '';
+    const articlesUpdate = _getMobileBarcodeController().collectUpdates();
+    const barcode = articlesUpdate.find(a => a.barcode)?.barcode || '';
     const description = descInput ? descInput.value.trim() : '';
     const extendedDescription = extDescInput ? extDescInput.value.trim() : '';
     const tags = (tagsInput ? tagsInput.value : '')
@@ -1515,6 +1809,7 @@ async function _handleSaveArticleMobile(e) {
         materials: materials,
         vendor_code: vendorCode,
         barcode: barcode,
+        articles: articlesUpdate,
         color: color,
         new_color: newColor,
         quantity: newQty,
@@ -1588,6 +1883,11 @@ function showArticleFullscreen(item) {
     const stockLabel = item.stock > 0 ? `Disponibile (${item.stock})` : 'Esaurito';
     const stockClass = item.stock > 5 ? 'available' : (item.stock > 0 ? 'low' : 'zero');
 
+    const barcodeDisplay = _buildBarcodeDisplayHtml(item);
+    const barcodesHtml = barcodeDisplay
+        ? `<div style="display: inline-flex; align-items: center; gap: 6px;">${barcodeDisplay}</div>`
+        : 'N/D';
+
     overlay.innerHTML = `
         <div style="background: var(--bg-surface); width: 94%; max-width: 1040px; max-height: 92vh; overflow-y: auto; border-radius: 16px; position: relative; display: flex; flex-direction: column; box-shadow: 0 16px 48px rgba(0,0,0,0.6); border: 1px solid var(--border-color);">
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid var(--border-color);">
@@ -1621,7 +1921,7 @@ function showArticleFullscreen(item) {
                         </div>
                         <div>
                             <div style="font-size: 12px; color: var(--text-muted);">Barcode (EAN)</div>
-                            <div style="font-weight: 500; font-size: 14px; font-family: monospace;">${item.barcode ? _esc(item.barcode) : 'N/D'}</div>
+                            <div style="font-weight: 500; font-size: 14px; font-family: monospace;">${barcodesHtml}</div>
                         </div>
                         <div>
                             <div style="font-size: 12px; color: var(--text-muted);">Codice Fornitore</div>

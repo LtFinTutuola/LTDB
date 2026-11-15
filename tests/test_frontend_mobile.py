@@ -316,7 +316,8 @@ def test_magazzino_mobile_articles_list_and_panel(db_session):
     assert 'id="mob-art-stock"' in html
     assert 'id="mob-art-name"' in html
     assert 'id="mob-art-vendor-code"' in html
-    assert 'id="mob-art-barcode"' in html
+    assert 'id="mob-barcodes-tbody"' in html
+    assert 'id="edit-barcodes-tbody"' in html
     assert 'id="mob-art-description"' in html
     assert 'id="mob-art-ext-description"' in html
     assert 'id="mob-art-tags"' in html
@@ -533,8 +534,14 @@ def test_magazzino_camera_barcode_elements(db_session):
     assert 'id="warehouse-barcode-camera-input"' in html
     assert 'capture="environment"' in html
     assert 'accept="image/*"' in html
-    assert 'id="btn-scan-mob-art-barcode"' in html
+    assert 'id="mob-barcodes-tbody"' in html
     assert 'class="search-scan-btn"' in html
+
+    # Mobile tabular barcode row scan button check in warehouse.js
+    res_wh_js = client.get("/static/js/warehouse.js")
+    assert res_wh_js.status_code == 200
+    assert 'btn-scan-piece-barcode' in res_wh_js.text
+    assert 'mob-art-barcode-camera-input' in res_wh_js.text
 
     # 2. JS module check
     res_js = client.get("/static/js/barcode_scanner.js")

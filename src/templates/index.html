@@ -493,6 +493,135 @@
     color: var(--text-secondary);
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
     line-height: 1.4;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .barcode-badge-more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: help;
+    flex-shrink: 0;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+  }
+  .barcode-badge-more:hover {
+    border-color: var(--accent);
+    background: var(--bg-surface);
+  }
+  .ltdb-barcode-tooltip {
+    position: fixed;
+    display: none;
+    z-index: 12500;
+    background: var(--bg-elevated, #1e222d);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm, 8px);
+    padding: 8px 12px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+    min-width: 170px;
+    max-width: 280px;
+  }
+  .ltdb-barcode-tooltip__title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 5px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .ltdb-barcode-tooltip__list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 12px;
+    color: var(--text-primary);
+  }
+  .ltdb-barcode-tooltip__item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ltdb-barcode-tooltip__idx {
+    font-size: 10px;
+    color: var(--text-muted);
+    min-width: 18px;
+  }
+  .edit-barcodes-table-wrap {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-app);
+    max-height: 190px;
+    overflow-y: auto;
+  }
+  .edit-barcodes-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .edit-barcodes-table th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    text-align: left;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border-color);
+    z-index: 1;
+  }
+  .edit-barcodes-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: middle;
+  }
+  .edit-barcodes-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+  .edit-barcode-piece-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+  .edit-barcode-piece-tag {
+    display: inline-block;
+    margin-left: 4px;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(var(--accent-rgb, 99, 102, 241), 0.14);
+    color: var(--accent);
+  }
+  .edit-piece-barcode {
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 13px;
+    padding: 6px 10px;
+    height: auto;
+  }
+  .edit-barcodes-empty {
+    padding: 12px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
   }
 
   .import-form-area {
@@ -1815,18 +1944,29 @@
                         </div>
                     </div>
 
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
-                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
-                            <label for="mob-art-vendor-code" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Codice Fornitore</label>
-                            <input type="text" id="mob-art-vendor-code" class="form-control" placeholder="Es. HWVG87...">
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <label for="mob-art-vendor-code" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Codice Fornitore</label>
+                        <input type="text" id="mob-art-vendor-code" class="form-control" placeholder="Es. HWVG87...">
+                    </div>
+
+                    <div class="form-group edit-barcodes-section" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <label style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Barcode Pezzi in Stock (EAN)</label>
+                            <span id="mob-barcode-count-badge" style="font-size: 11px; color: var(--text-muted); font-weight: 500;">0 pezzi</span>
                         </div>
-                        <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
-                            <label for="mob-art-barcode" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Barcode (EAN)</label>
-                            <div style="display: flex; gap: 6px;">
-                                <input type="text" id="mob-art-barcode" class="form-control" placeholder="Es. 800000...">
-                                <button type="button" id="btn-scan-mob-art-barcode" class="btn-scan-field" title="Scansiona barcode con fotocamera">
-                                    <span class="material-symbols-rounded" style="font-size: 18px;">photo_camera</span>
-                                </button>
+                        <div class="edit-barcodes-table-wrap">
+                            <table class="edit-barcodes-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 72px;">Pezzo</th>
+                                        <th>Barcode (EAN)</th>
+                                        <th style="width: 44px; text-align: center;">Scan</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="mob-barcodes-tbody"></tbody>
+                            </table>
+                            <div id="mob-barcodes-empty" class="edit-barcodes-empty" style="display: none;">
+                                Nessun pezzo in stock (quantità 0). Aumenta la quantità per aggiungere un barcode.
                             </div>
                         </div>
                     </div>
@@ -1924,14 +2064,29 @@
                     </div>
                 </div>
 
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
-                        <label for="edit-article-vendor-code" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Codice Fornitore</label>
-                        <input type="text" id="edit-article-vendor-code" class="form-control" placeholder="Es. HWVG87...">
+                <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                    <label for="edit-article-vendor-code" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Codice Fornitore</label>
+                    <input type="text" id="edit-article-vendor-code" class="form-control" placeholder="Es. HWVG87...">
+                </div>
+
+                <div class="form-group edit-barcodes-section" style="display: flex; flex-direction: column; gap: 6px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <label style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Barcode Pezzi in Stock (EAN)</label>
+                        <span id="edit-barcode-count-badge" style="font-size: 11px; color: var(--text-muted); font-weight: 500;">0 pezzi</span>
                     </div>
-                    <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
-                        <label for="edit-article-barcode" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Barcode (EAN)</label>
-                        <input type="text" id="edit-article-barcode" class="form-control" placeholder="Es. 8000000000017">
+                    <div class="edit-barcodes-table-wrap">
+                        <table class="edit-barcodes-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 90px;">Pezzo</th>
+                                    <th>Barcode (EAN)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="edit-barcodes-tbody"></tbody>
+                        </table>
+                        <div id="edit-barcodes-empty" class="edit-barcodes-empty" style="display: none;">
+                            Nessun pezzo in stock (quantità 0). Aumenta la quantità per aggiungere un barcode.
+                        </div>
                     </div>
                 </div>
 
@@ -2121,6 +2276,6 @@
 <script>
     window.__LTDB_BRANDS__ = {{ brands_json | safe }};
 </script>
-<script type="module" src="/static/js/main.js?v=20261115_2"></script>
+<script type="module" src="/static/js/main.js?v=20261115_4"></script>
 {% endblock %}
 

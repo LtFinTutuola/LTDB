@@ -1358,3 +1358,316 @@ class TestCatalogSearchGetAndPostEndpoints:
         assert res.headers.get("access-control-allow-origin") in ("*", "http://192.168.1.100:8000")
 
 
+class TestWarehouseMultiBarcodeSupport:
+    def test_query_returns_all_barcodes_and_articles_per_variant(self, db_session):
+        from datetime import date, datetime, timedelta
+        from src.models.wms import Supplier, Batch, Article, ArticleStatus
+        from src.services.catalog_query_service import (
+            query_paginated_catalog_variants,
+            build_variant_rows_for_blueprints,
+        )
+
+        brand = _make_brand(db_session, "MultiBcBrand")
+        bp = _make_blueprint(db_session, brand.id, article_name="Borsa Multi Barcode")
+
+        sup = Supplier(company_name="SupMulti")
+        db_session.add(sup)
+        db_session.flush()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-MBC", document_date=date(2026, 3, 1))
+        db_session.add(batch)
+        db_session.flush()
+
+        now = datetime.utcnow()
+        art1 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="VC-MULTI",
+            ean="8001111111111",
+            colors=["rosso"],
+            status=ArticleStatus.AVAILABLE,
+            created_at=now - timedelta(minutes=2),
+        )
+        art2 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="VC-MULTI",
+            ean="8002222222222",
+            colors=["rosso"],
+            status=ArticleStatus.AVAILABLE,
+            created_at=now - timedelta(minutes=1),
+        )
+        art_sold = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="VC-MULTI",
+            ean="8009999999999",
+            colors=["rosso"],
+            status=ArticleStatus.SOLD,
+            created_at=now,
+        )
+        db_session.add_all([art1, art2, art_sold])
+        db_session.commit()
+
+        # 1. Paginated warehouse query path
+        paginated = query_paginated_catalog_variants(db_session, limit=50, in_stock_only=False)
+        matched = [i for i in paginated["results"] if i.blueprint_id == bp.id]
+        assert len(matched) == 1
+        row = matched[0]
+        assert row.stock == 2
+        assert set(row.barcodes) == {"8001111111111", "8002222222222"}
+        assert "8009999999999" not in row.barcodes
+        assert len(row.articles) == 2
+        assert {a.id: a.barcode for a in row.articles} == {
+            str(art1.id): "8001111111111",
+            str(art2.id): "8002222222222",
+        }
+
+        # 2. Search / build_variant_rows_for_blueprints path
+        built = build_variant_rows_for_blueprints(
+            db_session,
+            [{"id": str(bp.id), "blueprint": bp, "relevance_score": 1.0}],
+            in_stock_only=False,
+        )
+        assert len(built) == 1
+        assert built[0].stock == 2
+        assert set(built[0].barcodes) == {"8001111111111", "8002222222222"}
+        assert len(built[0].articles) == 2
+
+    def test_update_blueprint_granular_article_barcodes(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article, ArticleStatus
+        from src.services import catalog_service
+        from src.schemas.catalog import ArticleBarcodeUpdate
+
+        brand = _make_brand(db_session, "GranularBrand")
+        bp = _make_blueprint(db_session, brand.id, article_name="Zaino Granular")
+        sup = Supplier(company_name="SupGran")
+        db_session.add(sup)
+        db_session.flush()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-GRN", document_date=date(2026, 3, 2))
+        db_session.add(batch)
+        db_session.flush()
+
+        art1 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="VC-GRN",
+            ean="8001000000001",
+            colors=["nero"],
+            status=ArticleStatus.AVAILABLE,
+        )
+        art2 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="VC-GRN",
+            ean="8001000000002",
+            colors=["nero"],
+            status=ArticleStatus.AVAILABLE,
+        )
+        db_session.add_all([art1, art2])
+        db_session.commit()
+
+        req = CatalogUpdateRequest(
+            color="nero",
+            barcode="8001000000999",
+            articles=[
+                ArticleBarcodeUpdate(id=str(art1.id), barcode="8001000000999"),
+                ArticleBarcodeUpdate(id=str(art2.id), barcode="8001000000002"),
+            ],
+        )
+        res = catalog_service.update_blueprint(db_session, bp.id, req)
+        assert res.status == "success"
+
+        db_session.refresh(art1)
+        db_session.refresh(art2)
+        assert art1.ean == "8001000000999"
+        assert art2.ean == "8001000000002"
+
+    def test_update_blueprint_quantity_increase_with_new_piece_barcodes(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article, ArticleStatus
+        from src.services import catalog_service
+        from src.schemas.catalog import ArticleBarcodeUpdate
+
+        brand = _make_brand(db_session, "IncBarcodeBrand")
+        bp = _make_blueprint(db_session, brand.id, article_name="Tracolla Increment")
+        sup = Supplier(company_name="SupInc")
+        db_session.add(sup)
+        db_session.flush()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-INC", document_date=date(2026, 3, 3))
+        db_session.add(batch)
+        db_session.flush()
+
+        art1 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="VC-INC",
+            ean="8005000000001",
+            colors=["blu"],
+            status=ArticleStatus.AVAILABLE,
+        )
+        db_session.add(art1)
+        db_session.commit()
+
+        req = CatalogUpdateRequest(
+            color="blu",
+            quantity=3,
+            articles=[
+                ArticleBarcodeUpdate(id=str(art1.id), barcode="8005000000001"),
+                ArticleBarcodeUpdate(id=None, barcode="8005000000002"),
+                ArticleBarcodeUpdate(id=None, barcode="8005000000003"),
+            ],
+        )
+        res = catalog_service.update_blueprint(db_session, bp.id, req)
+        assert res.status == "success"
+
+        all_arts = db_session.query(Article).filter(
+            Article.article_blueprint_id == bp.id,
+            Article.status == ArticleStatus.AVAILABLE,
+        ).all()
+        assert len(all_arts) == 3
+        assert {a.ean for a in all_arts} == {
+            "8005000000001",
+            "8005000000002",
+            "8005000000003",
+        }
+
+    def test_query_deduplicates_shared_barcodes_and_ignores_unavailable_for_badge(self, db_session):
+        from datetime import date
+        from src.models.wms import Supplier, Batch, Article, ArticleStatus
+        from src.services.catalog_query_service import query_paginated_catalog_variants
+
+        brand = _make_brand(db_session, "SharedBcBrand")
+        bp = _make_blueprint(db_session, brand.id, article_name="Borsa Shared EAN")
+        sup = Supplier(company_name="SupShared")
+        db_session.add(sup)
+        db_session.flush()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-SHD", document_date=date(2026, 3, 4))
+        db_session.add(batch)
+        db_session.flush()
+
+        # Two available pieces sharing identical EAN, plus one unavailable with a different EAN
+        a1 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="VC-SHD",
+            ean="8007777777771",
+            colors=["verde"],
+            status=ArticleStatus.AVAILABLE,
+        )
+        a2 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="VC-SHD",
+            ean="8007777777771",
+            colors=["verde"],
+            status=ArticleStatus.AVAILABLE,
+        )
+        a_unavail = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="VC-SHD",
+            ean="8007777777999",
+            colors=["verde"],
+            status=ArticleStatus.UNAVAILABLE,
+        )
+        db_session.add_all([a1, a2, a_unavail])
+        db_session.commit()
+
+        paginated = query_paginated_catalog_variants(db_session, limit=50, in_stock_only=False)
+        row = next(i for i in paginated["results"] if i.blueprint_id == bp.id)
+        assert row.stock == 2
+        assert row.barcodes == ["8007777777771"]  # Deduplicated & excludes unavailable
+        assert len(row.articles) == 2
+
+    def test_update_blueprint_quantity_decrease_preserves_registered_barcodes(self, db_session):
+        from datetime import date, datetime, timedelta
+        from src.models.wms import Supplier, Batch, Article, ArticleStatus
+        from src.services import catalog_service
+        from src.schemas.catalog import ArticleBarcodeUpdate
+
+        brand = _make_brand(db_session, "PreserveBcBrand")
+        bp = _make_blueprint(db_session, brand.id, article_name="Zaino Preserve EAN")
+        sup = Supplier(company_name="SupPreserve")
+        db_session.add(sup)
+        db_session.flush()
+        batch = Batch(supplier_id=sup.id, delivery_note_number="DDT-PRS", document_date=date(2026, 3, 5))
+        db_session.add(batch)
+        db_session.flush()
+
+        now = datetime.utcnow()
+        art1 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="VC-PRS",
+            ean="8008000000001",
+            colors=["giallo"],
+            status=ArticleStatus.AVAILABLE,
+            created_at=now - timedelta(minutes=2),
+        )
+        art2 = Article(
+            article_blueprint_id=bp.id,
+            batch_id=batch.id,
+            supplier_code="VC-PRS",
+            ean="8008000000002",
+            colors=["giallo"],
+            status=ArticleStatus.AVAILABLE,
+            created_at=now - timedelta(minutes=1),
+        )
+        db_session.add_all([art1, art2])
+        db_session.commit()
+
+        # Decrease quantity from 2 to 1 while sending both registered articles (as edit modal now does)
+        req_dec = CatalogUpdateRequest(
+            color="giallo",
+            quantity=1,
+            articles=[
+                ArticleBarcodeUpdate(id=str(art2.id), barcode="8008000000002"),
+                ArticleBarcodeUpdate(id=str(art1.id), barcode="8008000000001"),
+            ],
+        )
+        catalog_service.update_blueprint(db_session, bp.id, req_dec)
+
+        db_session.refresh(art1)
+        db_session.refresh(art2)
+        assert art2.status == ArticleStatus.AVAILABLE
+        assert art1.status == ArticleStatus.UNAVAILABLE
+        assert art1.ean == "8008000000001"
+        assert art2.ean == "8008000000002"
+
+        # Reactivate from 1 to 2 with blank new barcode entry: must preserve art1's registered EAN
+        req_inc = CatalogUpdateRequest(
+            color="giallo",
+            quantity=2,
+            articles=[
+                ArticleBarcodeUpdate(id=str(art2.id), barcode="8008000000002"),
+                ArticleBarcodeUpdate(id=None, barcode=None),
+            ],
+        )
+        catalog_service.update_blueprint(db_session, bp.id, req_inc)
+        db_session.refresh(art1)
+        assert art1.status == ArticleStatus.AVAILABLE
+        assert art1.ean == "8008000000001"
+
+    def test_frontend_multi_barcode_elements_present(self, db_session):
+        client = TestClient(app)
+        res = client.get("/magazzino")
+        assert res.status_code == 200
+        html = res.text
+
+        assert "barcode-badge-more" in html
+        assert "ltdb-barcode-tooltip" in html
+        assert 'id="edit-barcodes-tbody"' in html
+        assert 'id="mob-barcodes-tbody"' in html
+
+        res_js = client.get("/static/js/warehouse.js")
+        assert res_js.status_code == 200
+        js = res_js.text
+        assert "_initMultiBarcodeTooltip" in js
+        assert "_buildBarcodeDisplayHtml" in js
+        assert "_createBarcodeTableController" in js
+        assert "!rows[rows.length - 1].id" in js
+        assert "articles: articlesUpdate" in js
+
+
+
