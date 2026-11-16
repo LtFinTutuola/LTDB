@@ -17,14 +17,17 @@ from src.core.logger import get_logger
 logger = get_logger()
 
 
+from src.utils.llm_models import CODES_DEDUCTION_DEFAULT_MODEL
+
+
 def _get_model() -> str:
     """Read the configurable model from gemini.yaml."""
     gemini_yaml_path = Path("src/agents/gemini.yaml")
     if gemini_yaml_path.exists():
         with open(gemini_yaml_path, "r") as f:
             cfg = yaml.safe_load(f) or {}
-        return cfg.get("codes_deduction_agent_model", "gemini-3.1-flash-lite")
-    return "gemini-3.1-flash-lite"
+        return cfg.get("codes_deduction_agent_model", CODES_DEDUCTION_DEFAULT_MODEL)
+    return CODES_DEDUCTION_DEFAULT_MODEL
 
 
 from src.utils.prompts import CODES_PATTERN_ANALYSIS_SYSTEM_PROMPT as _SYSTEM_PROMPT

@@ -13,7 +13,7 @@ from src.core.logger import get_logger
 
 logger = get_logger()
 
-_MODEL = "gemini-3.1-flash-lite"
+from src.utils.llm_models import SALES_CHAT_QUERY_PLAN_MODEL as _MODEL
 
 _DOW_NAMES_IT = [
     "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"

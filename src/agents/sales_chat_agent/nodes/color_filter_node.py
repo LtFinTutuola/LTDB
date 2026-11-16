@@ -16,8 +16,7 @@ from src.core.logger import get_logger
 
 logger = get_logger()
 
-_MODEL = "gemini-3.1-flash-lite"
-
+from src.utils.llm_models import SALES_CHAT_COLOR_FILTER_MODEL as _MODEL
 from src.utils.prompts import SALES_CHAT_COLOR_FILTER_SYSTEM_PROMPT as _SYSTEM_PROMPT
 
 

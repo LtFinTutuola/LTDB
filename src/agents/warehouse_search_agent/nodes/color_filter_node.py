@@ -22,8 +22,7 @@ from src.utils.text_normalize import fold_text
 
 logger = get_logger()
 
-_MODEL = "gemini-3.1-flash-lite"
-
+from src.utils.llm_models import WAREHOUSE_COLOR_FILTER_MODEL as _MODEL
 from src.utils.prompts import WAREHOUSE_SEARCH_COLOR_FILTER_SYSTEM_PROMPT as _SYSTEM_PROMPT
 
 

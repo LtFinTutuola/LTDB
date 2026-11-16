@@ -404,7 +404,7 @@ class LLMClient:
         """Return all recorded LLM call telemetry as a list of dicts."""
         return [r.to_dict() for r in self._logs]
 
-    async def generate_embedding(self, text: str, model_name: str = "gemini-embedding-001") -> list[float]:
+    async def generate_embedding(self, text: str, model_name: Optional[str] = None) -> list[float]:
         """
         Generate an embedding vector for a given text.
         
@@ -415,6 +415,9 @@ class LLMClient:
         Returns:
             A list of floats representing the embedding vector.
         """
+        if model_name is None:
+            from src.utils.llm_models import DEFAULT_EMBEDDING_MODEL
+            model_name = DEFAULT_EMBEDDING_MODEL
         response = await self._client.aio.models.embed_content(
             model=model_name,
             contents=text,
@@ -425,7 +428,7 @@ class LLMClient:
                        tokens_in=None, tokens_out=None, query_usage=0)
         return response.embeddings[0].values
 
-    def generate_embedding_sync(self, text: str, model_name: str = "gemini-embedding-001") -> list[float]:
+    def generate_embedding_sync(self, text: str, model_name: Optional[str] = None) -> list[float]:
         """
         Synchronously generate an embedding vector for a given text.
         
@@ -436,6 +439,9 @@ class LLMClient:
         Returns:
             A list of floats representing the embedding vector.
         """
+        if model_name is None:
+            from src.utils.llm_models import DEFAULT_EMBEDDING_MODEL
+            model_name = DEFAULT_EMBEDDING_MODEL
         response = self._client.models.embed_content(
             model=model_name,
             contents=text,

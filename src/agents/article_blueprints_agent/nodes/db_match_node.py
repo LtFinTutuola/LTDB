@@ -29,9 +29,8 @@ from src.core.logger import get_logger
 logger = get_logger()
 
 
+from src.utils.llm_models import BLUEPRINTS_DB_MATCH_MODEL as _MODEL
 from src.utils.prompts import BLUEPRINTS_DB_MATCH_SYSTEM_PROMPT
-
-_MODEL = "gemini-3.1-flash-lite"
 
 
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:

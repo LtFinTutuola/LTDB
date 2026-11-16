@@ -29,9 +29,8 @@ class BlueprintSynthesisOutput(BaseModel):
 
 # ---------------------------------------------------------------------------
 
+from src.utils.llm_models import BLUEPRINTS_SYNTHESIZE_MODEL as _MODEL
 from src.utils.prompts import BLUEPRINTS_SYNTHESIS_SYSTEM_PROMPT
-
-_MODEL = "gemini-3.1-flash-lite"
 
 
 async def _synthesize_single_blueprint(client: LLMClient, bp: dict) -> dict:

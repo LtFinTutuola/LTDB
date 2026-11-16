@@ -43,8 +43,10 @@ _STOPWORDS = {
 
 _GEMINI_YAML_PATH = Path(__file__).resolve().parent.parent.parent / "gemini.yaml"
 
+from src.utils.llm_models import BLUEPRINTS_EQUIVALENCE_ORACLE_MODEL
+
 DEFAULT_ORACLE_CONFIG: dict[str, Any] = {
-    "model_name": "gemini-3.1-flash-lite",
+    "model_name": BLUEPRINTS_EQUIVALENCE_ORACLE_MODEL,
     "temperature": 0.0,
     "max_concurrency": 5,
     "base_score": 50,
@@ -622,7 +624,7 @@ async def _judge_dimension(
     """Esegue la singola micro-chiamata per una dimensione delimitata dal semaforo di concorrenza."""
     system_prompt = _PROMPTS[dimension]
     prompt = f"ARTICOLO X:\n{context_x}\n\nARTICOLO Y:\n{context_y}\n\nValuta la dimensione {dimension}."
-    model_name = config.get("model_name", "gemini-3.1-flash-lite")
+    model_name = config.get("model_name", BLUEPRINTS_EQUIVALENCE_ORACLE_MODEL)
     temperature = config.get("temperature", 0.0)
 
     async with semaphore:

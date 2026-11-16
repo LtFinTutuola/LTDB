@@ -596,9 +596,10 @@ async def _generate_user_friendly_rule_explanation(
     user_prompt += "Genera la spiegazione in italiano spiegando la regola con gli esempi pratici citati."
 
     try:
+        from src.utils.llm_models import BLUEPRINT_REVISION_EXPLANATION_MODEL
         client = LLMClient()
         resp = await client.call(
-            model_name="gemini-3.1-flash-lite",
+            model_name=BLUEPRINT_REVISION_EXPLANATION_MODEL,
             system_prompt=system_prompt,
             prompt=user_prompt,
             pipeline_stage="Blueprint Revision - Grounded User Explanation",

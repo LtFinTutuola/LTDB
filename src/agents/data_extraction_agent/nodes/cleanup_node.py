@@ -1,11 +1,10 @@
 from src.agents.llm_client import LLMClient
 from src.agents.data_extraction_agent.state import ExtractionGraphState
 from src.core.logger import get_logger
+from src.utils.llm_models import DATA_EXTRACTION_CLEANUP_MODEL as _MODEL
 from src.utils.prompts import DATA_EXTRACTION_CLEANUP_SYSTEM_PROMPT
 
 logger = get_logger()
-
-_MODEL = "gemini-3.1-flash-lite"
 
 
 async def cleanup_node(state: ExtractionGraphState) -> dict:

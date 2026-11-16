@@ -4,11 +4,10 @@ import re
 from src.agents.llm_client import LLMClient
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
 from src.core.logger import get_logger
+from src.utils.llm_models import BLUEPRINTS_WEB_SEARCH_MODEL as _MODEL
 from src.utils.prompts import BLUEPRINTS_WEB_SEARCH_SYSTEM_PROMPT
 
 logger = get_logger()
-
-_MODEL = "gemini-3-flash-preview"
 
 
 def _parse_name_and_desc(raw_text: str, fallback_name: str, fallback_desc: str) -> tuple[str, str]:

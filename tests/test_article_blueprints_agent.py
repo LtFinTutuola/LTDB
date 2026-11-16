@@ -310,3 +310,32 @@ def test_centralized_prompts_repository_exports_all_non_empty_prompts():
         assert isinstance(val, str) and len(val.strip()) > 30, f"Prompt {name} missing or too short"
 
 
+def test_centralized_llm_models_repository_exports_all_non_empty_models():
+    import src.utils.llm_models as models_mod
+
+    expected_names = [
+        "DATA_EXTRACTION_CLEANUP_MODEL",
+        "DATA_EXTRACTION_JSON_MODEL",
+        "BLUEPRINTS_WEB_SEARCH_MODEL",
+        "BLUEPRINTS_ENRICH_MODEL",
+        "BLUEPRINTS_DB_MATCH_MODEL",
+        "BLUEPRINTS_VALIDATE_CLUSTERS_MODEL",
+        "BLUEPRINTS_SYNTHESIZE_MODEL",
+        "BLUEPRINTS_EQUIVALENCE_ORACLE_MODEL",
+        "CODES_DEDUCTION_DEFAULT_MODEL",
+        "PHOTO_SEARCH_QUERY_GEN_MODEL",
+        "PHOTO_SEARCH_GROUNDED_MODEL",
+        "WAREHOUSE_QUERY_PLAN_MODEL",
+        "WAREHOUSE_COLOR_FILTER_MODEL",
+        "SALES_CHAT_QUERY_PLAN_MODEL",
+        "SALES_CHAT_COLOR_FILTER_MODEL",
+        "SALES_CHAT_ANSWER_SYNTHESIS_MODEL",
+        "BLUEPRINT_REVISION_EXPLANATION_MODEL",
+        "DEFAULT_EMBEDDING_MODEL",
+    ]
+    for name in expected_names:
+        val = getattr(models_mod, name, None)
+        assert isinstance(val, str) and val.strip(), f"Model constant {name} missing or empty"
+
+
+

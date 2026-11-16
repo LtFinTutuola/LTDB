@@ -12,11 +12,11 @@ from typing import Optional
 from src.agents.llm_client import LLMClient
 from src.agents.photo_search_agent.state import PhotoSearchItemState
 from src.core.logger import get_logger
+from src.utils.llm_models import PHOTO_SEARCH_GROUNDED_MODEL as _MODEL
 from src.utils.prompts import PHOTO_GROUNDED_SEARCH_SYSTEM_PROMPT
 
 logger = get_logger()
 
-_MODEL = "gemini-3-flash-preview"
 _RETRY_TEMPERATURES = (0.2, 0.5, 0.8)
 
 _GROUNDING_REDIRECT_PREFIX = "https://vertexaisearch.cloud.google.com/"

@@ -25,9 +25,8 @@ from src.core.logger import get_logger
 
 logger = get_logger()
 
+from src.utils.llm_models import BLUEPRINTS_VALIDATE_CLUSTERS_MODEL as _MODEL
 from src.utils.prompts import BLUEPRINTS_CLUSTER_VALIDATION_SYSTEM_PROMPT
-
-_MODEL = "gemini-3.1-flash-lite"
 
 
 def _compute_centroid(embeddings: List[List[float]]) -> List[float]:

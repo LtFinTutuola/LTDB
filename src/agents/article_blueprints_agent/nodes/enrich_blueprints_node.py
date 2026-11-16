@@ -3,11 +3,10 @@ import json
 from src.agents.llm_client import LLMClient
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
 from src.core.logger import get_logger
+from src.utils.llm_models import BLUEPRINTS_ENRICH_MODEL as _MODEL
 from src.utils.prompts import BLUEPRINTS_ENRICHMENT_SYSTEM_PROMPT
 
 logger = get_logger()
-
-_MODEL = "gemini-3.1-flash-lite"
 
 
 async def _enrich_single_blueprint(client: LLMClient, bp: dict, categories: dict) -> dict:

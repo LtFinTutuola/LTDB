@@ -9,9 +9,8 @@ from __future__ import annotations
 from typing import Optional
 from src.agents.llm_client import LLMClient
 from src.agents.photo_search_agent.state import PhotoSearchItemState
+from src.utils.llm_models import PHOTO_SEARCH_QUERY_GEN_MODEL as _MODEL
 from src.utils.prompts import PHOTO_QUERY_GEN_SYSTEM_PROMPT
-
-_MODEL = "gemini-3.1-flash-lite"
 
 
 async def generate_query_node(state: PhotoSearchItemState, client: Optional[LLMClient] = None) -> dict:
