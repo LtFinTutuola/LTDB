@@ -11,6 +11,7 @@ class PhotoSearchItemState(BaseModel):
     item_id: str = ""
     brand_name: str = ""
     vendor_code: str = ""
+    barcode: str = ""
     color: str = "unknown"
     article_name: str = ""
     description: str = ""

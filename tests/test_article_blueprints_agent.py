@@ -338,4 +338,84 @@ def test_centralized_llm_models_repository_exports_all_non_empty_models():
         assert isinstance(val, str) and val.strip(), f"Model constant {name} missing or empty"
 
 
+@pytest.mark.asyncio
+async def test_web_search_blueprints_node_retries_with_barcode_on_not_found():
+    state = BlueprintsGraphState(
+        new_blueprints=[
+            {
+                "id": "bp-barcode",
+                "is_new": True,
+                "cluster_items": [
+                    {
+                        "vendor_code": "CA138C-01",
+                        "barcode": "8058988473066",
+                        "article_name": "Borsa Hobo",
+                    }
+                ],
+            }
+        ],
+        categories={"Borse": {"description": "desc", "sub_categories": {}}},
+        brand_name="Caleidos",
+    )
+
+    prompts_seen = []
+
+    async def fake_call_with_grounding(*args, **kwargs):
+        prompts_seen.append(kwargs["prompt"])
+        if len(prompts_seen) == 1:
+            return ("<FOUND>false</FOUND><NAME>Caleidos CA138C-01</NAME><DESCRIPTION>Borsa Hobo</DESCRIPTION>", [])
+        return ("<FOUND>true</FOUND><NAME>Caleidos Borsa Hobo Pelle</NAME><DESCRIPTION>Borsa hobo ufficiale.</DESCRIPTION>", ["https://example.com/p"])
+
+    with patch("src.agents.article_blueprints_agent.nodes.web_search_blueprints_node.LLMClient") as MockClient:
+        mock_inst = MockClient.return_value
+        mock_inst.call_with_grounding = AsyncMock(side_effect=fake_call_with_grounding)
+        mock_inst.get_logs.return_value = [{"query_usage": 3, "grounding_detected": True}]
+
+        res = await web_search_blueprints_node(state)
+
+    assert len(prompts_seen) == 2
+    assert "CA138C-01" in prompts_seen[0]
+    assert "8058988473066" not in prompts_seen[0]
+    assert "8058988473066" in prompts_seen[1]
+    assert "CA138C-01" not in prompts_seen[1]
+    assert res["warnings"] == []
+    item = res["new_blueprints"][0]["cluster_items"][0]
+    assert item["article_name"] == "Caleidos Borsa Hobo Pelle"
+    assert item["article_description"] == "Borsa hobo ufficiale."
+
+
+@pytest.mark.asyncio
+async def test_web_search_blueprints_node_no_extra_retry_when_not_found_and_no_barcode():
+    state = BlueprintsGraphState(
+        new_blueprints=[
+            {
+                "id": "bp-no-barcode",
+                "is_new": True,
+                "cluster_items": [
+                    {
+                        "vendor_code": "UNKNOWN-99",
+                        "article_name": "Articolo Ignoto",
+                    }
+                ],
+            }
+        ],
+        categories={"Borse": {"description": "desc", "sub_categories": {}}},
+        brand_name="TestBrand",
+    )
+
+    with patch("src.agents.article_blueprints_agent.nodes.web_search_blueprints_node.LLMClient") as MockClient:
+        mock_inst = MockClient.return_value
+        mock_inst.call_with_grounding = AsyncMock(
+            return_value=("<FOUND>false</FOUND><NAME>TestBrand UNKNOWN-99</NAME><DESCRIPTION>Articolo Ignoto</DESCRIPTION>", [])
+        )
+        mock_inst.get_logs.return_value = [{"query_usage": 3, "grounding_detected": True}]
+
+        res = await web_search_blueprints_node(state)
+
+    mock_inst.call_with_grounding.assert_called_once()
+    assert len(res["warnings"]) == 1
+    assert res["new_blueprints"][0].get("web_search_unverified") is True
+
+
+
 

@@ -10,9 +10,15 @@ from src.utils.prompts import BLUEPRINTS_WEB_SEARCH_SYSTEM_PROMPT
 logger = get_logger()
 
 
-def _parse_name_and_desc(raw_text: str, fallback_name: str, fallback_desc: str) -> tuple[str, str]:
+def _is_found(raw_text: str) -> bool:
     found_match = re.search(r"<FOUND>(.*?)</FOUND>", raw_text, re.DOTALL | re.IGNORECASE)
     if found_match and found_match.group(1).strip().lower() == "false":
+        return False
+    return True
+
+
+def _parse_name_and_desc(raw_text: str, fallback_name: str, fallback_desc: str) -> tuple[str, str]:
+    if not _is_found(raw_text):
         return fallback_name, fallback_desc
 
     name_match = re.search(r"<NAME>(.*?)</NAME>", raw_text, re.DOTALL | re.IGNORECASE)
@@ -42,6 +48,50 @@ def _has_grounding_evidence(client: LLMClient, extracted_urls: list[str]) -> boo
     return False
 
 
+def _build_search_prompt(
+    brand: str,
+    code_label: str,
+    code_value: str,
+    description: str,
+    is_barcode: bool = False,
+) -> str:
+    brand_first_token = brand.split()[0] if brand and brand.split() else brand
+    if is_barcode:
+        if description:
+            search_strategy = (
+                f"1. Primo tentativo: {brand} {code_value}\n"
+                f"2. Secondo tentativo (se il primo non dà risultati pertinenti): {code_value} {brand_first_token}\n"
+                f"3. Ultimo tentativo: {code_value}"
+            )
+        else:
+            search_strategy = (
+                f"1. Primo tentativo: {brand} {code_value}\n"
+                f"2. Secondo tentativo (se il primo non dà risultati pertinenti): {code_value}"
+            )
+    elif description:
+        search_strategy = (
+            f"1. Primo tentativo: {brand} {description} {code_value}\n"
+            f"2. Secondo tentativo (se il primo non dà risultati pertinenti): {brand} {code_value}\n"
+            f"3. Ultimo tentativo: {code_value} {brand_first_token}"
+        )
+    else:
+        search_strategy = (
+            f"1. Primo tentativo: {brand} {code_value}\n"
+            f"2. Secondo tentativo (se il primo non dà risultati pertinenti): {code_value} {brand_first_token}"
+        )
+
+    return (
+        f"Trova il nome ufficiale e la descrizione del prodotto nel catalogo o e-commerce del brand.\n\n"
+        f"--- DATI DI PARTENZA ---\n"
+        f"Brand: {brand}\n"
+        f"{code_label}: {code_value}\n"
+        f"Nome/Descrizione Input: {description}\n\n"
+        f"--- STRATEGIA DI RICERCA ---\n"
+        f"{search_strategy}\n\n"
+        f"Analizza i risultati web e restituisci <FOUND>true|false</FOUND>, <NAME>...</NAME> e <DESCRIPTION>...</DESCRIPTION>."
+    )
+
+
 async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> tuple[dict, list[str]]:
     items = bp.get("cluster_items", [])
     if not items:
@@ -50,30 +100,27 @@ async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> 
     # Use the first item to perform the search
     base_item = items[0]
     vendor_code = base_item.get("vendor_code") or base_item.get("VendorCode") or ""
+    barcode = str(base_item.get("barcode") or base_item.get("Barcode") or base_item.get("ean") or "").strip()
     description = base_item.get("article_name") or base_item.get("description") or base_item.get("Description") or ""
 
-    brand_first_token = brand.split()[0] if brand and brand.split() else brand
-    if description:
-        search_strategy = (
-            f"1. Primo tentativo: {brand} {description} {vendor_code}\n"
-            f"2. Secondo tentativo (se il primo non dà risultati pertinenti): {brand} {vendor_code}\n"
-            f"3. Ultimo tentativo: {vendor_code} {brand_first_token}"
+    vendor_prompt = _build_search_prompt(
+        brand=brand,
+        code_label="Codice / Modello (VendorCode)",
+        code_value=vendor_code,
+        description=description,
+        is_barcode=False,
+    )
+    has_distinct_barcode = bool(barcode and barcode != vendor_code)
+    barcode_prompt = (
+        _build_search_prompt(
+            brand=brand,
+            code_label="Codice a barre (EAN / Barcode)",
+            code_value=barcode,
+            description=description,
+            is_barcode=True,
         )
-    else:
-        search_strategy = (
-            f"1. Primo tentativo: {brand} {vendor_code}\n"
-            f"2. Secondo tentativo (se il primo non dà risultati pertinenti): {vendor_code} {brand_first_token}"
-        )
-
-    prompt = (
-        f"Trova il nome ufficiale e la descrizione del prodotto nel catalogo o e-commerce del brand.\n\n"
-        f"--- DATI DI PARTENZA ---\n"
-        f"Brand: {brand}\n"
-        f"Codice / Modello (VendorCode): {vendor_code}\n"
-        f"Nome/Descrizione Input: {description}\n\n"
-        f"--- STRATEGIA DI RICERCA ---\n"
-        f"{search_strategy}\n\n"
-        f"Analizza i risultati web e restituisci <FOUND>true|false</FOUND>, <NAME>...</NAME> e <DESCRIPTION>...</DESCRIPTION>."
+        if has_distinct_barcode
+        else None
     )
 
     fallback_name = description if description else f"{brand} {vendor_code}".strip()
@@ -89,11 +136,13 @@ async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> 
         from src.agents.base import AgentException
 
         for attempt_idx, temp in enumerate(_RETRY_TEMPERATURES, start=1):
+            use_barcode = attempt_idx == 2 and barcode_prompt is not None
+            current_prompt = barcode_prompt if use_barcode else vendor_prompt
             try:
                 raw_text, extracted_urls = await client.call_with_grounding(
                     model_name=_MODEL,
                     system_prompt=BLUEPRINTS_WEB_SEARCH_SYSTEM_PROMPT,
-                    prompt=prompt,
+                    prompt=current_prompt,
                     pipeline_stage="Stage 3 - Web Search Extraction",
                     max_output_tokens=4096,
                     temperature=temp,
@@ -113,13 +162,29 @@ async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> 
                 )
                 break
 
+            found = _is_found(raw_text)
             cand_name, cand_desc = _parse_name_and_desc(raw_text, fallback_name, fallback_desc)
             if attempt_idx == 1:
                 first_attempt_result = (cand_name, cand_desc)
 
-            if _has_grounding_evidence(client, extracted_urls):
+            has_grounding = _has_grounding_evidence(client, extracted_urls)
+            if has_grounding and found:
                 name, desc = cand_name, cand_desc
                 web_confirmed = True
+                break
+
+            if has_grounding and not found:
+                if attempt_idx == 1 and barcode_prompt is not None:
+                    logger.log_agent(
+                        "web_search_blueprints_node",
+                        "not_found_retry_with_barcode",
+                        "warning",
+                        vendor_code=vendor_code,
+                        barcode=barcode,
+                        attempt=attempt_idx,
+                        temperature=temp,
+                    )
+                    continue
                 break
 
             logger.log_agent(

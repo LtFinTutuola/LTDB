@@ -392,3 +392,36 @@ async def test_grounded_search_stops_on_null_when_grounding_evidence_present():
 
     assert res["candidate_url"] is None
     assert mock_client.call_with_grounding.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_grounded_search_retries_with_barcode_on_null_when_grounding_present():
+    from src.agents.photo_search_agent.nodes.grounded_search_node import grounded_image_search_node
+    from src.agents.photo_search_agent.state import PhotoSearchItemState
+
+    mock_client = MagicMock()
+    mock_client.get_logs.return_value = [{"query_usage": 3, "grounding_detected": True}]
+    mock_client.call_with_grounding = AsyncMock(
+        side_effect=[
+            ("NULL", ["https://www.ebay.it/itm/123"]),
+            ("https://cdn.spartoo.it/photos/CA031-01.jpg", ["https://www.spartoo.it/Caleidos-8058988473066"]),
+        ]
+    )
+
+    state = PhotoSearchItemState(
+        item_id="it-barcode-retry",
+        brand_name="Caleidos",
+        vendor_code="CA138C01",
+        barcode="8058988473066",
+        article_name="Borsa a mano in pelle",
+        color="darkbrown",
+        current_query="Caleidos Borsa a mano in pelle CA138C01 dark brown",
+    )
+    res = await grounded_image_search_node(state, client=mock_client)
+
+    assert res["candidate_url"] == "https://cdn.spartoo.it/photos/CA031-01.jpg"
+    assert mock_client.call_with_grounding.call_count == 2
+    assert "8058988473066" not in mock_client.call_with_grounding.call_args_list[0].kwargs["prompt"]
+    assert "8058988473066" in mock_client.call_with_grounding.call_args_list[1].kwargs["prompt"]
+    assert "CA138C01" not in mock_client.call_with_grounding.call_args_list[1].kwargs["prompt"]
+

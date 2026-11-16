@@ -66,6 +66,15 @@ async def grounded_image_search_node(state: PhotoSearchItemState, client: Option
         f"{state.current_query}\n\n"
         f"Riferimenti verifica -> Vendor Code: {state.vendor_code} | Colore richiesto: {state.color}"
     )
+    barcode = (state.barcode or "").strip()
+    has_distinct_barcode = bool(barcode and barcode != state.vendor_code)
+    barcode_prompt = (
+        f"Esegui una ricerca su internet e trova una foto reale del prodotto usando il codice a barre (EAN):\n"
+        f"{state.brand_name} {barcode} {state.color}\n\n"
+        f"Riferimenti verifica -> Barcode EAN: {barcode} | Articolo: {state.article_name} | Colore richiesto: {state.color}"
+        if has_distinct_barcode
+        else None
+    )
 
     if state.mode == "retry":
         stage_name = "Stage 5 - Photo Retry Grounded"
@@ -78,8 +87,9 @@ async def grounded_image_search_node(state: PhotoSearchItemState, client: Option
 
     candidate_url: str | None = None
     for attempt_idx, temp in enumerate(_RETRY_TEMPERATURES, start=1):
-        prompt_to_send = search_prompt
-        if attempt_idx > 1:
+        use_barcode = attempt_idx == 2 and barcode_prompt is not None
+        prompt_to_send = barcode_prompt if use_barcode else search_prompt
+        if attempt_idx > 1 and not use_barcode:
             prompt_to_send = (
                 f"{search_prompt}\n\n"
                 f"NOTA: Nel tentativo precedente non hai eseguito la ricerca web. "
@@ -99,7 +109,22 @@ async def grounded_image_search_node(state: PhotoSearchItemState, client: Option
         raw_res_stripped = (raw_res or "").strip()
         candidate_url = None if raw_res_stripped.upper() == "NULL" else extract_best_url(extracted_urls, raw_res_stripped)
 
-        if candidate_url is not None or _has_grounding_evidence(llm, extracted_urls):
+        if candidate_url is not None:
+            break
+
+        has_grounding = _has_grounding_evidence(llm, extracted_urls)
+        if has_grounding:
+            if attempt_idx == 1 and barcode_prompt is not None:
+                logger.log_agent(
+                    "grounded_search_node",
+                    "not_found_retry_with_barcode",
+                    "warning",
+                    vendor_code=state.vendor_code,
+                    barcode=barcode,
+                    attempt=attempt_idx,
+                    temperature=temp,
+                )
+                continue
             break
 
         logger.log_agent(
