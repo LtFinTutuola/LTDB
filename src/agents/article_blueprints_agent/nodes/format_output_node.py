@@ -43,6 +43,19 @@ def _clean_blueprint(bp: dict) -> dict:
         "materials": list(bp.get("materials") or []),
         "dimensions": bp.get("dimensions"),
     }
+    cluster_items = bp.get("cluster_items") or []
+    is_unverified = bool(
+        bp.get("web_search_unverified")
+        or any(isinstance(it, dict) and it.get("web_search_unverified") for it in cluster_items)
+    )
+    if is_unverified:
+        warn_msg = bp.get("warning_message") or next(
+            (it.get("warning_message") for it in cluster_items if isinstance(it, dict) and it.get("warning_message")),
+            None,
+        )
+        cleaned["web_search_unverified"] = True
+        if warn_msg:
+            cleaned["warning_message"] = warn_msg
     return cleaned
 
 

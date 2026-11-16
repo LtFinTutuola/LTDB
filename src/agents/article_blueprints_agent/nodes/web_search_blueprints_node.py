@@ -39,6 +39,25 @@ def _parse_name_and_desc(raw_text: str, fallback_name: str, fallback_desc: str) 
     return name, desc
 
 
+_RETRY_TEMPERATURES = (0.0, 0.3, 0.7)
+
+
+def _has_grounding_evidence(client: LLMClient, extracted_urls: list[str]) -> bool:
+    if extracted_urls:
+        return True
+    get_logs = getattr(client, "get_logs", None)
+    logs = get_logs() if callable(get_logs) else None
+    if isinstance(logs, list) and logs:
+        last = logs[-1]
+        if isinstance(last, dict):
+            q_usage = last.get("query_usage")
+            if isinstance(q_usage, int) and q_usage > 0:
+                return True
+            if last.get("grounding_detected") is True:
+                return True
+    return False
+
+
 async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> tuple[dict, list[str]]:
     items = bp.get("cluster_items", [])
     if not items:
@@ -64,19 +83,65 @@ async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> 
     fallback_name = description if description else f"{brand} {vendor_code}".strip()
     fallback_desc = description
 
+    first_attempt_result: tuple[str, str] | None = None
+    web_confirmed = False
+    warning_list: list[str] = []
+    name = fallback_name
+    desc = fallback_desc
+
     try:
         from src.agents.base import AgentException
-        
-        raw_text, extracted_urls = await client.call_with_grounding(
-            model_name=_MODEL,
-            system_prompt=_SYSTEM_PROMPT,
-            prompt=prompt,
-            pipeline_stage="Stage 3 - Web Search Extraction",
-            max_output_tokens=512,
-            temperature=0.0,
-        )
-        
-        name, desc = _parse_name_and_desc(raw_text, fallback_name, fallback_desc)
+
+        for attempt_idx, temp in enumerate(_RETRY_TEMPERATURES, start=1):
+            try:
+                raw_text, extracted_urls = await client.call_with_grounding(
+                    model_name=_MODEL,
+                    system_prompt=_SYSTEM_PROMPT,
+                    prompt=prompt,
+                    pipeline_stage="Stage 3 - Web Search Extraction",
+                    max_output_tokens=512,
+                    temperature=temp,
+                )
+            except Exception as attempt_exc:
+                if "AgentException" in str(type(attempt_exc)) or first_attempt_result is None:
+                    raise
+                logger.log_agent(
+                    "web_search_blueprints_node",
+                    "retry_attempt_failed",
+                    "warning",
+                    vendor_code=vendor_code,
+                    attempt=attempt_idx,
+                    temperature=temp,
+                    error=str(attempt_exc),
+                )
+                break
+
+            cand_name, cand_desc = _parse_name_and_desc(raw_text, fallback_name, fallback_desc)
+            if attempt_idx == 1:
+                first_attempt_result = (cand_name, cand_desc)
+
+            if _has_grounding_evidence(client, extracted_urls):
+                name, desc = cand_name, cand_desc
+                web_confirmed = True
+                break
+
+            logger.log_agent(
+                "web_search_blueprints_node",
+                "grounding_missing_retry",
+                "warning",
+                vendor_code=vendor_code,
+                attempt=attempt_idx,
+                temperature=temp,
+            )
+
+        if not web_confirmed:
+            if first_attempt_result is not None:
+                name, desc = first_attempt_result
+            unverified_warning = (
+                f"Attenzione: i dati anagrafici per l'articolo '{name}' (cod. '{vendor_code}') "
+                f"non sono stati confermati da una ricerca sul web."
+            )
+            warning_list.append(unverified_warning)
     except Exception as exc:
         warning = f"[web_search_blueprints_node] Cluster for '{vendor_code}': web search failed ({exc}). Using fallback."
         print(warning)
@@ -85,15 +150,19 @@ async def _enrich_blueprint_cluster(bp: dict, brand: str, client: LLMClient) -> 
         # Propagate AgentException to halt ingestion as per requirements
         if "AgentException" in str(type(exc)):
             raise exc
-    else:
-        warning_list = []
-        
+
     bp_copy = dict(bp)
+    if not web_confirmed and warning_list:
+        bp_copy["web_search_unverified"] = True
+        bp_copy["warning_message"] = warning_list[0]
     # Apply to all items in the cluster
     for item in bp_copy.get("cluster_items", []):
         item["article_name"] = name
         item["article_description"] = desc
         item["description"] = desc
+        if not web_confirmed and warning_list:
+            item["web_search_unverified"] = True
+            item["warning_message"] = warning_list[0]
 
     return bp_copy, warning_list
 

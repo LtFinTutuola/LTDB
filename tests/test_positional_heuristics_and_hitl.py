@@ -329,13 +329,21 @@ class TestFastPathAndLazyInduction:
         )
         assert len(r_items) == 1 and len(ur_items) == 0
 
-        # 2) Stesso supplier_code ma colore DIVERSO mentre in PENDING_COHORT -> inviato a Cold-Path per verifica Q2/Q4
-        r_items2, ur_items2, _, _, _ = _resolve_items_with_photos(
+        # 2) Stesso supplier_code ma colore DIVERSO mentre in PENDING_COHORT -> risolto su bp esistente con Safeguard HITL
+        r_items2, ur_items2, _, hw2, _ = _resolve_items_with_photos(
             db_session, str(brand.id),
             [{"item_id": "2", "vendor_code": "MOD777", "colors": ["rosso"], "quantity": 1}],
             [h],
         )
-        assert len(r_items2) == 0 and len(ur_items2) == 1
+        assert len(r_items2) == 1 and len(ur_items2) == 0
+        sg_rec = r_items2[0].get("_safeguard_reconciliation")
+        assert sg_rec is not None
+        assert sg_rec["kind"] == "COLOR_AGNOSTIC_SAFEGUARD"
+        assert sg_rec["status"] == "PENDING_USER_CONFIRMATION"
+        assert sg_rec["requires_confirmation"] is True
+        assert sg_rec["existing_colors"] == ["nero"]
+        assert sg_rec["incoming_colors"] == ["rosso"]
+        assert len(hw2) == 1
 
 
 # ===========================================================================
@@ -652,7 +660,7 @@ class TestHeuristicInductionAndHITL:
             "variants": [{"supplier_code": "AGNOSTIC01", "colors": ["nero"]}],
         }]
 
-        # Caso Q2: stesso codice fornitore, stesso modello, colore diverso -> COLOR_AGNOSTIC + attach
+        # Caso Q2: stesso codice fornitore, stesso modello, colore diverso -> Safeguard HITL se non già COLOR_AGNOSTIC
         monkeypatch.setattr(
             "src.agents.article_blueprints_agent.nodes.oracle_and_induction_node.evaluate_pair",
             lambda client, a, b: asyncio.sleep(0, result=OracleEvaluationResult(
@@ -674,8 +682,25 @@ class TestHeuristicInductionAndHITL:
             }],
         )
         out_q2 = asyncio.run(oracle_and_induction_node(state_q2))
-        assert len(out_q2["new_blueprints"]) == 0
-        assert out_q2["heuristic_reconciliations"][0]["mode_update"] == HeuristicMode.COLOR_AGNOSTIC
+        assert len(out_q2["new_blueprints"]) == 1
+        rec_q2 = out_q2["heuristic_reconciliations"][0]
+        assert rec_q2["kind"] == "COLOR_AGNOSTIC_SAFEGUARD"
+        assert rec_q2["status"] == "PENDING_USER_CONFIRMATION"
+        assert rec_q2["requires_confirmation"] is True
+        assert rec_q2["mode_update"] == HeuristicMode.COLOR_AGNOSTIC
+
+        # Se l'euristica è già COLOR_AGNOSTIC -> attach automatico senza safeguard
+        state_q2_agnostic = BlueprintsGraphState(
+            brand_id="b-1", brand_name="B", brand_cohort=cohort,
+            brand_heuristic={"mode": HeuristicMode.COLOR_AGNOSTIC, "rules": [], "negative_constraints": []},
+            new_blueprints=[{
+                "id": "cl-q2-agno", "is_new": True,
+                "article_name": "Cintura Reversibile", "description": "Cintura in pelle con fibbia",
+                "cluster_items": [{"item_id": "i-q2-agno", "vendor_code": "AGNOSTIC01", "normalized_vendor_code": "AGNOSTIC01", "colors": ["marrone"], "quantity": 1}],
+            }],
+        )
+        out_q2_agnostic = asyncio.run(oracle_and_induction_node(state_q2_agnostic))
+        assert len(out_q2_agnostic["new_blueprints"]) == 0
 
         # Caso Q4: stesso codice fornitore ma descrizioni divergenti -> DISAMBIGUATION (R6: niente UNRELIABLE_SKU automatico)
         monkeypatch.setattr(

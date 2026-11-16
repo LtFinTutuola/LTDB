@@ -359,6 +359,9 @@ function _buildMobileStagingList(grouped, photoProposals) {
         }
 
         const isNewBadge = blueprint.is_new ? '<span class="badge-new" style="margin-left: 6px; font-size: 10px; padding: 1px 6px;">Nuovo</span>' : '';
+        const isUnverifiedIcon = blueprint.web_search_unverified
+            ? `<span class="unverified-web-wrap" tabindex="0"><span class="material-symbols-rounded unverified-web-icon" aria-label="Dati non confermati da ricerca web">warning</span><span class="unverified-web-tooltip" role="tooltip">Attenzione: i dati per questo articolo non sono confermati da una ricerca sul web e necessitano di una revisione manuale.</span></span>`
+            : '';
 
         for (const item of items) {
             const proposal = _findProposal(photoProposals, item.item_id);
@@ -398,7 +401,7 @@ function _buildMobileStagingList(grouped, photoProposals) {
                             <span class="warehouse-row__mobile-brand">${_esc(brandName)}</span>
                             ${catText ? `<span class="warehouse-row__mobile-cat-divider">•</span><span class="warehouse-row__mobile-category">${_esc(catText)}</span>` : ''}
                         </div>
-                        <div class="warehouse-row__title">${_esc(blueprint.article_name || 'Articolo')}${isNewBadge}</div>
+                        <div class="warehouse-row__title">${isUnverifiedIcon}${_esc(blueprint.article_name || 'Articolo')}${isNewBadge}</div>
                         <div class="warehouse-row__mobile-meta-bottom">
                             <span class="stock-badge stock-badge--available">${metaBottomText}</span>
                         </div>
@@ -532,6 +535,9 @@ function _groupByBlueprint(data) {
 
 function _buildBlueprintCard(bp, items, photoProposals) {
     const isNew = bp.is_new ? '<span class="badge-new">Nuovo</span>' : '';
+    const unverifiedWebIcon = bp.web_search_unverified
+        ? `<span class="unverified-web-wrap" tabindex="0"><span class="material-symbols-rounded unverified-web-icon" aria-label="Dati non confermati da ricerca web">warning</span><span class="unverified-web-tooltip" role="tooltip">Attenzione: i dati per questo articolo non sono confermati da una ricerca sul web e necessitano di una revisione manuale.</span></span>`
+        : '';
 
     const photoHtml = _buildPhotoCarousel(bp.id, items, photoProposals);
 
@@ -553,7 +559,7 @@ function _buildBlueprintCard(bp, items, photoProposals) {
             <div class="blueprint-card__info-col">
                 <div><span class="chip chip--small">${_esc(_stagingData?.brand_name || 'Brand')}</span></div>
                 <div class="blueprint-card__name">
-                    <span class="editable" data-entity="blueprint" data-id="${_esc(bp.id)}" data-field="article_name">${_esc(bp.article_name || '')}</span>${isNew}
+                    ${unverifiedWebIcon}<span class="editable" data-entity="blueprint" data-id="${_esc(bp.id)}" data-field="article_name">${_esc(bp.article_name || '')}</span>${isNew}
                 </div>
                 <div class="blueprint-card__categories">
                     <select class="category-select sel-macro-cat" data-bp-id="${_esc(bp.id)}" ${!hasHierarchy ? 'disabled' : ''} title="Macro Categoria">
@@ -809,7 +815,7 @@ function _attachMobileListeners(panel) {
                     barcodeInput.dispatchEvent(new Event('input', { bubbles: true }));
                 }
             },
-            onError: () => {},
+            onError: () => { },
             showToastFn: (msg, type) => {
                 addMessage(msg, type === 'error' ? 'error' : 'system');
             }
@@ -1590,7 +1596,8 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
 
         const isRetroactiveSplit = rec.kind === 'RETROACTIVE_SPLIT';
         const isRetroactiveMerge = rec.kind === 'RETROACTIVE_MERGE';
-        const isOracleDisambiguation = rec.kind === 'DISAMBIGUATION' || !!rec.oracle;
+        const isColorAgnosticSafeguard = rec.kind === 'COLOR_AGNOSTIC_SAFEGUARD';
+        const isOracleDisambiguation = rec.kind === 'DISAMBIGUATION' || (!isColorAgnosticSafeguard && !!rec.oracle);
 
         let headerTitle = "Rilevata una possibile coincidenza nel database";
         let subheaderText = isOracleDisambiguation
@@ -1601,7 +1608,14 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
         let rejectBtnLabel = "No, sono articoli diversi";
         let confirmBtnLabel = "Si, sono lo stesso articolo";
 
-        if (isRetroactiveSplit) {
+        if (isColorAgnosticSafeguard) {
+            headerTitle = "Rilevati due colori diversi con lo stesso codice articolo";
+            subheaderText = "Esistono già articoli in magazzino con questo stesso codice fornitore ma con un colore differente. Si tratta effettivamente di due varianti cromatiche distinte (codifica Color-Agnostic) oppure di un errore di importazione sul colore?";
+            colABadge = "Presente in magazzino";
+            colBBadge = "Articolo in ingresso";
+            rejectBtnLabel = "No, è un errore di importazione sul colore";
+            confirmBtnLabel = "Sì, sono due varianti cromatiche distinte";
+        } else if (isRetroactiveSplit) {
             headerTitle = "Rilevata divisione retroattiva nel database";
             subheaderText = "Alla luce della nuova regola sul codice articolo, un articolo già presente nel database raggruppa due codici modello differenti. Confermi la separazione in due articoli distinti, oppure vuoi mantenerli uniti?";
             colABadge = "Articolo a magazzino #1";
@@ -1616,6 +1630,15 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
             rejectBtnLabel = "No, sono articoli diversi";
             confirmBtnLabel = "Si, sono lo stesso articolo";
         }
+
+        const existingColorsText = (rec.existing_colors || []).join(', ');
+        const incomingColorsText = (rec.incoming_colors || incoming.colors || []).join(', ');
+        const dbColorRowHtml = isColorAgnosticSafeguard && existingColorsText
+            ? `<div class="hitl-card-subheader" style="margin-top:2px;"><span class="hitl-card-label">Colore a magazzino:</span> <span class="hitl-card-code">${_esc(existingColorsText)}</span></div>`
+            : '';
+        const incomingColorRowHtml = isColorAgnosticSafeguard && incomingColorsText
+            ? `<div class="hitl-card-subheader" style="margin-top:2px;"><span class="hitl-card-label">Colore in ingresso:</span> <span class="hitl-card-code">${_esc(incomingColorsText)}</span></div>`
+            : '';
 
         // Tabella Analisi AI sui due articoli (quando l'oracolo ha valutato le dimensioni)
         let oracleTableHtml = '';
@@ -1683,6 +1706,7 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
                             <span class="hitl-card-label">Codice modello:</span>
                             <span class="hitl-card-code">${_esc(dbCode || '-')}</span>
                         </div>
+                        ${dbColorRowHtml}
                         ${dbPhotoBodyHtml}
                     </div>
 
@@ -1696,15 +1720,16 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
                             <span class="hitl-card-label">Codice modello:</span>
                             <span class="hitl-card-code">${_esc(incomingCode || '-')}</span>
                         </div>
+                        ${incomingColorRowHtml}
                         ${incomingPhotoBodyHtml}
                     </div>
                 </div>
                 ${oracleTableHtml}
                 <div class="hitl-box-footer">
-                    <button type="button" class="btn-hitl-reject" data-rec-id="${recId}">
+                    <button type="button" class="btn-hitl-reject${isColorAgnosticSafeguard ? ' btn-hitl-neutral' : ''}" data-rec-id="${recId}">
                         ${_esc(rejectBtnLabel)}
                     </button>
-                    <button type="button" class="btn-hitl-confirm" data-rec-id="${recId}">
+                    <button type="button" class="btn-hitl-confirm${isColorAgnosticSafeguard ? ' btn-hitl-neutral' : ''}" data-rec-id="${recId}">
                         ${_esc(confirmBtnLabel)}
                     </button>
                 </div>
@@ -1718,7 +1743,24 @@ function _buildHeuristicReconciliationsSection(reconciliations, photoProposals) 
 async function _handleHeuristicDecision(reconciliationId, opName) {
     if (!reconciliationId) return;
     try {
-        const ops = [..._operationsQueue, { op: opName, reconciliation_id: reconciliationId }];
+        const rec = (_stagingData?.heuristic_reconciliations || []).find(
+            r => r.reconciliation_id === reconciliationId
+        );
+        const opPayload = { op: opName, reconciliation_id: reconciliationId };
+        if (opName === 'reject_heuristic_reconciliation' && rec?.kind === 'COLOR_AGNOSTIC_SAFEGUARD') {
+            const existingCols = (rec.existing_colors || []).join(', ');
+            const incomingCols = (rec.incoming_colors || rec.incoming_items?.[0]?.colors || []).join(', ');
+            const chosenColor = window.prompt(
+                `Inserisci il colore corretto da assegnare a questo articolo e retroattivamente a tutti gli articoli in magazzino con colore "${existingCols}":\n` +
+                `(Colore in magazzino: "${existingCols}" — Colore in ingresso: "${incomingCols}")`,
+                incomingCols || existingCols
+            );
+            if (chosenColor === null || !chosenColor.trim()) {
+                return;
+            }
+            opPayload.fields = { corrected_color: chosenColor.trim() };
+        }
+        const ops = [..._operationsQueue, opPayload];
         const result = await api.submitRevisions(_jobId, ops);
         _operationsQueue = [];
         if (result?.data) _stagingData = result.data;

@@ -343,15 +343,46 @@ async def oracle_and_induction_node(state: BlueprintsGraphState) -> dict:
 
             if same_code:
                 if relation == "DIFFERENT":
-                    # Q2: stesso codice, colori diversi -> COLOR_AGNOSTIC
-                    if mode in ("PENDING_COHORT", "COLOR_AGNOSTIC"):
-                        records.append(_record(
-                            kind="MODE_UPDATE", mode_update="COLOR_AGNOSTIC",
-                            incoming_items=_incoming_view(cluster)
-                        ))
-                        mode = "COLOR_AGNOSTIC"
-                    _attach(cluster, cand, cand.get("normalized_vendor_code"))
-                    handled = True
+                    # Q2: stesso codice, colori diversi -> safeguard HITL se l'euristica non è già COLOR_AGNOSTIC
+                    cand_mode = cand.get("heuristic_mode") or mode
+                    if cand_mode == "COLOR_AGNOSTIC":
+                        _attach(cluster, cand, cand.get("normalized_vendor_code"))
+                        handled = True
+                    else:
+                        existing_cols = []
+                        for v in cand.get("variants", []) or []:
+                            if v.get("colors"):
+                                existing_cols = list(dict.fromkeys(
+                                    str(c).strip().lower() for c in v["colors"] if c and str(c).strip()
+                                ))
+                                break
+                        incoming_cols = sorted(_cluster_colors(cluster))
+                        rec = _record(
+                            kind="COLOR_AGNOSTIC_SAFEGUARD",
+                            status=STATUS_PENDING,
+                            requires_confirmation=True,
+                            staging_blueprint_ids=[cluster["id"]],
+                            incoming_items=_incoming_view(cluster),
+                            matched_db_blueprints=[_db_bp_view(cand)],
+                            merge_target_blueprint_id=cand["id"],
+                            heuristic_id=cand.get("heuristic_id"),
+                            existing_colors=existing_cols,
+                            incoming_colors=incoming_cols,
+                            mode_update="COLOR_AGNOSTIC",
+                            oracle={
+                                "final_score": _get_score(best_res),
+                                "raw_score": getattr(best_res, "raw_score", _get_score(best_res)),
+                                "ambiguity_reason": "SAME_CODE_DIFFERENT_COLOR",
+                                "code_verdict": getattr(best_res, "code_verdict", "NEUTRAL"),
+                                "color_relation": relation,
+                                "dimensions": _serialize_dimensions(getattr(best_res, "dimensions", {})),
+                                "reasoning": "Codici identici ma colori diversi: richiesta conferma per promuovere l'euristica a COLOR_AGNOSTIC o correggere il colore.",
+                            },
+                        )
+                        cluster["_heuristic_reconciliation_id"] = rec["reconciliation_id"]
+                        records.append(rec)
+                        remaining.append(cluster)
+                        handled = True
                 else:
                     # Stesso codice ma colore non dimostrabilmente diverso (A3 / H3)
                     rec = _record(

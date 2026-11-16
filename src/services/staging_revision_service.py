@@ -526,6 +526,26 @@ def _apply_confirm_heuristic_reconciliation(
         # Ensure target DB blueprint is present in staging_data["blueprints"] with is_new=False
         _resolve_blueprint_ref(target_bp_id, generated_ids, staging_data, db, op_index, "confirm_heuristic_reconciliation")
 
+    # Caso 0b: Conferma safeguard COLOR_AGNOSTIC (stesso codice, due varianti cromatiche distinte)
+    if kind == "COLOR_AGNOSTIC_SAFEGUARD":
+        rec["mode_update"] = "COLOR_AGNOSTIC"
+        rec["rule_update"] = None
+        target_bp_norm = None
+        for bp in staging_data.get("blueprints", []):
+            if str(bp.get("id")) == str(target_bp_id):
+                target_bp_norm = bp.get("normalized_vendor_code")
+                break
+        for item in staging_data.get("items", []):
+            if item.get("article_blueprint_id") in staging_bp_ids or item.get("item_id") in incoming_item_ids:
+                if target_bp_id:
+                    item["article_blueprint_id"] = target_bp_id
+                if target_bp_norm:
+                    item["normalized_vendor_code"] = target_bp_norm
+        for old_bp_id in staging_bp_ids:
+            if target_bp_id and old_bp_id != target_bp_id:
+                _orphan_cleanup(staging_data, old_bp_id)
+        return
+
     # Se rule_update non era stato pre-calcolato (es. DISAMBIGUATION senza proposta) ma i codici differiscono, inducila ora
     if not rule and target_bp_id:
         inc_codes = [
@@ -918,6 +938,111 @@ def _apply_reject_heuristic_reconciliation(
     if origin == "DISAMBIGUATION":
         rec["rule_update"] = None
         rec["negative_pairs"] = []
+        return
+
+    # Caso Speciale 2: Rifiuto safeguard COLOR_AGNOSTIC -> errore di importazione sul colore
+    if kind == "COLOR_AGNOSTIC_SAFEGUARD":
+        corrected_raw = (op.fields or {}).get("corrected_color")
+        corrected_colors = list(dict.fromkeys(
+            c.strip().lower() for c in str(corrected_raw or "").split(",") if c and c.strip()
+        ))
+        if not corrected_colors:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Operation {op_index} (reject_heuristic_reconciliation): è necessario specificare il colore corretto ('corrected_color')",
+            )
+
+        rec["mode_update"] = None
+        rec["rule_update"] = None
+        rec["negative_pairs"] = []
+
+        target_bp_id = rec.get("merge_target_blueprint_id")
+        if target_bp_id:
+            _resolve_blueprint_ref(target_bp_id, generated_ids, staging_data, db, op_index, "reject_heuristic_reconciliation")
+
+        target_bp_norm = None
+        for bp in staging_data.get("blueprints", []):
+            if str(bp.get("id")) == str(target_bp_id):
+                target_bp_norm = bp.get("normalized_vendor_code")
+                break
+
+        for item in staging_data.get("items", []):
+            if item.get("article_blueprint_id") in staging_bp_ids or item.get("item_id") in incoming_item_ids:
+                if target_bp_id:
+                    item["article_blueprint_id"] = target_bp_id
+                if target_bp_norm:
+                    item["normalized_vendor_code"] = target_bp_norm
+                item["colors"] = list(corrected_colors)
+
+        for old_bp_id in staging_bp_ids:
+            if target_bp_id and old_bp_id != target_bp_id:
+                _orphan_cleanup(staging_data, old_bp_id)
+
+        old_colors = [
+            str(c).strip().lower()
+            for c in (rec.get("existing_colors") or [])
+            if c and str(c).strip()
+        ]
+        brand_id = staging_data.get("brand_id")
+        if brand_id and old_colors:
+            from src.repositories.wms_repo import wms_repo
+            from src.services.search_service import invalidate_search_cache
+            updated_cnt = wms_repo.replace_color_across_brand_articles(
+                db,
+                str(brand_id),
+                old_colors,
+                corrected_colors,
+                commit_changes=False,
+            )
+            if updated_cnt > 0:
+                invalidate_search_cache()
+        rec["retroactive_color_fix"] = {
+            "old_colors": old_colors,
+            "new_colors": list(corrected_colors),
+        }
+
+        old_color_set = set(old_colors)
+        corrected_color_set = set(corrected_colors)
+        for bp_entry in staging_data.get("blueprints") or []:
+            for v in bp_entry.get("variants") or []:
+                v_set = {str(c).strip().lower() for c in (v.get("colors") or []) if c and str(c).strip()}
+                if old_color_set and v_set == old_color_set:
+                    v["colors"] = list(corrected_colors)
+
+        for other_rec in staging_data.get("heuristic_reconciliations") or []:
+            if other_rec is rec or other_rec.get("kind") != "COLOR_AGNOSTIC_SAFEGUARD":
+                continue
+            if other_rec.get("status") != "PENDING_USER_CONFIRMATION":
+                continue
+            other_old_set = {
+                str(c).strip().lower()
+                for c in (other_rec.get("existing_colors") or [])
+                if c and str(c).strip()
+            }
+            if old_color_set and other_old_set == old_color_set:
+                other_rec["existing_colors"] = list(corrected_colors)
+                other_inc_set = {
+                    str(c).strip().lower()
+                    for c in (other_rec.get("incoming_colors") or [])
+                    if c and str(c).strip()
+                }
+                if other_inc_set == corrected_color_set:
+                    other_rec["status"] = "REJECTED"
+                    other_rec["mode_update"] = None
+                    other_rec["negative_pairs"] = []
+                    other_rec["retroactive_color_fix"] = dict(rec["retroactive_color_fix"])
+
+        from src.repositories.photo_repo import photo_repo
+        existing_db_photo = (
+            photo_repo.get_photo_by_blueprint_and_color(db, str(target_bp_id), corrected_colors[0])
+            if target_bp_id else None
+        )
+        for p in staging_data.get("photo_proposals") or []:
+            if p.get("item_id") in incoming_item_ids:
+                p["canonical_color_candidate"] = corrected_colors[0]
+                if existing_db_photo is not None:
+                    p["photo_url"] = f"/api/v1/ingestion/photos/{existing_db_photo.id}"
+                    p["photo_source"] = "db_existing"
         return
 
     # In tutti gli altri casi (Rifiuto DISAMBIGUATION o Rifiuto MASK_UPDATE diretto):

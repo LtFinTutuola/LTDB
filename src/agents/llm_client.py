@@ -149,7 +149,7 @@ class LLMCallRecord:
 
     __slots__ = ("call_id", "pipeline_stage", "model_name",
                  "input_tokens", "output_tokens", "query_usage",
-                 "prompt", "output")
+                 "grounding_detected", "prompt", "output")
 
     def __init__(
         self,
@@ -161,6 +161,7 @@ class LLMCallRecord:
         query_usage: int,
         prompt: str,
         output: str,
+        grounding_detected: bool = False,
     ) -> None:
         self.call_id = call_id
         self.pipeline_stage = pipeline_stage
@@ -168,6 +169,7 @@ class LLMCallRecord:
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
         self.query_usage = query_usage
+        self.grounding_detected = grounding_detected
         self.prompt = prompt
         self.output = output
 
@@ -272,6 +274,7 @@ class LLMClient:
             query_usage=telemetry["query_usage"],
             prompt=prompt,
             output=output_text,
+            grounding_detected=telemetry["grounding_detected"],
         )
         self._logs.append(record)
 
@@ -351,6 +354,7 @@ class LLMClient:
             query_usage=telemetry["query_usage"],
             prompt=prompt,
             output=output_text,
+            grounding_detected=telemetry["grounding_detected"],
         )
         self._logs.append(record)
 

@@ -131,7 +131,8 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
             db.query(ArticleBlueprint)
             .options(
                 selectinload(ArticleBlueprint.articles),
-                joinedload(ArticleBlueprint.category).joinedload(Category.parent)
+                joinedload(ArticleBlueprint.heuristic),
+                joinedload(ArticleBlueprint.category).joinedload(Category.parent),
             )
             .filter(ArticleBlueprint.brand_id == brand_id)
             .all()
@@ -155,6 +156,8 @@ class ArticleBlueprintRepository(BaseRepository[ArticleBlueprint, ArticleBluepri
 
             cohort.append({
                 "id": str(bp.id),
+                "heuristic_id": str(bp.heuristic_id) if bp.heuristic_id else None,
+                "heuristic_mode": bp.heuristic.heuristic_mode if bp.heuristic else None,
                 "normalized_vendor_code": bp.normalized_vendor_code,
                 "article_name": bp.article_name,
                 "description": bp.description,

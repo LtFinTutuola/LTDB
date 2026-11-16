@@ -88,7 +88,7 @@ async def enrich_blueprints_node(state: BlueprintsGraphState) -> dict:
     client = LLMClient()
     tasks = [_enrich_single_blueprint(client, bp, state.categories) for bp in state.new_blueprints]
     enriched = await asyncio.gather(*tasks)
-    warnings = [] # Placeholder logic
+    warnings = list(state.warnings)
     if warnings:
         for w in warnings:
             print(w)
