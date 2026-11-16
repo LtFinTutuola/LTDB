@@ -3,20 +3,9 @@ import json
 from src.agents.llm_client import LLMClient
 from src.agents.article_blueprints_agent.state import BlueprintsGraphState
 from src.core.logger import get_logger
+from src.utils.prompts import BLUEPRINTS_ENRICHMENT_SYSTEM_PROMPT
 
 logger = get_logger()
-
-_SYSTEM_PROMPT = (
-    "Sei un Agente AI di arricchimento catalogo PIM per un brand moda e lusso. "
-    "Il tuo compito è analizzare un articolo (nome e descrizione) e la gerarchia categorie del brand "
-    "e restituire ESCLUSIVAMENTE un JSON con i seguenti campi:\n"
-    "- category: (stringa, nome esatto della macro-categoria appropriata tra quelle fornite)\n"
-    "- sub_category: (stringa o null, nome esatto della sotto-categoria tra quelle fornite)\n"
-    "- extended_description: (stringa, descrizione marketing estesa e dettagliata di almeno 3-4 frasi in italiano)\n"
-    "- tags: (array di stringhe, fino a 10 parole chiave SEO rilevanti per la ricerca semantica)\n"
-    "- materials: (array di stringhe, materiali principali dell'articolo. INCLUDI un materiale SOLO se è esplicitamente menzionato nel nome o nella descrizione dell'articolo forniti. Se non sono menzionati materiali, restituisci un array vuoto [])\n"
-    "Non inventare categorie non presenti nell'elenco fornito."
-)
 
 _MODEL = "gemini-3.1-flash-lite"
 
@@ -55,10 +44,11 @@ async def _enrich_single_blueprint(client: LLMClient, bp: dict, categories: dict
     try:
         raw_res = await client.call(
             model_name=_MODEL,
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=BLUEPRINTS_ENRICHMENT_SYSTEM_PROMPT,
             prompt=prompt,
             pipeline_stage="Stage 7 - Blueprint Enrichment",
             response_mime_type="application/json",
+            temperature=0.2,
         )
         parsed = json.loads(raw_res)
         bp_copy["category"] = parsed.get("category", fallback_cat)

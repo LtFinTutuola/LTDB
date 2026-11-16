@@ -29,14 +29,9 @@ from src.core.logger import get_logger
 logger = get_logger()
 
 
-_MODEL = "gemini-3.1-flash-lite"
+from src.utils.prompts import BLUEPRINTS_DB_MATCH_SYSTEM_PROMPT
 
-_SYSTEM_PROMPT = (
-    "Sei un AI Data Steward. Il tuo compito è risolvere un'ambiguità di associazione "
-    "(Semantic Crowding) nel database articoli.\n\n"
-    "Restituisci ESCLUSIVAMENTE un JSON con la chiave 'selected_blueprint_id' contenente "
-    "l'ID del candidato corretto, oppure null se l'articolo non corrisponde ad alcun candidato."
-)
+_MODEL = "gemini-3.1-flash-lite"
 
 
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
@@ -91,7 +86,7 @@ async def _disambiguate_via_llm(
     try:
         raw_res = await client.call(
             model_name=_MODEL,
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=BLUEPRINTS_DB_MATCH_SYSTEM_PROMPT,
             prompt=prompt,
             pipeline_stage="Stage 4 - DB Disambiguation",
             response_mime_type="application/json",

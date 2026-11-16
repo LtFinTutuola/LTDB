@@ -24,13 +24,7 @@ logger = get_logger()
 
 _MODEL = "gemini-3.1-flash-lite"
 
-_SYSTEM_PROMPT = """Sei un assistente AI specializzato nella selezione delle varianti colore di articoli moda/pelletteria in magazzino.
-Il tuo compito è identificare quali dei colori a catalogo forniti sono associabili alla richiesta cromatica dell'utente.
-Devi adottare una POLICY INCLUSIVA:
-- Includi tonalità chiare o scure (es. per "blu": "dark navy", "harbor blue", "avio", "celeste", "denim").
-- Includi sfumature affini (es. per "marrone": "cuoio", "cognac", "tan", "tabacco", "cioccolato", "dark brown").
-- Includi denominazioni commerciali o in lingua inglese.
-Restituisci unicamente un array di interi contenente gli indici a base 0 dei colori associabili."""
+from src.utils.prompts import WAREHOUSE_SEARCH_COLOR_FILTER_SYSTEM_PROMPT as _SYSTEM_PROMPT
 
 
 async def color_filter_node(state: WarehouseSearchGraphState) -> dict:

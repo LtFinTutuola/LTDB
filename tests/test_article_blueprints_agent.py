@@ -240,3 +240,73 @@ def test_format_output_node_preserves_metadata_for_existing_blueprints():
     assert bp["sub_category"] == {"id": "cat-2", "description": "Tracolle"}
 
 
+def test_parse_name_and_desc_respects_found_false():
+    from src.agents.article_blueprints_agent.nodes.web_search_blueprints_node import _parse_name_and_desc
+
+    raw = "<FOUND>false</FOUND>\n<NAME>Hallucinated Name</NAME>\n<DESCRIPTION>Hallucinated Desc</DESCRIPTION>"
+    name, desc = _parse_name_and_desc(raw, "Fallback Name", "Fallback Desc")
+    assert name == "Fallback Name"
+    assert desc == "Fallback Desc"
+
+
+@pytest.mark.asyncio
+async def test_web_search_blueprints_node_uses_cascading_search_strategy():
+    with patch("src.agents.article_blueprints_agent.nodes.web_search_blueprints_node.LLMClient") as MockClient:
+        mock_inst = MockClient.return_value
+        mock_inst.call_with_grounding = AsyncMock(
+            return_value=("<FOUND>true</FOUND><NAME>Ynot? Street</NAME><DESCRIPTION>Borsa a tracolla</DESCRIPTION>", ["https://www.ynot.it/street"])
+        )
+
+        state = BlueprintsGraphState(
+            new_blueprints=[
+                {
+                    "id": "bp-ynot",
+                    "cluster_items": [{"vendor_code": "STE008F7", "article_name": "Medium bag"}],
+                }
+            ],
+            categories={},
+            brand_name="Ynot? Milano",
+        )
+        await web_search_blueprints_node(state)
+
+        call_kwargs = mock_inst.call_with_grounding.call_args.kwargs
+        assert call_kwargs["max_output_tokens"] == 4096
+        assert call_kwargs["thinking_level"] == "LOW"
+        prompt = call_kwargs["prompt"]
+        assert "1. Primo tentativo: Ynot? Milano Medium bag STE008F7" in prompt
+        assert "2. Secondo tentativo (se il primo non dà risultati pertinenti): Ynot? Milano STE008F7" in prompt
+        assert "3. Ultimo tentativo: STE008F7 Ynot?" in prompt
+
+
+def test_centralized_prompts_repository_exports_all_non_empty_prompts():
+    import src.utils.prompts as prompts_mod
+
+    expected_names = [
+        "DATA_EXTRACTION_CLEANUP_SYSTEM_PROMPT",
+        "DATA_EXTRACTION_JSON_SYSTEM_PROMPT",
+        "BLUEPRINTS_WEB_SEARCH_SYSTEM_PROMPT",
+        "BLUEPRINTS_DB_MATCH_SYSTEM_PROMPT",
+        "BLUEPRINTS_CLUSTER_VALIDATION_SYSTEM_PROMPT",
+        "BLUEPRINTS_SYNTHESIS_SYSTEM_PROMPT",
+        "BLUEPRINTS_ENRICHMENT_SYSTEM_PROMPT",
+        "ORACLE_TYPOLOGY_SYSTEM_PROMPT",
+        "ORACLE_LINE_SYSTEM_PROMPT",
+        "ORACLE_SIZE_SYSTEM_PROMPT",
+        "ORACLE_MATERIAL_SYSTEM_PROMPT",
+        "ORACLE_CONSTRUCTION_SYSTEM_PROMPT",
+        "PHOTO_QUERY_GEN_SYSTEM_PROMPT",
+        "PHOTO_GROUNDED_SEARCH_SYSTEM_PROMPT",
+        "CODES_PATTERN_ANALYSIS_SYSTEM_PROMPT",
+        "CODES_REGEX_SYNTHESIS_SYSTEM_PROMPT",
+        "BLUEPRINT_REVISION_EXPLANATION_SYSTEM_PROMPT",
+        "SALES_CHAT_QUERY_PLAN_SYSTEM_PROMPT",
+        "SALES_CHAT_COLOR_FILTER_SYSTEM_PROMPT",
+        "SALES_CHAT_ANSWER_SYNTHESIS_SYSTEM_PROMPT",
+        "WAREHOUSE_SEARCH_QUERY_PLAN_SYSTEM_PROMPT",
+        "WAREHOUSE_SEARCH_COLOR_FILTER_SYSTEM_PROMPT",
+    ]
+    for name in expected_names:
+        val = getattr(prompts_mod, name, None)
+        assert isinstance(val, str) and len(val.strip()) > 30, f"Prompt {name} missing or too short"
+
+

@@ -86,6 +86,8 @@ class TestPhotoSearchAgentLinearExecution:
         assert mock_client.call.call_args.kwargs["pipeline_stage"] == "Stage 5 - Photo Query Gen"
         assert mock_client.call_with_grounding.call_count == 1
         assert mock_client.call_with_grounding.call_args.kwargs["temperature"] == 0.2
+        assert mock_client.call_with_grounding.call_args.kwargs["max_output_tokens"] == 4096
+        assert mock_client.call_with_grounding.call_args.kwargs["thinking_level"] == "LOW"
         assert mock_client.call_with_grounding.call_args.kwargs["pipeline_stage"] == "Stage 5 - Photo Search Grounded"
 
     @pytest.mark.asyncio
@@ -336,3 +338,57 @@ class TestIngestionSeparationOfConcerns:
         assert by_id["it-oracle-verde"]["photo_url"] == "https://cdn.example.com/it-oracle-verde_verde.jpg"
         assert by_id["it-new-red"]["photo_url"] == "https://cdn.example.com/it-new-red_rosso.jpg"
         assert "it-new-nocolor" not in by_id
+
+
+@pytest.mark.asyncio
+async def test_grounded_search_retries_when_null_without_grounding_evidence():
+    from src.agents.photo_search_agent.nodes.grounded_search_node import grounded_image_search_node
+    from src.agents.photo_search_agent.state import PhotoSearchItemState
+
+    mock_client = MagicMock()
+    mock_client.get_logs.return_value = []
+    mock_client.call_with_grounding = AsyncMock(
+        side_effect=[
+            ("NULL", []),
+            ("https://www.ynot.it/media/STE008F7-BLUE.jpg", []),
+        ]
+    )
+
+    state = PhotoSearchItemState(
+        item_id="it-retry",
+        brand_name="Ynot? Milano",
+        vendor_code="STE008F7",
+        color="deepblue",
+        current_query="Ynot? Milano STE008F7 deep blue",
+    )
+    res = await grounded_image_search_node(state, client=mock_client)
+
+    assert res["candidate_url"] == "https://www.ynot.it/media/STE008F7-BLUE.jpg"
+    assert mock_client.call_with_grounding.call_count == 2
+    assert mock_client.call_with_grounding.call_args_list[0].kwargs["temperature"] == 0.2
+    assert mock_client.call_with_grounding.call_args_list[1].kwargs["temperature"] == 0.5
+    assert "Google Search" in mock_client.call_with_grounding.call_args_list[1].kwargs["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_grounded_search_stops_on_null_when_grounding_evidence_present():
+    from src.agents.photo_search_agent.nodes.grounded_search_node import grounded_image_search_node
+    from src.agents.photo_search_agent.state import PhotoSearchItemState
+
+    mock_client = MagicMock()
+    mock_client.get_logs.return_value = []
+    mock_client.call_with_grounding = AsyncMock(
+        return_value=("NULL", ["https://www.ynot.it/product/ste008f7"])
+    )
+
+    state = PhotoSearchItemState(
+        item_id="it-grounded-null",
+        brand_name="Ynot? Milano",
+        vendor_code="STE008F7",
+        color="deepblue",
+        current_query="Ynot? Milano STE008F7 deep blue",
+    )
+    res = await grounded_image_search_node(state, client=mock_client)
+
+    assert res["candidate_url"] is None
+    assert mock_client.call_with_grounding.call_count == 1

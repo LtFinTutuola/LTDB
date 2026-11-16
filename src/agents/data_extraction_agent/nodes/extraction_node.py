@@ -5,18 +5,9 @@ from src.agents.base import AgentException
 from src.agents.llm_client import LLMClient
 from src.agents.data_extraction_agent.state import ExtractionGraphState
 from src.core.logger import get_logger
+from src.utils.prompts import DATA_EXTRACTION_JSON_SYSTEM_PROMPT
 
 logger = get_logger()
-
-_SYSTEM_PROMPT = (
-    "Sei un Agente di Document Intelligence per un sistema ERP. "
-    "Riceverai in input un testo pulito contenente solo gli articoli di una bolla di spedizione B2B. "
-    "Il tuo compito è analizzare semanticamente questi dati "
-    "e restituire ESCLUSIVAMENTE un array JSON di oggetti normalizzati con le seguenti chiavi: "
-    "VendorCode (es. modello/codice prodotto), Barcode (se presente), Description (descrizione del prodotto), "
-    "Color (codice/colore), Quantity (leggendo i dati relativi alle quantità o confezioni associate all'articolo). "
-    "ATTENZIONE: Devi identificare il VendorCode corretto rispettando il pattern regex fornito nel prompt."
-)
 
 _MODEL = "gemini-3.1-flash-lite"
 
@@ -28,7 +19,7 @@ async def extraction_node(state: ExtractionGraphState) -> dict:
     logger.log_agent("extraction_node", "node_entry", "ok", cleaned_text=state.cleaned_text)
     print("[extraction_node] Extracting product JSON from cleaned text...")
     client = LLMClient()
-    prompt = f"Analizza e mappa questo testo in JSON:\n\n{state.cleaned_text}\n"
+    prompt = f"Analizza e mappa in JSON il seguente testo:\n\n<CLEANED_DDT>\n{state.cleaned_text}\n</CLEANED_DDT>\n"
     if state.extraction_errors:
         prompt += "\nATTENZIONE: Nel tentativo precedente hai commesso il seguente errore di estrazione:\n"
         for err in state.extraction_errors:
@@ -37,10 +28,11 @@ async def extraction_node(state: ExtractionGraphState) -> dict:
     try:
         raw_response = await client.call(
             model_name=_MODEL,
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=DATA_EXTRACTION_JSON_SYSTEM_PROMPT,
             prompt=prompt,
             pipeline_stage="Stage 2 - JSON Extraction",
             response_mime_type="application/json",
+            temperature=0.0,
         )
     except Exception as exc:
         raise AgentException(

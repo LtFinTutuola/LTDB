@@ -314,6 +314,7 @@ class LLMClient:
         pipeline_stage: str = "unknown",
         max_output_tokens: int = 1024,
         temperature: Optional[float] = None,
+        thinking_level: Optional[types.ThinkingLevel | str] = None,
     ) -> tuple[str, list[str]]:
         """
         Variant of `call` that also returns the grounding source URLs.
@@ -330,7 +331,16 @@ class LLMClient:
         }
         if temperature is not None:
             config_kwargs["temperature"] = temperature
-            
+        resolved_thinking_level: Optional[str] = None
+        if thinking_level is not None:
+            level_enum = (
+                types.ThinkingLevel(thinking_level.upper())
+                if isinstance(thinking_level, str)
+                else thinking_level
+            )
+            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=level_enum)
+            resolved_thinking_level = level_enum.value
+
         gen_config = types.GenerateContentConfig(**config_kwargs)
 
         response = await self._client.aio.models.generate_content(
@@ -374,6 +384,7 @@ class LLMClient:
             grounding_detected=telemetry["grounding_detected"],
             temperature=temperature,
             max_output_tokens=max_output_tokens,
+            thinking_level=resolved_thinking_level,
             tools=config_kwargs["tools"],
             system_prompt=system_prompt,
             prompt=prompt,

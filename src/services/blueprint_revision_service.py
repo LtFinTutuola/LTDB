@@ -585,19 +585,7 @@ async def _generate_user_friendly_rule_explanation(
         )
     examples_ctx = "\n".join(examples_bullets)
 
-    system_prompt = (
-        "Sei un assistente per la gestione di magazzino in un negozio al dettaglio. "
-        "Devi spiegare a un commesso/operatore (utente NON TECNICO) come il sistema riconosce e divide i codici di questo brand.\n\n"
-        "REGOLE ASSOLUTE:\n"
-        "1. TONO: Semplice, discorsivo, rassicurante e chiaro per un operatore di negozio.\n"
-        "2. NIENTE GERGO TECNICO: È VIETATO usare termini come 'regex', 'espressione regolare', 'pattern', "
-        "'gruppo di cattura', 'alphanumeric', 'token', 'match', 'backslash'. Parla solo di 'codice', 'caratteri', "
-        "'parte iniziale/finale', 'trattino', 'linea/modello' e 'colore'.\n"
-        "3. ESEMPI CONCRETI OBBLIGATORI: Devi citare esplicitamente i codici fornitore degli esempi reali forniti "
-        "(es. 'Nel codice ABCDE-123 i primi 5 caratteri indicano la linea (ABCDE) e gli ultimi 3 indicano il colore (123)').\n"
-        "4. Mostra chiaramente perché i codici con radice diversa formano schede distinte e quelli con la stessa radice formano varianti dello stesso modello.\n"
-        "5. Lunghezza: Massimo 3-4 frasi chiare ed esaustive."
-    )
+    from src.utils.prompts import BLUEPRINT_REVISION_EXPLANATION_SYSTEM_PROMPT as system_prompt
 
     user_prompt = (
         f"Brand: {brand_name}\n"

@@ -9,21 +9,9 @@ from __future__ import annotations
 from typing import Optional
 from src.agents.llm_client import LLMClient
 from src.agents.photo_search_agent.state import PhotoSearchItemState
+from src.utils.prompts import PHOTO_QUERY_GEN_SYSTEM_PROMPT
 
 _MODEL = "gemini-3.1-flash-lite"
-
-_SYSTEM_PROMPT_QUERY_GEN = (
-    "Sei un esperto SEO e specialista nell'estrazione di immagini di prodotti e-commerce tramite motori di ricerca. "
-    "Il tuo unico compito è generare la stringa di ricerca perfetta per trovare la foto di un prodotto, partendo dai suoi dati anagrafici.\n\n"
-    "REGOLE TASSATIVE:\n"
-    "1. Analizza i dettagli forniti e seleziona SOLO i termini essenziali per identificare il prodotto univocamente.\n"
-    "2. DEVI SEMPRE INCLUDERE il Vendor Code (codice articolo) fornito, in quanto è l'identificativo primario per la ricerca.\n"
-    "3. Seleziona il brand, il nome articolo e il colore di riferimento. Ignora descrizioni lunghe o concetti astratti.\n"
-    "4. Aggiungi keyword di contesto come 'packshot', 'product shot' o 'white background' per favorire risultati da e-commerce puliti.\n"
-    "5. Non usare alcun saluto, spiegazione o testo introduttivo.\n"
-    "6. Non formattare la risposta in markdown (niente grassetto, niente virgolette o backticks).\n"
-    "7. La risposta deve contenere ESCLUSIVAMENTE la stringa di ricerca grezza, pronta per essere immessa su Google."
-)
 
 
 async def generate_query_node(state: PhotoSearchItemState, client: Optional[LLMClient] = None) -> dict:
@@ -75,7 +63,7 @@ async def generate_query_node(state: PhotoSearchItemState, client: Optional[LLMC
 
     generated_query = await llm.call(
         model_name=_MODEL,
-        system_prompt=_SYSTEM_PROMPT_QUERY_GEN,
+        system_prompt=PHOTO_QUERY_GEN_SYSTEM_PROMPT,
         prompt=prompt,
         pipeline_stage=stage_name,
         temperature=temp,

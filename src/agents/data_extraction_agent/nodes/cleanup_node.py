@@ -1,17 +1,9 @@
 from src.agents.llm_client import LLMClient
 from src.agents.data_extraction_agent.state import ExtractionGraphState
 from src.core.logger import get_logger
+from src.utils.prompts import DATA_EXTRACTION_CLEANUP_SYSTEM_PROMPT
 
 logger = get_logger()
-
-_SYSTEM_PROMPT = (
-    "Sei un assistente specializzato nell'estrazione dati. "
-    "Il tuo compito è pulire il testo grezzo di una bolla di spedizione B2B. "
-    "Rimuovi intestazioni, note legali, totali, dati bancari o qualsiasi altro dato "
-    "che non riguardi strettamente gli articoli/prodotti spediti. "
-    "Restituisci SOLO il testo relativo alle righe degli articoli, includendo anche "
-    "le intestazioni delle colonne, senza alterare i dati in esse contenuti."
-)
 
 _MODEL = "gemini-3.1-flash-lite"
 
@@ -23,15 +15,16 @@ async def cleanup_node(state: ExtractionGraphState) -> dict:
     logger.log_agent("cleanup_node", "node_entry", "ok", raw_text=state.raw_text)
     print("[cleanup_node] Cleaning raw text via LLM...")
     client = LLMClient()
-    prompt = f"Pulisci questo testo mantenendo solo le righe degli articoli:\n\n{state.raw_text}"
+    prompt = f"Filtra il seguente documento mantenendo solo intestazioni di colonna e righe articolo:\n\n<RAW_DDT>\n{state.raw_text}\n</RAW_DDT>"
 
     try:
         cleaned = await client.call(
             model_name=_MODEL,
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=DATA_EXTRACTION_CLEANUP_SYSTEM_PROMPT,
             prompt=prompt,
             pipeline_stage="Stage 1 - Raw Text Cleanup",
             response_mime_type="text/plain",
+            temperature=0.0,
         )
         print("[cleanup_node] Cleanup complete.")
         result = {"cleaned_text": cleaned}

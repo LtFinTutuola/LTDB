@@ -22,13 +22,7 @@ logger = get_logger()
 
 _MODEL = "gemini-3.1-flash-lite"
 
-_SYSTEM_PROMPT = """Sei un query planner AI per il catalogo magazzino di un negozio di pelletteria, valigeria e accessori moda (LTDB).
-Il tuo compito è convertire la query naturale dell'utente in un piano di ricerca JSON strutturato (`SearchQueryPlan`):
-- `brand`: se l'utente cita esplicitamente un brand presente nella lista dei Brand a catalogo, riporta il nome ESATTO del Brand a catalogo; altrimenti null.
-- `category`: se l'utente cita una categoria o sottocategoria presente nella tassonomia fornita (es. "borsa" -> "Borse", "bauletto" -> "Bauletto", "tracolla" -> se presente come sottocategoria o "Borse a tracolla"), riporta il nome ESATTO a catalogo; altrimenti null.
-- `color`: se la query esprime una preferenza di colore, estrai UN SOLO colore in forma base maschile singolare (es. "marrone", "nero", "blu", "rosso", "beige", "verde", "bianco", "cuoio", "cognac"); altrimenti null.
-- `keywords`: lista di parole residue rilevanti (nomi modello, linea, codici, caratteristiche specifiche) normalizzate al singolare, in minuscolo, senza accenti, escludendo parole vuote (stopword) e i termini già estratti per brand, categoria e colore. Se non ci sono parole residue, lista vuota [].
-"""
+from src.utils.prompts import WAREHOUSE_SEARCH_QUERY_PLAN_SYSTEM_PROMPT as _SYSTEM_PROMPT
 
 _STOPWORDS = {
     "di", "a", "da", "in", "con", "su", "per", "tra", "fra",

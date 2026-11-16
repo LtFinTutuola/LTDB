@@ -233,3 +233,52 @@ async def test_llm_client_grounding_not_detected_when_all_metadata_absent():
     assert kwargs["grounding_metadata"] is None
     assert kwargs["tool_use_prompt_tokens"] == 0
     assert kwargs["grounding_detected"] is False
+
+
+@pytest.mark.asyncio
+async def test_llm_client_call_with_grounding_applies_thinking_level():
+    """Verifies that thinking_level configures ThinkingConfig and is logged."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+    from google.genai import types
+    import src.agents.llm_client as llm_mod
+
+    usage = types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=100,
+        candidates_token_count=20,
+        thoughts_token_count=5,
+        total_token_count=125,
+    )
+    candidate = types.Candidate(
+        grounding_metadata=None,
+        finish_reason=types.FinishReason.STOP,
+        content=types.Content(role="model", parts=[types.Part(text="NULL")]),
+    )
+    fake_response = SimpleNamespace(
+        text="NULL",
+        usage_metadata=usage,
+        candidates=[candidate],
+    )
+
+    with patch.object(llm_mod, "_load_gemini_config", return_value={"api_key": "test-key"}), \
+         patch.object(llm_mod.genai, "Client") as mock_genai_client, \
+         patch.object(llm_mod.logger, "log_llm") as mock_log_llm:
+        mock_generate = AsyncMock(return_value=fake_response)
+        mock_genai_client.return_value.aio.models.generate_content = mock_generate
+
+        client = llm_mod.LLMClient()
+        await client.call_with_grounding(
+            model_name="gemini-3-flash-preview",
+            system_prompt="SYS",
+            prompt="USER",
+            pipeline_stage="Stage 5 - Photo Search Grounded",
+            max_output_tokens=4096,
+            temperature=0.2,
+            thinking_level="LOW",
+        )
+
+    gen_config = mock_generate.call_args.kwargs["config"]
+    assert gen_config.max_output_tokens == 4096
+    assert gen_config.thinking_config is not None
+    assert gen_config.thinking_config.thinking_level == types.ThinkingLevel.LOW
+    assert mock_log_llm.call_args.kwargs["thinking_level"] == "LOW"

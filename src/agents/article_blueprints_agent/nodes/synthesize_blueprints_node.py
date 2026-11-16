@@ -29,21 +29,7 @@ class BlueprintSynthesisOutput(BaseModel):
 
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = (
-    "Sei un Agente di PIM (Product Information Management). "
-    "Il tuo compito è analizzare le varianti di un gruppo di articoli simili e sintetizzare un unico nome commerciale ufficiale (article_name) "
-    "e un'unica descrizione BREVE standardizzata (description) che rappresenti l'intero gruppo di articoli.\n"
-    "REGOLE OBBLIGATORIE:\n"
-    "1. Il nome articolo (article_name) NON deve contenere riferimenti a colori specifici. "
-    "Usa solo il nome commerciale del modello e, se rilevante per distinguere il prodotto, la dimensione.\n"
-    "2. La descrizione deve essere un riassunto conciso e basata ESCLUSIVAMENTE sulle informazioni fornite nelle varianti in input. "
-    "Non inventare materiali o caratteristiche non presenti nei dati forniti.\n"
-    "3. Se le varianti fornite riportano materiali contraddittori tra loro, ometti completamente i materiali dalla descrizione.\n"
-    "4. Estrai le dimensioni fisiche principali dell'articolo nel campo 'dimensions' (width_cm, height_cm, depth_cm). "
-    "Usa i valori in centimetri. Se le dimensioni non sono presenti o non sono applicabili all'articolo, imposta il campo su null. "
-    "La 'description' DEVE essere priva di qualsiasi riferimento numerico dimensionale.\n"
-    "Restituisci ESCLUSIVAMENTE un oggetto JSON conforme allo schema fornito."
-)
+from src.utils.prompts import BLUEPRINTS_SYNTHESIS_SYSTEM_PROMPT
 
 _MODEL = "gemini-3.1-flash-lite"
 
@@ -73,10 +59,11 @@ async def _synthesize_single_blueprint(client: LLMClient, bp: dict) -> dict:
     try:
         raw_res = await client.call(
             model_name=_MODEL,
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=BLUEPRINTS_SYNTHESIS_SYSTEM_PROMPT,
             prompt=prompt,
             pipeline_stage="Stage 6 - Blueprint Synthesis",
             response_schema=BlueprintSynthesisOutput,
+            temperature=0.0,
         )
         parsed = BlueprintSynthesisOutput.model_validate_json(raw_res)
         bp_copy["article_name"] = parsed.article_name

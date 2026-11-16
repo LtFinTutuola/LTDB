@@ -414,57 +414,20 @@ def is_generic_article(item: dict) -> bool:
 # Prompt Ufficiali dei 5 Micro-Giudici LLM
 # ---------------------------------------------------------------------------
 
+from src.utils.prompts import (
+    ORACLE_CONSTRUCTION_SYSTEM_PROMPT,
+    ORACLE_LINE_SYSTEM_PROMPT,
+    ORACLE_MATERIAL_SYSTEM_PROMPT,
+    ORACLE_SIZE_SYSTEM_PROMPT,
+    ORACLE_TYPOLOGY_SYSTEM_PROMPT,
+)
+
 _PROMPTS: dict[str, str] = {
-    "TYPOLOGY": (
-        "Sei un giudice tecnico incaricato di valutare ESCLUSIVAMENTE la TIPOLOGIA MERCEOLOGICA FISICA "
-        "di due articoli (Articolo X e Articolo Y) nel settore moda, pelletteria e accessori.\n"
-        "Leggi l'intera descrizione fornita per capire che cosa sono fisicamente i due oggetti "
-        "(es. Zaino, Sacca/Shopping Bag, Borsa a tracolla, Portafoglio, Trolley/Valigia, Beauty Case, Cintura, Portachiavi).\n"
-        "REGOLE TASSATIVE:\n"
-        "1. CECITÀ SELETTIVA: Ignora completamente nome linea, dimensioni, colori, materiali, tasche secondarie o stile promozionale.\n"
-        "2. Rispondi MATCH se entrambi i testi descrivono lo stesso tipo di oggetto fisico (es. entrambi Zaini).\n"
-        "3. Rispondi CONFLICT se descrivono due oggetti di natura fisica diversa (es. Sacca vs Zaino; Borsa vs Portafoglio).\n"
-        "4. Rispondi UNKNOWN solo se il testo di uno o entrambi gli articoli non permette di determinare la tipologia."
-    ),
-    "LINE": (
-        "Sei un giudice tecnico incaricato di valutare ESCLUSIVAMENTE il NOME DELLA LINEA COMMERCIALE "
-        "(o Collezione / Nome Modello) di due articoli dello stesso brand (Articolo X e Articolo Y).\n"
-        "Cerca nei titoli e nelle descrizioni il nome proprio della linea o collezione (es. 'MD20', 'Soundbox', 'Urban Groove').\n"
-        "REGOLE TASSATIVE:\n"
-        "1. CECITÀ SELETTIVA: Ignora se il nome del brand compare in un titolo ed è omesso nell'altro. Ignora tipologia, misure, materiali e aggettivi commerciali.\n"
-        "2. Rispondi MATCH se entrambi gli articoli appartengono alla medesima linea/collezione nominale.\n"
-        "3. Rispondi CONFLICT SOLO se entrambi i testi indicano esplicitamente un nome di linea/collezione e questi sono diversi tra loro (es. 'MD20' vs 'Hunter').\n"
-        "4. Rispondi UNKNOWN se in uno o entrambi gli articoli il nome della linea commerciale non è esplicitato. L'omissione del nome linea in uno dei due testi NON è mai CONFLICT, ma sempre UNKNOWN."
-    ),
-    "SIZE": (
-        "Sei un giudice tecnico incaricato di valutare ESCLUSIVAMENTE le SPECIFICHE DIMENSIONALI, TAGLIA E CAPACITÀ "
-        "di due articoli (Articolo X e Articolo Y).\n"
-        "Analizza i testi cercando: dimensioni metriche (es. '67 cm', '77 cm', '20x30x10 cm'), misure in pollici, litri o taglie commerciali ('Cabin Size', 'Bagaglio a mano' vs 'Stiva', 'Small' vs 'Large').\n"
-        "REGOLE TASSATIVE:\n"
-        "1. CECITÀ SELETTIVA: Non confondere aggettivi generici su dettagli costruttivi (es. 'maxi tasca frontale', 'design compatto') con la taglia o volume del modello.\n"
-        "2. Rispondi UNKNOWN se in uno o entrambi gli articoli non sono dichiarate misure numeriche o taglie specifiche, o se le rappresentazioni non sono comparabili. L'assenza di dati dimensionali è SEMPRE UNKNOWN e MAI CONFLICT.\n"
-        "3. Rispondi MATCH SOLO in caso di equivalenza esplicita dichiarata da entrambi (stesse misure o stessa taglia).\n"
-        "4. Rispondi CONFLICT se entrambi gli articoli dichiarano esplicitamente una taglia, dimensione o capacità e queste sono incompatibili (es. '67 cm' vs '77 cm', 'Small' vs 'Medium')."
-    ),
-    "MATERIAL": (
-        "Sei un giudice tecnico esperto in materiali tessili e pelletteria incaricato di valutare ESCLUSIVAMENTE "
-        "la COMPATIBILITÀ DEL MATERIALE PRIMARIO tra due articoli (Articolo X e Articolo Y).\n"
-        "Poiché i testi provengono da fonti web diverse, una scheda può citare il nome specifico/brevettato della materia prima (es. 'Mitrix', 'Cordura', 'Pelle Saffiano', 'Jacquard') mentre l'altra usa un termine generico ('Tessuto', 'Sintetico', 'Poliestere', 'Pelle').\n"
-        "REGOLE TASSATIVE:\n"
-        "1. CECITÀ SELETTIVA: Ignora forma, dimensioni, colori e finiture secondarie.\n"
-        "2. Rispondi MATCH se i materiali coincidono OPPURE appartengono alla stessa famiglia merceologica espressa con diverso grado di specificità (es. ['tessuto tecnico', 'mitrix', 'jacquard'] e ['tessuto'] sono MATCH).\n"
-        "3. Rispondi CONFLICT SOLO se i materiali primari appartengono a nature merceologiche fisicamente incompatibili (es. 'Vera Pelle/Cuoio' vs 'Tessuto/Nylon/Poliestere'; 'Pelle naturale' vs 'Ecopelle/PU'; 'Guscio rigido in Policarbonato' vs 'Tessuto morbido').\n"
-        "4. Rispondi UNKNOWN se in uno o entrambi gli articoli il materiale non è indicato."
-    ),
-    "CONSTRUCTION": (
-        "Sei un giudice tecnico incaricato di valutare ESCLUSIVAMENTE la COMPATIBILITÀ DELL'ARCHITETTURA COSTRUTTIVA "
-        "e dei DETTAGLI DI COSTRUZIONE tra due articoli (Articolo X e Articolo Y).\n"
-        "REGOLE TASSATIVE:\n"
-        "1. IMMUNITÀ ALL'OMISSIONE E PARAFRASI: Siti web diversi enfatizzano dettagli accessori diversi o usano parafrasi (es. 'tasche di servizio interne' citate solo da uno; 'tasca frontale con zip' vs 'maxi tasca frontale'). L'omissione di un dettaglio secondario o una diversa formulazione commerciale NON È MAI CONFLICT!\n"
-        "2. Rispondi CONFLICT SOLO se rilevi caratteristiche costruttive primarie mutuamente esclusive nello stesso aspetto (es. 'Zaino Monospalla' vs 'Zaino a 2 spallacci'; 'Trolley 2 ruote' vs 'Trolley 4 ruote Spinner'; 'Modello Espandibile (EXP)' vs 'Non espandibile'; 'Chiusura con patta' vs 'Chiusura zip-around perimetrale'). Dettagli compatibili non mutualmente esclusivi (es. 'con portamonete' vs 'con ribaltina') non sono CONFLICT.\n"
-        "3. Rispondi MATCH se la struttura costruttiva descritta è pienamente compatibile.\n"
-        "4. Rispondi UNKNOWN se i testi non contengono dettagli costruttivi rilevanti o non comparabili."
-    ),
+    "TYPOLOGY": ORACLE_TYPOLOGY_SYSTEM_PROMPT,
+    "LINE": ORACLE_LINE_SYSTEM_PROMPT,
+    "SIZE": ORACLE_SIZE_SYSTEM_PROMPT,
+    "MATERIAL": ORACLE_MATERIAL_SYSTEM_PROMPT,
+    "CONSTRUCTION": ORACLE_CONSTRUCTION_SYSTEM_PROMPT,
 }
 
 

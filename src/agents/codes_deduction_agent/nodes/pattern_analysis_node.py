@@ -27,22 +27,7 @@ def _get_model() -> str:
     return "gemini-3.1-flash-lite"
 
 
-_SYSTEM_PROMPT = (
-    "Sei un AI Data Steward specializzato in analisi strutturale dei codici prodotto. "
-    "Il tuo compito è analizzare un insieme di codici fornitore (vendor codes) e le loro "
-    "caratteristiche per un brand e identificare quale parte del codice codifica le varianti puramente estetiche (colori/finiture).\n\n"
-    "REGOLA FONDAMENTALE:\n"
-    "- Vogliamo NORMALIZZARE i codici mascherando SOLO la parte del colore/finitura, lasciando intatto il resto (inclusa la taglia e la famiglia prodotto).\n"
-    "- Se tutti i codici dello stesso modello sono identici e NON includono un codice colore, significa che la normalizzazione non serve (mascheramento vuoto).\n\n"
-    "Devi determinare:\n"
-    "1. Quale parte del codice rappresenta varianti puramente estetiche (colore, finitura).\n"
-    "2. Quali delimitatori la separano, per avere un contesto sicuro.\n"
-    "3. Se non c'è nessuna parte variabile per il colore, indicalo esplicitamente.\n\n"
-    "Restituisci ESCLUSIVAMENTE un JSON con le seguenti chiavi:\n"
-    "- 'pattern_description': descrizione di quale parte è il colore e come mascherarla\n"
-    "- 'color_code_position': dove si trova il codice colore (es. 'dopo l'asterisco', 'ultimi 2 caratteri')\n"
-    "- 'needs_masking': boolean, true se c'è un codice colore da mascherare, false se il codice fornitore va tenuto così com'è"
-)
+from src.utils.prompts import CODES_PATTERN_ANALYSIS_SYSTEM_PROMPT as _SYSTEM_PROMPT
 
 
 async def pattern_analysis_node(state: CodesDeductionGraphState) -> dict:

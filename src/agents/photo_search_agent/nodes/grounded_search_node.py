@@ -11,26 +11,32 @@ from typing import Optional
 
 from src.agents.llm_client import LLMClient
 from src.agents.photo_search_agent.state import PhotoSearchItemState
+from src.core.logger import get_logger
+from src.utils.prompts import PHOTO_GROUNDED_SEARCH_SYSTEM_PROMPT
 
-_MODEL = "gemini-3.1-flash-lite"
+logger = get_logger()
+
+_MODEL = "gemini-3-flash-preview"
+_RETRY_TEMPERATURES = (0.2, 0.5, 0.8)
 
 _GROUNDING_REDIRECT_PREFIX = "https://vertexaisearch.cloud.google.com/"
 _URL_PATTERN = re.compile(r'https?://[^\s\)\]\"\'>]+')
 
-_SYSTEM_PROMPT_SEARCH = (
-    "Sei un agente autonomo specializzato nella ricerca di immagini (packshot/product shot) di articoli di moda e lusso su e-commerce. "
-    "Riceverai in input una query di ricerca ottimizzata. Il tuo unico scopo è eseguire una ricerca web tramite i tuoi tool e restituire l'URL "
-    "di un'immagine ad alta risoluzione che rispetti rigorosamente determinati vincoli visivi.\n\n"
-    "REGOLE TASSATIVE DI COMPORTAMENTO:\n"
-    "1. Usa la tua funzionalità di web search per trovare le immagini. NON inventare MAI URL basandoti sulla tua conoscenza interna.\n"
-    "2. Rispondi ESCLUSIVAMENTE con l'URL grezzo dell'immagine trovata (es. https://sito.com/foto.jpg), senza testo extra, markdown o saluti.\n"
-    "3. Se non trovi nessun risultato reale che rispetti le regole sottostanti, rispondi ESATTAMENTE con la parola: NULL.\n\n"
-    "VINCOLI VISIVI OBBLIGATORI (L'IMMAGINE SARÀ SCARTATA SE NON LI RISPETTA):\n"
-    "- Sfondo Neutro: L'immagine deve avere uno sfondo bianco, grigio chiaro o comunque neutro (stile e-commerce/still-life).\n"
-    "- Soggetto Singolo: Deve essere presente SOLO l'articolo cercato. Non ammettere bundle o composizioni miste.\n"
-    "- Nessun Modello/Indossato: Sono ASSOLUTAMENTE VIETATE foto con modelli umani, manichini, parti del corpo (es. mani che tengono una borsa), o foto in stile editoriale/streetwear.\n"
-    "- Affidabilità: Privilegia immagini provenienti dal sito ufficiale del brand o da e-commerce riconosciuti (Farfetch, Zalando, Giglio, Luisaviaroma, ecc.). Evita marketplace dubbi."
-)
+
+def _has_grounding_evidence(client: LLMClient, extracted_urls: list[str]) -> bool:
+    if extracted_urls:
+        return True
+    get_logs = getattr(client, "get_logs", None)
+    logs = get_logs() if callable(get_logs) else None
+    if isinstance(logs, list) and logs:
+        last = logs[-1]
+        if isinstance(last, dict):
+            q_usage = last.get("query_usage")
+            if isinstance(q_usage, int) and q_usage > 0:
+                return True
+            if last.get("grounding_detected") is True:
+                return True
+    return False
 
 
 def extract_best_url(extracted_urls: list, raw_text: str) -> str | None:
@@ -55,7 +61,11 @@ def extract_best_url(extracted_urls: list, raw_text: str) -> str | None:
 async def grounded_image_search_node(state: PhotoSearchItemState, client: Optional[LLMClient] = None) -> dict:
     llm = client or LLMClient()
 
-    search_prompt = f"Esegui una ricerca su internet e trova una foto reale del prodotto usando questa query:\n{state.current_query}"
+    search_prompt = (
+        f"Esegui una ricerca su internet e trova una foto reale del prodotto usando questa query:\n"
+        f"{state.current_query}\n\n"
+        f"Riferimenti verifica -> Vendor Code: {state.vendor_code} | Colore richiesto: {state.color}"
+    )
 
     if state.mode == "retry":
         stage_name = "Stage 5 - Photo Retry Grounded"
@@ -66,16 +76,40 @@ async def grounded_image_search_node(state: PhotoSearchItemState, client: Option
     else:
         stage_name = "Stage 5 - Photo Search Grounded"
 
-    raw_res, extracted_urls = await llm.call_with_grounding(
-        model_name=_MODEL,
-        system_prompt=_SYSTEM_PROMPT_SEARCH,
-        prompt=search_prompt,
-        pipeline_stage=stage_name,
-        temperature=0.2,
-    )
+    candidate_url: str | None = None
+    for attempt_idx, temp in enumerate(_RETRY_TEMPERATURES, start=1):
+        prompt_to_send = search_prompt
+        if attempt_idx > 1:
+            prompt_to_send = (
+                f"{search_prompt}\n\n"
+                f"NOTA: Nel tentativo precedente non hai eseguito la ricerca web. "
+                f"Devi OBBLIGATORIAMENTE usare il tool Google Search prima di rispondere."
+            )
 
-    raw_res_stripped = (raw_res or "").strip()
-    candidate_url = None if raw_res_stripped.upper() == "NULL" else extract_best_url(extracted_urls, raw_res_stripped)
+        raw_res, extracted_urls = await llm.call_with_grounding(
+            model_name=_MODEL,
+            system_prompt=PHOTO_GROUNDED_SEARCH_SYSTEM_PROMPT,
+            prompt=prompt_to_send,
+            pipeline_stage=stage_name,
+            max_output_tokens=4096,
+            temperature=temp,
+            thinking_level="LOW",
+        )
+
+        raw_res_stripped = (raw_res or "").strip()
+        candidate_url = None if raw_res_stripped.upper() == "NULL" else extract_best_url(extracted_urls, raw_res_stripped)
+
+        if candidate_url is not None or _has_grounding_evidence(llm, extracted_urls):
+            break
+
+        logger.log_agent(
+            "grounded_search_node",
+            "grounding_missing_retry",
+            "warning",
+            vendor_code=state.vendor_code,
+            attempt=attempt_idx,
+            temperature=temp,
+        )
 
     return {
         "candidate_url": candidate_url,

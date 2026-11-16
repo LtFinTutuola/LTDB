@@ -18,19 +18,7 @@ logger = get_logger()
 
 _MODEL = "gemini-3.1-flash-lite"
 
-_SYSTEM_PROMPT = """Sei un assistente AI specializzato nella verifica del colore degli articoli moda/pelletteria venduti.
-Ti vengono forniti:
-1. Il testo della ricerca dell'utente (`filtered_text`).
-2. La lista delle vendite candidate riconciliate, ciascuna con `sale_id`, `article_name` e `available_colors` (i colori effettivi dell'esemplare fisico venduto in quella transazione).
-
-Restituisci un JSON conforme a `SalesColorFilterResponse`:
-- `has_color_constraint`:
-  - `true` SE E SOLO SE `filtered_text` contiene un riferimento esplicito o implicito a un colore o tonalità (es. "nera", "rosso", "blu", "chiara", "scura", "beige", "black").
-  - `false` se `filtered_text` NON menziona alcun colore (es. "eleganti", "con tracolla", "in pelle").
-- `selections`:
-  - Se `has_color_constraint` è `false`, restituisci per ogni vendita tutti i suoi `available_colors`.
-  - Se `has_color_constraint` è `true`, per ogni `sale_id` inserisci in `selected_colors` SOLO i colori presenti in `available_colors` che sono cromaticamente compatibili con il colore richiesto dall'utente. Se l'articolo venduto non è del colore richiesto, restituisci `selected_colors: []`.
-"""
+from src.utils.prompts import SALES_CHAT_COLOR_FILTER_SYSTEM_PROMPT as _SYSTEM_PROMPT
 
 
 def _strip_embedding(cand: Dict[str, Any]) -> Dict[str, Any]:

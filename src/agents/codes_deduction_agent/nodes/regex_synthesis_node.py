@@ -26,20 +26,7 @@ def _get_model() -> str:
     return "gemini-3.1-flash-lite"
 
 
-_SYSTEM_PROMPT = (
-    "Riceverai un'analisi strutturale di codici prodotto e devi tradurla in un'espressione regolare Python.\n\n"
-    "REGOLE OBBLIGATORIE:\n"
-    "1. Il regex DEVE validare l'intera struttura morfologica del codice fornitore (è consigliato usare `^` e `$`).\n"
-    "2. Se l'analisi indica la presenza di una variante colore, il regex DEVE contenere un named capture group chiamato 'color_code' che catturi ESATTAMENTE E SOLO il segmento colore.\n"
-    "3. Se l'analisi indica che non c'è nessun codice colore, il regex DEVE validare la struttura del codice senza alcun gruppo 'color_code'. Non restituire mai una stringa vuota.\n"
-    "4. DIVIETO DI OVERFITTING SUI MODELLI: Usa classi di caratteri generali (es. `[A-Z0-9]{8}` o `[A-Z]+[0-9]+`) per la struttura base. È SEVERAMENTE VIETATO inserire alternanze letterali con gli identificativi specifici dei modelli presenti negli esempi (es. VIETATO scrivere `(71|56)` o `(QMT71|QMT56)`): il regex deve matchare TUTTI i modelli presenti e futuri del brand!\n"
-    "5. NON usare lookbehind/lookahead complessi che potrebbero causare backtracking catastrofico.\n"
-    "6. Mantieni il regex il più semplice e leggibile possibile.\n\n"
-    "Restituisci ESCLUSIVAMENTE un JSON con le seguenti chiavi:\n"
-    "- 'regex': l'espressione regolare Python\n"
-    "- 'explanation': spiegazione ASTRATTA e GENERICA della regola, valida per l'intero brand. "
-    "È SEVERAMENTE VIETATO menzionare codici specifici o colori puntuali presenti negli esempi."
-)
+from src.utils.prompts import CODES_REGEX_SYNTHESIS_SYSTEM_PROMPT as _SYSTEM_PROMPT
 
 
 async def regex_synthesis_node(state: CodesDeductionGraphState) -> dict:

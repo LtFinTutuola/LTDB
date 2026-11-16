@@ -25,22 +25,9 @@ from src.core.logger import get_logger
 
 logger = get_logger()
 
-_MODEL = "gemini-3.1-flash-lite"
+from src.utils.prompts import BLUEPRINTS_CLUSTER_VALIDATION_SYSTEM_PROMPT
 
-_SYSTEM_PROMPT = (
-    "Sei un AI Data Steward specializzato in Master Data Management per il retail. "
-    "Il tuo compito è validare raggruppamenti di articoli (cluster) per definire gli 'Article Blueprint'.\n\n"
-    "**DEFINIZIONE DI ARTICLE BLUEPRINT:**\n"
-    "Un 'Article Blueprint' rappresenta l'identità strutturale, funzionale e dimensionale di un prodotto. "
-    "È il modello astratto di base.\n"
-    "- Varianti puramente estetiche o di finitura (es. colore, pattern della stampa, piccole variazioni "
-    "di materiale esterno) appartengono allo STESSO Blueprint.\n"
-    "- Variazioni strutturali (es. taglie fisiche, capacità in litri, diametri, versioni 'Cabin' vs 'Large', "
-    "genere Uomo/Donna) modificano l'identità del prodotto e richiedono Blueprint DIFFERENTI.\n\n"
-    "Restituisci ESCLUSIVAMENTE un JSON strutturato come una lista di liste (array di array), "
-    "contenente SOLO i numeri indice (1, 2, 3, ecc.) degli articoli assegnati a ciascun Blueprint.\n"
-    "Esempio di output valido: [[1, 2], [3, 4]]"
-)
+_MODEL = "gemini-3.1-flash-lite"
 
 
 def _compute_centroid(embeddings: List[List[float]]) -> List[float]:
@@ -127,7 +114,7 @@ async def _validate_single_cluster(
     try:
         raw_res = await client.call(
             model_name=_MODEL,
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=BLUEPRINTS_CLUSTER_VALIDATION_SYSTEM_PROMPT,
             prompt=prompt,
             pipeline_stage="Stage 5 - Cluster Validation",
             response_mime_type="application/json",
