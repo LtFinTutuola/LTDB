@@ -33,10 +33,12 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         user_obj = getattr(request.state, "user", None)
         username = user_obj.username if user_obj else None
 
-        # Check edge agent endpoints
+        # Check edge agent and webhook endpoints
         if not username and request.url.path.startswith("/api/v1/excel-synchronization/"):
             if "agent-config" in request.url.path or "push-batch" in request.url.path:
                 username = "edge-agent"
+        elif not username and request.url.path.startswith("/api/v1/webhooks/whatsapp"):
+            username = "whatsapp-webhook"
 
         logger.log_execution(
             component="http_access",

@@ -1,6 +1,7 @@
+import asyncio
 import uvicorn
 from pathlib import Path
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, Depends, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,7 @@ from src.core.logger import get_logger
 from src.core.auth import get_current_user, require_admin, bootstrap_auth, LoginRedirect
 from src.core.access_log_middleware import AccessLogMiddleware
 from src.core.database import SessionLocal
+from src.services.customer_onboarding_service import run_customer_lifecycle_maintenance
 
 from src.routers.auth_router import router as auth_router
 from src.routers.users_router import router as users_router
@@ -22,11 +24,26 @@ from src.routers.excel_synchronization_router import (
     router as excel_synchronization_router,
 )
 from src.routers.sales_router import router as sales_router
+from src.routers.customers_router import router as customers_router
+from src.routers.webhooks_router import router as webhooks_router
 from src.routers.settings_router import router as settings_router
 from src.routers.frontend_router import router as frontend_router
 
 # Initialize the logger at startup
 logger = get_logger()
+
+
+async def _customer_lifecycle_loop(interval_seconds: int = 3600) -> None:
+    """Periodic hourly task for 72h pending cleanup and 60-month retention expiration."""
+    while True:
+        await asyncio.sleep(interval_seconds)
+        db = SessionLocal()
+        try:
+            run_customer_lifecycle_maintenance(db)
+        except Exception as exc:
+            logger.log_execution("main", "customer_lifecycle_job_error", "err", exc=exc)
+        finally:
+            db.close()
 
 
 @asynccontextmanager
@@ -38,11 +55,22 @@ async def lifespan(app: FastAPI):
         bootstrap_auth(db)
     except Exception as exc:
         logger.log_execution("main", "bootstrap_auth_error", "err", exc=exc)
+    try:
+        run_customer_lifecycle_maintenance(db)
+    except Exception as exc:
+        logger.log_execution("main", "customer_lifecycle_startup_error", "err", exc=exc)
     finally:
         db.close()
-    yield
-    # Shutdown
-    logger.log_execution("main", "shutdown", "ok", message="Shutting down application services...")
+
+    lifecycle_task = asyncio.create_task(_customer_lifecycle_loop())
+    try:
+        yield
+    finally:
+        lifecycle_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await lifecycle_task
+        # Shutdown
+        logger.log_execution("main", "shutdown", "ok", message="Shutting down application services...")
 
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
@@ -127,6 +155,9 @@ app.include_router(auth_router)
 # Public Edge synchronization router for cash register script (agent-config, push-batch)
 app.include_router(excel_synchronization_edge_router)
 
+# Public Webhooks router (Meta WhatsApp WABA challenge & HMAC-signed flow events)
+app.include_router(webhooks_router)
+
 # Protected API routers — require valid authenticated user
 auth_dependencies = [Depends(get_current_user)]
 app.include_router(data_ingestion_router, dependencies=auth_dependencies)
@@ -134,6 +165,7 @@ app.include_router(heuristic_router, dependencies=auth_dependencies)
 app.include_router(catalog_router, dependencies=auth_dependencies)
 app.include_router(excel_synchronization_router, dependencies=auth_dependencies)
 app.include_router(sales_router, dependencies=auth_dependencies)
+app.include_router(customers_router, dependencies=auth_dependencies)
 
 # Admin-only API routers
 app.include_router(settings_router, dependencies=[Depends(require_admin)])

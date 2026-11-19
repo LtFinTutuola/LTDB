@@ -17,6 +17,9 @@ logging_config = yaml_config.get("logging", {})
 # Auth
 auth_config = yaml_config.get("auth", {})
 
+# WhatsApp / CRM Onboarding
+whatsapp_config = yaml_config.get("whatsapp", {})
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = yaml_config.get("project_name", "")
     
@@ -46,6 +49,17 @@ class Settings(BaseSettings):
     AUTH_COOKIE_NAME: str = str(auth_config.get("cookie_name", "ltdb_token"))
     AUTH_COOKIE_SECURE: bool = bool(auth_config.get("cookie_secure", False))
     AUTH_MIN_PASSWORD_LENGTH: int = int(auth_config.get("min_password_length", 4))
+
+    # WhatsApp / CRM Onboarding Config
+    WHATSAPP_PROVIDER: str = str(whatsapp_config.get("provider", "mock")).lower()
+    WHATSAPP_WEBHOOK_SECRET: str = str(
+        whatsapp_config.get("webhook_secret", "ltdb_mock_webhook_secret_key_2026")
+    )
+    WHATSAPP_VERIFY_TOKEN: str = str(
+        whatsapp_config.get("verify_token", "ltdb_mock_verify_token_2026")
+    )
+    WHATSAPP_ONBOARDING_TTL_HOURS: int = int(whatsapp_config.get("onboarding_ttl_hours", 72))
+    WHATSAPP_RETENTION_MONTHS: int = int(whatsapp_config.get("retention_months", 60))
     
     class Config:
         env_file = ".env"
