@@ -20,6 +20,25 @@ auth_config = yaml_config.get("auth", {})
 # WhatsApp / CRM Onboarding
 whatsapp_config = yaml_config.get("whatsapp", {})
 
+# Loyalty / CRM Points & Discounts
+loyalty_config = yaml_config.get("loyalty", {})
+default_redemption_tiers = [
+    {
+        "code": "TIER_500_5EUR",
+        "points_required": 500,
+        "discount_type": "FIXED",
+        "discount_value": 5.00,
+        "label": "500 Punti → 5,00 € di sconto",
+    },
+    {
+        "code": "TIER_1000_10PCT",
+        "points_required": 1000,
+        "discount_type": "PERCENTAGE",
+        "discount_value": 10.0,
+        "label": "1.000 Punti → 10% di sconto",
+    },
+]
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = yaml_config.get("project_name", "")
     
@@ -60,6 +79,16 @@ class Settings(BaseSettings):
     )
     WHATSAPP_ONBOARDING_TTL_HOURS: int = int(whatsapp_config.get("onboarding_ttl_hours", 72))
     WHATSAPP_RETENTION_MONTHS: int = int(whatsapp_config.get("retention_months", 60))
+
+    # Loyalty Config
+    LOYALTY_EARNING_EURO_PER_POINT: float = float(
+        loyalty_config.get("earning_euro_per_point", 1.0)
+    )
+    LOYALTY_BIRTHDAY_MULTIPLIER: int = int(loyalty_config.get("birthday_multiplier", 2))
+    LOYALTY_BIRTHDAY_WINDOW_DAYS: int = int(loyalty_config.get("birthday_window_days", 3))
+    LOYALTY_REDEMPTION_TIERS: list = loyalty_config.get(
+        "redemption_tiers", default_redemption_tiers
+    )
     
     class Config:
         env_file = ".env"

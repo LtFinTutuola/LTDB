@@ -381,6 +381,18 @@ def complete_onboarding_from_flow(
     customer.retention_expires_at = _add_months(anchor_dt, settings.WHATSAPP_RETENTION_MONTHS)
 
     db.add(customer)
+    db.flush()
+
+    # Retroactive Birthday Bonus calculation for same-day transactions made while PENDING_ONBOARDING
+    from src.services.loyalty_service import credit_retroactive_birthday_bonus_on_activation
+
+    credit_retroactive_birthday_bonus_on_activation(
+        db=db,
+        customer=customer,
+        activation_date=current_date,
+        now=current_dt,
+    )
+
     db.commit()
     db.refresh(customer)
 

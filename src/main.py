@@ -25,6 +25,7 @@ from src.routers.excel_synchronization_router import (
 )
 from src.routers.sales_router import router as sales_router
 from src.routers.customers_router import router as customers_router
+from src.routers.transactions_router import router as transactions_router
 from src.routers.webhooks_router import router as webhooks_router
 from src.routers.settings_router import router as settings_router
 from src.routers.frontend_router import router as frontend_router
@@ -166,6 +167,7 @@ app.include_router(catalog_router, dependencies=auth_dependencies)
 app.include_router(excel_synchronization_router, dependencies=auth_dependencies)
 app.include_router(sales_router, dependencies=auth_dependencies)
 app.include_router(customers_router, dependencies=auth_dependencies)
+app.include_router(transactions_router, dependencies=auth_dependencies)
 
 # Admin-only API routers
 app.include_router(settings_router, dependencies=[Depends(require_admin)])
