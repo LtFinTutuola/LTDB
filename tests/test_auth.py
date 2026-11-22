@@ -203,6 +203,136 @@ def test_rbac_restrictions_base_vs_admin(db_session: Session):
     assert admin_client.get("/api/v1/users").status_code == 200
 
 
+def test_rbac_cassa_role_access_and_admin_restrictions(db_session: Session):
+    """
+    Verifies the intermediate 'cassa' role:
+    - Can access operational endpoints and HTML pages (brands, categories, sidebar shows '(cassa)' without '/settings').
+    - Is strictly forbidden (403) from /api/v1/settings, /settings, and all /api/v1/users IAM endpoints.
+    """
+    app.dependency_overrides.pop(get_current_user, None)
+    cassa_user = User(
+        username="cassa_operatore",
+        hashed_password=hash_password("PassCassa123"),
+        role=UserRole.CASSA.value,
+        is_active=True,
+        token_version=1,
+    )
+    admin_user = User(
+        username="admin_cassa_test",
+        hashed_password=hash_password("PassAdmin123"),
+        role=UserRole.ADMIN.value,
+        is_active=True,
+        token_version=1,
+    )
+    db_session.add_all([cassa_user, admin_user])
+    db_session.commit()
+
+    cassa_token = create_access_token(cassa_user.id, cassa_user.username, cassa_user.role, 1)
+    cassa_client = TestClient(app)
+    cassa_client.cookies.set(settings.AUTH_COOKIE_NAME, cassa_token)
+
+    # 1. Cassa user can access operational APIs and HTML pages
+    assert cassa_client.get("/api/v1/catalog/brands").status_code == 200
+    assert cassa_client.get("/api/v1/catalog/categories").status_code == 200
+    brands_html = cassa_client.get("/brands")
+    assert brands_html.status_code == 200
+    assert "cassa_operatore (cassa)" in brands_html.text
+    assert 'href="/settings"' not in brands_html.text
+
+    # 2. Cassa user CANNOT access Settings API or HTML page -> 403 Forbidden
+    assert cassa_client.get("/api/v1/settings").status_code == 403
+    assert cassa_client.get("/settings").status_code == 403
+
+    # 3. Cassa user CANNOT access any Users IAM endpoint -> 403 Forbidden
+    assert cassa_client.get("/api/v1/users").status_code == 403
+    assert (
+        cassa_client.post(
+            "/api/v1/users",
+            json={"username": "nuovo", "password": "Password123", "role": "base"},
+        ).status_code
+        == 403
+    )
+    assert (
+        cassa_client.patch(
+            f"/api/v1/users/{cassa_user.id}",
+            json={"role": "admin"},
+        ).status_code
+        == 403
+    )
+    assert (
+        cassa_client.put(
+            f"/api/v1/users/{cassa_user.id}/password",
+            json={"new_password": "Password123"},
+        ).status_code
+        == 403
+    )
+    assert cassa_client.post("/api/v1/users/revoke-all").status_code == 403
+
+
+def test_cassa_role_creation_promotion_and_last_admin_guard(db_session: Session):
+    """
+    Verifies admin can create and promote users to 'cassa', settings UI exposes 'cassa',
+    and the sole active admin cannot be demoted to 'cassa'.
+    """
+    app.dependency_overrides.pop(get_current_user, None)
+    admin = User(
+        username="root_admin_cassa",
+        hashed_password=hash_password("RootAdmin123"),
+        role=UserRole.ADMIN.value,
+        is_active=True,
+        token_version=1,
+    )
+    db_session.add(admin)
+    db_session.commit()
+
+    admin_token = create_access_token(admin.id, admin.username, admin.role, 1)
+    client = TestClient(app)
+    client.cookies.set(settings.AUTH_COOKIE_NAME, admin_token)
+
+    # 1. Create user directly with role='cassa'
+    res_cassa = client.post(
+        "/api/v1/users",
+        json={"username": "operatore_cassa", "password": "Password123", "role": "cassa"},
+    )
+    assert res_cassa.status_code == 201
+    assert res_cassa.json()["role"] == "cassa"
+
+    # 2. Create a 'base' user and promote to 'cassa'
+    res_base = client.post(
+        "/api/v1/users",
+        json={"username": "operatore_base", "password": "Password123", "role": "base"},
+    )
+    assert res_base.status_code == 201
+    base_id = res_base.json()["id"]
+
+    res_promote = client.patch(
+        f"/api/v1/users/{base_id}",
+        json={"role": "cassa"},
+    )
+    assert res_promote.status_code == 200
+    assert res_promote.json()["role"] == "cassa"
+
+    # 3. Settings page HTML & JS expose 'cassa' role option
+    settings_html = client.get("/settings")
+    assert settings_html.status_code == 200
+    assert '<option value="cassa">Cassa</option>' in settings_html.text
+
+    settings_js = client.get("/static/js/settings_page.js")
+    assert settings_js.status_code == 200
+    assert '<option value="cassa"' in settings_js.text
+
+    # 4. Guard test: sole active admin cannot be demoted to 'cassa'
+    db_session.query(User).filter(User.id != admin.id).delete()
+    db_session.commit()
+
+    demote_cassa = client.patch(
+        f"/api/v1/users/{admin.id}",
+        json={"role": "cassa"},
+    )
+    assert demote_cassa.status_code == 400
+    assert "impossibile disattivare o declassare" in demote_cassa.json()["detail"].lower()
+
+
 def test_edge_agent_public_bypass(db_session: Session):
     """Verifies that cash register synchronization endpoints do not require auth."""
     app.dependency_overrides.pop(get_current_user, None)

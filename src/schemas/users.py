@@ -23,11 +23,11 @@ class UserOut(BaseModel):
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=4, max_length=32, pattern=r"^[a-zA-Z0-9._-]+$")
     password: str = Field(..., min_length=4)
-    role: str = Field(default="base", pattern=r"^(admin|base)$")
+    role: str = Field(default="base", pattern=r"^(admin|cassa|base)$")
 
 
 class UserUpdate(BaseModel):
-    role: Optional[str] = Field(None, pattern=r"^(admin|base)$")
+    role: Optional[str] = Field(None, pattern=r"^(admin|cassa|base)$")
     is_active: Optional[bool] = None
 
 

@@ -87,6 +87,28 @@ async def get_current_user(
     return auth_user
 
 
+async def require_cassa_or_admin(
+    request: Request,
+    current_user: AuthUser = Depends(get_current_user),
+) -> AuthUser:
+    """
+    FastAPI dependency ensuring the authenticated user has the 'cassa' or 'admin' role.
+    Used for customer profile modifications and advanced loyalty operations.
+    """
+    if current_user.role not in (UserRole.CASSA.value, UserRole.ADMIN.value):
+        logger.log_security(
+            "auth", "forbidden_role", "warning",
+            user=current_user.username,
+            role=current_user.role,
+            path=request.url.path,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permesso negato: operazione riservata agli operatori di cassa o agli amministratori",
+        )
+    return current_user
+
+
 async def require_admin(
     request: Request,
     current_user: AuthUser = Depends(get_current_user),

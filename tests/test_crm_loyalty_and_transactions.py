@@ -986,54 +986,126 @@ class TestCustomerCrmEndpointsAdminActionsAndRbac:
         assert anon["kpi"]["transactions_count"] == 2
         assert Decimal(anon["kpi"]["total_spent"]) == Decimal("250.00")
 
-    def test_admin_only_endpoints_reject_base_user_with_403(self, db_session: Session):
+    def test_crm_three_tier_rbac_base_vs_cassa_vs_admin(self, db_session: Session):
+        """
+        Verifies the 3-tier RBAC matrix across Customer CRM & System endpoints:
+        - 'base': can read customers, initiate onboarding, and record transactions;
+          FORBIDDEN (403) from PATCH, points-adjustment, merge, anonymize, users, settings.
+        - 'cassa': can perform ALL customer operations (read, onboarding, PATCH, points-adjustment,
+          merge, anonymize -> 200 OK); FORBIDDEN (403) from /api/v1/users and /api/v1/settings.
+        - 'admin': full access to customer operations, users IAM, and system settings.
+        """
         client = TestClient(app)
         c1 = _create_active_customer(db_session, phone="3406000001", initial_points=100)
         c2 = _create_active_customer(db_session, phone="3406000002", initial_points=100)
+        c3 = _create_active_customer(db_session, phone="3406000003", initial_points=50)
 
         fake_base_user = AuthUser(
             id="00000000-0000-0000-0000-000000000099",
-            username="cashier_base",
+            username="venditore_base",
             role="base",
             token_version=1,
         )
+        fake_cassa_user = AuthUser(
+            id="00000000-0000-0000-0000-000000000088",
+            username="operatore_cassa",
+            role="cassa",
+            token_version=1,
+        )
+        fake_admin_user = AuthUser(
+            id="00000000-0000-0000-0000-000000000001",
+            username="admin_test",
+            role="admin",
+            token_version=1,
+        )
 
-        def override_base_user():
-            current_user_var.set(fake_base_user)
-            return fake_base_user
+        def set_role_user(auth_user: AuthUser):
+            def _override():
+                current_user_var.set(auth_user)
+                return auth_user
 
-        app.dependency_overrides[get_current_user] = override_base_user
-        try:
-            # Base user CAN read customers and patch demographics
-            assert client.get("/api/v1/customers").status_code == 200
-            assert (
-                client.patch(
-                    f"/api/v1/customers/{c1.id}", json={"first_name": "Luigi"}
-                ).status_code
-                == 200
-            )
+            app.dependency_overrides[get_current_user] = _override
+            current_user_var.set(auth_user)
 
-            # Base user CANNOT call admin endpoints -> 403 Forbidden
-            assert (
-                client.post(
-                    f"/api/v1/customers/{c1.id}/points-adjustment",
-                    json={"points_delta": 50},
-                ).status_code
-                == 403
-            )
-            assert (
-                client.post(f"/api/v1/customers/{c1.id}/anonymize").status_code == 403
-            )
-            assert (
-                client.post(
-                    "/api/v1/customers/merge",
-                    json={
-                        "source_customer_id": c1.id,
-                        "target_customer_id": c2.id,
-                    },
-                ).status_code
-                == 403
-            )
-        finally:
-            # Restore fixture's default admin override
-            pass
+        # --- 1. Role 'base' ---
+        set_role_user(fake_base_user)
+        assert client.get("/api/v1/customers").status_code == 200
+        assert client.get(f"/api/v1/customers/{c1.id}").status_code == 200
+        assert (
+            client.post(
+                "/api/v1/customers/onboarding", json={"phone_number": "3406000099"}
+            ).status_code
+            == 201
+        )
+        assert (
+            client.patch(
+                f"/api/v1/customers/{c1.id}", json={"first_name": "Luigi"}
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                f"/api/v1/customers/{c1.id}/points-adjustment",
+                json={"points_delta": 50},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                "/api/v1/customers/merge",
+                json={"source_customer_id": c1.id, "target_customer_id": c2.id},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(f"/api/v1/customers/{c1.id}/anonymize").status_code == 403
+        )
+        assert client.get("/api/v1/users").status_code == 403
+        assert client.get("/api/v1/settings").status_code == 403
+
+        # --- 2. Role 'cassa' ---
+        set_role_user(fake_cassa_user)
+        assert client.get("/api/v1/customers").status_code == 200
+        patch_res = client.patch(
+            f"/api/v1/customers/{c1.id}", json={"first_name": "Luigi"}
+        )
+        assert patch_res.status_code == 200
+        assert patch_res.json()["first_name"] == "Luigi"
+
+        adj_res = client.post(
+            f"/api/v1/customers/{c1.id}/points-adjustment",
+            json={"points_delta": 50},
+        )
+        assert adj_res.status_code == 200
+        assert adj_res.json()["points_balance"] == 150
+
+        merge_res = client.post(
+            "/api/v1/customers/merge",
+            json={"source_customer_id": c3.id, "target_customer_id": c1.id},
+        )
+        assert merge_res.status_code == 200
+        assert merge_res.json()["points_balance"] == 200
+
+        anon_res = client.post(f"/api/v1/customers/{c1.id}/anonymize")
+        assert anon_res.status_code == 200
+        assert anon_res.json()["status"] == "ANONYMIZED"
+        assert anon_res.json()["points_balance"] == 0
+
+        # Cassa CANNOT access admin-only IAM or System Settings
+        assert client.get("/api/v1/users").status_code == 403
+        assert client.get("/api/v1/settings").status_code == 403
+
+        # --- 3. Role 'admin' ---
+        set_role_user(fake_admin_user)
+        assert client.patch(
+            f"/api/v1/customers/{c2.id}", json={"first_name": "Giulia"}
+        ).status_code == 200
+        assert (
+            client.post(
+                f"/api/v1/customers/{c2.id}/points-adjustment",
+                json={"points_delta": 25},
+            ).status_code
+            == 200
+        )
+        assert client.get("/api/v1/users").status_code == 200
+        assert client.get("/api/v1/settings").status_code == 200

@@ -7,6 +7,7 @@ from src.models.base import Base, UUIDMixin, TimestampMixin
 
 class UserRole(str, enum.Enum):
     ADMIN = "admin"
+    CASSA = "cassa"
     BASE = "base"
 
 

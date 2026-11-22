@@ -228,6 +228,7 @@ function renderUsersTable() {
             <td style="padding: 12px 8px;">
                 <select class="form-control user-role-select" data-user-id="${u.id}" style="padding: 4px 8px; font-size: 12px; width: auto;">
                     <option value="base" ${u.role === 'base' ? 'selected' : ''}>Base</option>
+                    <option value="cassa" ${u.role === 'cassa' ? 'selected' : ''}>Cassa</option>
                     <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
                 </select>
             </td>

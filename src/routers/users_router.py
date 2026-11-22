@@ -44,7 +44,7 @@ def create_user(
     admin: AuthUser = Depends(require_admin),
 ):
     """
-    Creates a new user profile with role 'base' or 'admin'.
+    Creates a new user profile with role 'base', 'cassa', or 'admin'.
     """
     clean_username = payload.username.strip().lower()
 

@@ -11,7 +11,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from src.core.auth import get_current_user, require_admin
+from src.core.auth import get_current_user, require_cassa_or_admin
 from src.core.database import get_db
 from src.core.logger import get_logger
 from src.core.request_context import AuthUser
@@ -135,10 +135,10 @@ def start_customer_onboarding(
 def merge_customer_profiles(
     payload: CustomerMergeRequest,
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(require_admin),
+    current_user: AuthUser = Depends(require_cassa_or_admin),
 ):
     """
-    Admin-only operation: merges `source_customer_id` into `target_customer_id` by reassigning
+    Cassa/Admin operation: merges `source_customer_id` into `target_customer_id` by reassigning
     all transactions and loyalty ledger entries to the target profile and deleting the source profile.
     """
     try:
@@ -194,11 +194,12 @@ def update_customer_profile(
     customer_id: str,
     payload: CustomerPatchRequest,
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(get_current_user),
+    current_user: AuthUser = Depends(require_cassa_or_admin),
 ):
     """
-    Updates customer demographic data (`first_name`, `last_name`, `birth_date`, `address`,
-    `phone_number`) and GDPR consent flags (`consent_marketing`, `consent_profiling`).
+    Cassa/Admin operation: updates customer demographic data (`first_name`, `last_name`,
+    `birth_date`, `address`, `phone_number`) and GDPR consent flags (`consent_marketing`,
+    `consent_profiling`).
     """
     try:
         return loyalty_service.update_customer(
@@ -240,10 +241,10 @@ def adjust_customer_points(
     customer_id: str,
     payload: CustomerPointsAdjustmentRequest,
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(require_admin),
+    current_user: AuthUser = Depends(require_cassa_or_admin),
 ):
     """
-    Admin-only operation: inserts an immutable `ADMIN_ADJUSTMENT` entry into `loyalty_point_ledger`.
+    Cassa/Admin operation: inserts an immutable `ADMIN_ADJUSTMENT` entry into `loyalty_point_ledger`.
     """
     try:
         return loyalty_service.adjust_customer_points(
@@ -274,10 +275,10 @@ def adjust_customer_points(
 def anonymize_customer_profile(
     customer_id: str,
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(require_admin),
+    current_user: AuthUser = Depends(require_cassa_or_admin),
 ):
     """
-    Admin-only GDPR Right-to-be-Forgotten operation: anonymizes personal data,
+    Cassa/Admin GDPR Right-to-be-Forgotten operation: anonymizes personal data,
     zeroes out any positive points balance via a closing ledger entry, and preserves
     associated `transactions` and `excel_sales`.
     """
