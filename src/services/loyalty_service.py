@@ -119,6 +119,20 @@ def get_redemption_tier(discount_rule_code: str) -> Dict[str, Any]:
     raise ValueError(f"Soglia di sconto punti non valida o inesistente: '{discount_rule_code}'")
 
 
+def get_top_redeemable_tiers(points_balance: int, max_tiers: int = 3) -> List[Dict[str, Any]]:
+    """
+    Returns up to `max_tiers` highest-threshold loyalty discount tiers currently unlocked
+    by `points_balance`, ordered from highest points_required descending.
+    """
+    tiers = [
+        tier
+        for tier in (settings.LOYALTY_REDEMPTION_TIERS or [])
+        if isinstance(tier, dict) and int(tier.get("points_required", 0)) <= points_balance
+    ]
+    tiers.sort(key=lambda t: int(t.get("points_required", 0)), reverse=True)
+    return tiers[:max_tiers]
+
+
 def is_customer_eligible_for_birthday_bonus(
     db: Session,
     customer: Optional[Customer],
@@ -280,15 +294,20 @@ def restore_pre_loyalty_prices(transaction: Transaction) -> None:
             weights = [Decimal("1.00") for _ in purchase_rows]
             weight_sum = Decimal(len(purchase_rows))
 
+    # Absorb rounding cent remainder on the purchase row with the highest weight (tie-break: last row)
+    remainder_idx = max(range(len(purchase_rows)), key=lambda i: (weights[i], i))
+    deltas: List[Decimal] = [Decimal("0.00")] * len(purchase_rows)
     allocated_sum = Decimal("0.00")
-    n = len(purchase_rows)
+    for idx in range(len(purchase_rows)):
+        if idx == remainder_idx:
+            continue
+        delta_i = _to_cents(old_discount * (weights[idx] / weight_sum))
+        deltas[idx] = delta_i
+        allocated_sum += delta_i
+    deltas[remainder_idx] = _to_cents(old_discount - allocated_sum)
+
     for idx, row in enumerate(purchase_rows):
-        if idx < n - 1:
-            delta_i = _to_cents(old_discount * (weights[idx] / weight_sum))
-            allocated_sum += delta_i
-        else:
-            delta_i = _to_cents(old_discount - allocated_sum)
-        row.selling_price = float(_to_cents(row.selling_price) + delta_i)
+        row.selling_price = float(_to_cents(row.selling_price) + deltas[idx])
 
     transaction.loyalty_discount_amount = Decimal("0.00")
 
@@ -373,17 +392,22 @@ def _apply_loyalty_engine(
         else:
             raise ValueError(f"Tipo di sconto non supportato: '{discount_type}'")
 
-        # Proportional spreading across purchase_rows (is_exchange == False)
+        # Proportional spreading across purchase_rows (is_exchange == False),
+        # absorbing any rounding cent remainder on the highest-priced purchase row (tie-break: last row)
+        row_prices = [_to_cents(r.selling_price) for r in purchase_rows]
+        remainder_idx = max(range(len(purchase_rows)), key=lambda i: (row_prices[i], i))
+        discounts: List[Decimal] = [Decimal("0.00")] * len(purchase_rows)
         allocated_discount = Decimal("0.00")
-        n = len(purchase_rows)
+        for idx in range(len(purchase_rows)):
+            if idx == remainder_idx:
+                continue
+            d_i = _to_cents(discount_amount * (row_prices[idx] / s_acq))
+            discounts[idx] = d_i
+            allocated_discount += d_i
+        discounts[remainder_idx] = _to_cents(discount_amount - allocated_discount)
+
         for idx, row in enumerate(purchase_rows):
-            row_price = _to_cents(row.selling_price)
-            if idx < n - 1:
-                d_i = _to_cents(discount_amount * (row_price / s_acq))
-                allocated_discount += d_i
-            else:
-                d_i = _to_cents(discount_amount - allocated_discount)
-            row.selling_price = float(_to_cents(row_price - d_i))
+            row.selling_price = float(_to_cents(row_prices[idx] - discounts[idx]))
             db.add(row)
 
         transaction.loyalty_discount_amount = discount_amount
@@ -488,6 +512,21 @@ def _apply_loyalty_engine(
     else:
         p_nuovo = (-p_redeem) + p_acq - p_resi + p_bday
         p_attuale = sum(int(e.points_delta) for e in existing_tx_entries)
+        has_redemption_entry = any(
+            e.reason == LoyaltyLedgerReason.DISCOUNT_REDEMPTION for e in existing_tx_entries
+        )
+        if p_redeem > 0 and not has_redemption_entry:
+            db.add(
+                LoyaltyPointLedger(
+                    customer_id=customer.id,
+                    transaction_id=transaction.id,
+                    points_delta=-p_redeem,
+                    reason=LoyaltyLedgerReason.DISCOUNT_REDEMPTION,
+                    created_at=current_dt,
+                )
+            )
+            p_attuale -= p_redeem
+
         delta = p_nuovo - p_attuale
         if delta != 0:
             db.add(
@@ -720,6 +759,7 @@ def serialize_transaction(db: Session, tx: Transaction) -> TransactionOut:
         customer_id=tx.customer_id,
         loyalty_discount_amount=loyalty_disc,
         discount_rule_code=tx.discount_rule_code,
+        identification_status=tx.identification_status,
         net_list_total=net_list_total,
         net_payable=net_payable,
         base_cash_discount=base_cash_discount,
@@ -1281,6 +1321,8 @@ def anonymize_customer(
     customer.consent_profiling = False
     customer.consent_updated_at = current_dt
     customer.whatsapp_flow_token = None
+    customer.redemption_otp_code = None
+    customer.redemption_rule_code = None
     customer.retention_expires_at = None
 
     db.add(customer)

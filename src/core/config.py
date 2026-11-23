@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     LOYALTY_REDEMPTION_TIERS: list = loyalty_config.get(
         "redemption_tiers", default_redemption_tiers
     )
+    LOYALTY_POST_PURCHASE_DEBOUNCE_SECONDS: float = float(
+        loyalty_config.get("post_purchase_debounce_seconds", 60.0)
+    )
     
     class Config:
         env_file = ".env"

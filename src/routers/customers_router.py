@@ -26,6 +26,8 @@ from src.schemas.crm import (
     CustomerPatchRequest,
     CustomerPointsAdjustmentRequest,
     WhatsAppFlowCompletionPayload,
+    WhatsAppQuickReplyPayload,
+    WhatsAppQuickReplyResponse,
 )
 from src.services import customer_onboarding_service, loyalty_service
 from src.services.customer_onboarding_service import (
@@ -368,6 +370,43 @@ def mock_complete_customer_onboarding(
         db.rollback()
         logger.log_execution(
             "customers_router", "mock_complete_customer_onboarding", "err", exc=exc
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
+
+
+@router.post(
+    "/{customer_id}/mock-quick-reply-otp",
+    response_model=WhatsAppQuickReplyResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mock_quick_reply_redemption_otp(
+    customer_id: str,
+    payload: WhatsAppQuickReplyPayload,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """
+    Development/Test helper with Mock WABA: simulates the customer tapping a discount Quick Reply
+    button in WhatsApp, generating and saving a 6-digit redemption OTP on the customer profile.
+    """
+    try:
+        return customer_onboarding_service.simulate_mock_quick_reply_otp(
+            db=db,
+            customer_id=customer_id,
+            discount_rule_code=payload.discount_rule_code,
+        )
+    except CustomerNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        db.rollback()
+        logger.log_execution(
+            "customers_router", "mock_quick_reply_redemption_otp", "err", exc=exc
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

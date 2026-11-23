@@ -69,7 +69,9 @@ def push_batch(
             status="success",
             message=f"Successfully processed {len(result['confirmed_row_indexes'])} rows",
             confirmed_row_indexes=result["confirmed_row_indexes"],
-            inserted_ids=result["inserted_ids"]
+            inserted_ids=result["inserted_ids"],
+            row_updates=result.get("row_updates", []),
+            async_row_updates=result.get("async_row_updates", []),
         )
     except HistoricalFileError as e:
         db.rollback()

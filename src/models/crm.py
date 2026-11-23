@@ -21,6 +21,13 @@ class CustomerStatus(str, enum.Enum):
     ANONYMIZED = "ANONYMIZED"
 
 
+class CustomerIdentificationStatus(str, enum.Enum):
+    """Two-step cashier confirmation state for Excel-originated transactions."""
+
+    IDENTIFICATION_PENDING = "IDENTIFICATION_PENDING"
+    IDENTIFICATION_CONFIRMED = "IDENTIFICATION_CONFIRMED"
+
+
 class LoyaltyLedgerReason(str, enum.Enum):
     """Immutable ledger reason codes for loyalty point movements."""
 
@@ -59,6 +66,8 @@ class Customer(Base, UUIDMixin, TimestampMixin):
     whatsapp_flow_token: Mapped[Optional[str]] = mapped_column(
         String(128), index=True, nullable=True
     )
+    redemption_otp_code: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    redemption_rule_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     last_purchase_date: Mapped[Optional[date]] = mapped_column(Date, index=True, nullable=True)
     retention_expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, index=True, nullable=True
@@ -89,6 +98,11 @@ class Transaction(Base, UUIDMixin, TimestampMixin):
         Numeric(10, 2), nullable=False, default=Decimal("0.00")
     )
     discount_rule_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    identification_status: Mapped[CustomerIdentificationStatus] = mapped_column(
+        Enum(CustomerIdentificationStatus, validate_strings=True),
+        nullable=False,
+        default=CustomerIdentificationStatus.IDENTIFICATION_CONFIRMED,
+    )
 
     # Relationships
     customer: Mapped[Optional["Customer"]] = relationship(

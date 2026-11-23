@@ -406,3 +406,112 @@ def test_run_cycle_uses_fallback_path(mock_push, agent_dir, tmp_path):
         assert sent_rows[0]["starting_price"] == 150.0
         assert sent_rows[0]["selling_price"] == 120.0
 
+
+def test_read_excel_rows_reads_col_o_col_q_and_negative_exchange(tmp_path):
+    """Verifies Phase 4 forwarder reads Col O (phone), Col Q (OTP), and negative-price returns."""
+    file_path = tmp_path / "test_crm_cols.xlsx"
+    wb = openpyxl.Workbook()
+    sheet = wb.active
+
+    sheet.cell(row=1, column=1, value="LISTINO")
+    # Row 2: normal sale with numeric phone in Col O (col 15) and numeric OTP in Col Q (col 17)
+    sheet.cell(row=2, column=1, value=100.0)
+    sheet.cell(row=2, column=2, value=90.0)
+    sheet.cell(row=2, column=14, value="ART-1")
+    sheet.cell(row=2, column=15, value=3401234567)  # Stored as numeric in Excel
+    sheet.cell(row=2, column=17, value=482910)      # Stored as numeric in Excel
+    # Row 3: return via negative selling_price (no 'X' in Col L)
+    sheet.cell(row=3, column=1, value=-50.0)
+    sheet.cell(row=3, column=2, value=-50.0)
+    sheet.cell(row=3, column=15, value="+39 340-1234567")
+
+    wb.save(str(file_path))
+    wb.close()
+
+    rows = read_excel_rows(file_path, start_row=2, code_column="N")
+    assert len(rows) == 2
+    assert rows[0]["phone_number"] == "3401234567"
+    assert rows[0]["redemption_otp"] == "482910"
+    assert rows[0]["is_exchange"] is False
+
+    assert rows[1]["is_exchange"] is True
+    assert rows[1]["phone_number"] == "+39 340-1234567"
+    assert rows[1]["redemption_otp"] is None
+
+
+def test_compute_row_hash_includes_phone_and_otp():
+    base = {
+        "excel_row_index": 2,
+        "starting_price": 100.0,
+        "selling_price": 90.0,
+        "excel_file_column": 0,
+        "is_exchange": False,
+        "raw_article_code": "ART-1",
+        "phone_number": "3401234567",
+        "redemption_otp": None,
+    }
+    with_otp = {**base, "redemption_otp": "482910"}
+    with_diff_phone = {**base, "phone_number": "3409998888"}
+
+    assert compute_row_hash(base) != compute_row_hash(with_otp)
+    assert compute_row_hash(base) != compute_row_hash(with_diff_phone)
+
+
+@patch("scripts.excel_agent.ltdb_forwarder.push_batch_to_ltdb")
+def test_run_cycle_resends_identification_pending_rows_on_second_save(mock_push, agent_dir):
+    """
+    Verifies that rows flagged with identification_pending=True in LTDB's row_updates
+    are automatically re-sent on the next cycle (2nd Ctrl+S) even when the row hash is unchanged,
+    and are cleared from pending_rows once confirmed.
+    """
+    logger = setup_logging(agent_dir)
+    local_cfg = load_local_config(agent_dir)
+    runtime_cfg = local_cfg["fallback_config"]
+
+    excel_file = Path(runtime_cfg["excel_file_path"])
+    wb = openpyxl.Workbook()
+    sheet = wb.active
+    sheet.cell(row=2, column=1, value=100.0)
+    sheet.cell(row=2, column=2, value=100.0)
+    sheet.cell(row=2, column=15, value="3401234567")
+    wb.save(str(excel_file))
+    wb.close()
+
+    # 1st Save: LTDB responds with identification_pending=True
+    def first_push_side_effect(**kwargs):
+        out_updates = kwargs.get("out_row_updates")
+        if out_updates is not None:
+            out_updates.append({
+                "excel_row_index": 2,
+                "col_p_status": "M. Rossi - Salva il file per confermare",
+                "identification_pending": True,
+            })
+        return [2]
+
+    mock_push.side_effect = first_push_side_effect
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, last_push_time=0.0)
+    assert mock_push.call_count == 1
+
+    # 2nd Save (unchanged file): row 2 MUST be re-sent because it is in pending_rows!
+    def second_push_side_effect(**kwargs):
+        out_updates = kwargs.get("out_row_updates")
+        if out_updates is not None:
+            out_updates.append({
+                "excel_row_index": 2,
+                "col_p_status": "M. Rossi (100 pt)",
+                "identification_pending": False,
+            })
+        return [2]
+
+    mock_push.reset_mock()
+    mock_push.side_effect = second_push_side_effect
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, last_push_time=time.time())
+    assert mock_push.call_count == 1
+    assert mock_push.call_args[1]["rows"][0]["excel_row_index"] == 2
+
+    # 3rd Save (unchanged file after confirmation): row 2 is no longer pending -> NOT sent
+    mock_push.reset_mock()
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, last_push_time=time.time())
+    assert mock_push.call_count == 0
+
+

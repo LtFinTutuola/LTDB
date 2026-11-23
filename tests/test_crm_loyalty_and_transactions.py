@@ -1109,3 +1109,71 @@ class TestCustomerCrmEndpointsAdminActionsAndRbac:
         )
         assert client.get("/api/v1/users").status_code == 200
         assert client.get("/api/v1/settings").status_code == 200
+
+
+def test_proportional_discount_absorbs_cent_remainder_on_highest_priced_item(
+    db_session: Session,
+):
+    """
+    Verifies Phase 4 Architectural Decision #1:
+    When proportional discount spreading produces a cent remainder, it is absorbed
+    by the purchase row (is_exchange == False) with the highest selling_price,
+    and restoring pre-loyalty prices via PATCH recovers the exact original prices.
+    """
+    client = TestClient(app)
+    customer = _create_active_customer(
+        db_session,
+        phone="3401000099",
+        birth_date=date(1985, 4, 10),
+        initial_points=600,
+    )
+
+    # Items: 60.00, 15.00, 15.00 (S_acq = 90.00) with TIER_500_5EUR (5.00 EUR fixed)
+    # 15/90 * 5.00 = 0.8333... -> 0.83 each (sum = 1.66)
+    # Highest-priced item (60.00, idx=0) absorbs remainder: 5.00 - 1.66 = 3.34 -> 56.66
+    res = client.post(
+        "/api/v1/transactions",
+        json={
+            "date": "2026-11-23",
+            "customer_id": customer.id,
+            "discount_rule_code": "TIER_500_5EUR",
+            "items": [
+                {
+                    "starting_price": 60.00,
+                    "selling_price": 60.00,
+                    "excel_file_column": 0,
+                    "is_exchange": False,
+                    "raw_article_code": "HIGH",
+                },
+                {
+                    "starting_price": 15.00,
+                    "selling_price": 15.00,
+                    "excel_file_column": 1,
+                    "is_exchange": False,
+                    "raw_article_code": "LOW-1",
+                },
+                {
+                    "starting_price": 15.00,
+                    "selling_price": 15.00,
+                    "excel_file_column": 2,
+                    "is_exchange": False,
+                    "raw_article_code": "LOW-2",
+                },
+            ],
+        },
+    )
+    assert res.status_code == 201
+    tx = res.json()
+    prices = [Decimal(item["selling_price"]) for item in tx["items"]]
+    assert prices == [Decimal("56.66"), Decimal("14.17"), Decimal("14.17")]
+    assert sum(prices) == Decimal("85.00")
+
+    # Removing discount via PATCH must restore exact pre-loyalty prices [60.00, 15.00, 15.00]
+    patch_res = client.patch(
+        f"/api/v1/transactions/{tx['id']}",
+        json={"discount_rule_code": None},
+    )
+    assert patch_res.status_code == 200
+    restored_prices = [Decimal(item["selling_price"]) for item in patch_res.json()["items"]]
+    assert restored_prices == [Decimal("60.00"), Decimal("15.00"), Decimal("15.00")]
+

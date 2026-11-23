@@ -206,20 +206,41 @@ def resolve_excel_path(config: Dict[str, Any], logger: Optional[logging.Logger] 
     return None
 
 
+def _clean_excel_cell_str(val: Any) -> Optional[str]:
+    """
+    Normalizes an Excel cell value to a stripped string.
+    Handles numeric cells stored as float/int (e.g. phone numbers or 6-digit OTPs like 3401234567.0).
+    """
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return str(val).strip()
+    if isinstance(val, int):
+        return str(val).strip()
+    if isinstance(val, float):
+        if val.is_integer():
+            return str(int(val)).strip()
+        return str(val).strip()
+    cleaned = str(val).strip()
+    return cleaned or None
+
+
 def compute_row_hash(row: Dict[str, Any]) -> str:
-    """Computes a deterministic SHA-256 hash for an Excel row."""
+    """Computes a deterministic SHA-256 hash for an Excel row (including Col O phone and Col Q OTP)."""
     row_idx = row.get("excel_row_index")
     start_val = row.get("starting_price")
     sell_val = row.get("selling_price")
     col_idx = row.get("excel_file_column")
     is_exch = "1" if row.get("is_exchange") else "0"
     raw_code = (row.get("raw_article_code") or "").strip()
+    phone_str = (row.get("phone_number") or "").strip()
+    otp_str = (row.get("redemption_otp") or "").strip()
 
     start_str = f"{float(start_val):.2f}" if start_val is not None else ""
     sell_str = f"{float(sell_val):.2f}" if sell_val is not None else ""
     col_str = str(col_idx) if col_idx is not None else ""
 
-    canonical = f"{row_idx}|{start_str}|{sell_str}|{col_str}|{is_exch}|{raw_code}"
+    canonical = f"{row_idx}|{start_str}|{sell_str}|{col_str}|{is_exch}|{raw_code}|{phone_str}|{otp_str}"
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -237,15 +258,35 @@ def load_daily_state(state_dir: Path, target_date: date) -> Dict[str, str]:
         return {}
 
 
-def save_daily_state(state_dir: Path, target_date: date, row_hashes: Dict[str, str]) -> None:
-    """Saves the map of row hashes atomically."""
+def load_pending_rows(state_dir: Path, target_date: date) -> set[int]:
+    """Loads the set of excel_row_index values currently in IDENTIFICATION_PENDING state."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"hashes_{target_date.isoformat()}.json"
+    if not state_file.exists():
+        return set()
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return {int(r) for r in data.get("pending_rows", [])}
+    except Exception:
+        return set()
+
+
+def save_daily_state(
+    state_dir: Path,
+    target_date: date,
+    row_hashes: Dict[str, str],
+    pending_rows: Optional[set[int]] = None,
+) -> None:
+    """Saves the map of row hashes (and optional pending identification rows) atomically."""
     state_dir.mkdir(parents=True, exist_ok=True)
     state_file = state_dir / f"hashes_{target_date.isoformat()}.json"
     tmp_file = state_dir / f"hashes_{target_date.isoformat()}.json.tmp"
-    payload = {
+    payload: Dict[str, Any] = {
         "date": target_date.isoformat(),
         "last_updated_at": datetime.now().isoformat(),
-        "rows": row_hashes
+        "rows": row_hashes,
+        "pending_rows": sorted(int(r) for r in (pending_rows or set())),
     }
     with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
@@ -268,11 +309,12 @@ def read_excel_rows(
         raise ImportError("openpyxl is required to read Excel files on edge.")
 
     code_col_idx = None
-    max_col_to_read = 12
+    # Always read at least up to Column Q (1-based col 17, 0-based index 16)
+    max_col_to_read = 17
     if code_column:
         try:
             code_col_idx = ord(code_column.strip().upper()) - ord('A')
-            max_col_to_read = max(12, code_col_idx + 1)
+            max_col_to_read = max(17, code_col_idx + 1)
         except Exception:
             pass
 
@@ -314,12 +356,16 @@ def read_excel_rows(
                         is_unprocessable = True
                     break
 
-            # is_exchange (Column L, index 11)
+            # is_exchange (Column L, index 11 OR negative price)
             is_exchange = False
             if len(row) > 11:
                 val_l = row[11].value
                 if val_l is not None and str(val_l).strip().upper() == "X":
                     is_exchange = True
+            if (starting_price_val is not None and starting_price_val < 0) or (
+                selling_price_val is not None and selling_price_val < 0
+            ):
+                is_exchange = True
 
             # raw_article_code
             raw_article_code = None
@@ -328,6 +374,16 @@ def read_excel_rows(
                 if val_code is not None:
                     raw_article_code = str(val_code).strip()
 
+            # phone_number (Column O, index 14)
+            phone_number = None
+            if len(row) > 14:
+                phone_number = _clean_excel_cell_str(row[14].value)
+
+            # redemption_otp (Column Q, index 16)
+            redemption_otp = None
+            if len(row) > 16:
+                redemption_otp = _clean_excel_cell_str(row[16].value)
+
             extracted_rows.append({
                 "excel_row_index": row_idx,
                 "excel_file_column": found_category_col,
@@ -335,7 +391,9 @@ def read_excel_rows(
                 "selling_price": selling_price_val,
                 "is_exchange": is_exchange,
                 "raw_article_code": raw_article_code,
-                "is_unprocessable": is_unprocessable
+                "is_unprocessable": is_unprocessable,
+                "phone_number": phone_number,
+                "redemption_otp": redemption_otp,
             })
     finally:
         wb.close()
@@ -349,11 +407,13 @@ def push_batch_to_ltdb(
     target_date: date,
     rows: List[Dict[str, Any]],
     timeout: int,
-    logger: logging.Logger
+    logger: logging.Logger,
+    out_row_updates: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[List[int]]:
     """
     Sends rows (or heartbeat if empty) to LTDB cloud API.
     Returns confirmed_row_indexes if 200 OK.
+    If `out_row_updates` is provided, populates it with `row_updates` and `async_row_updates`.
     Returns None if error occurred.
     """
     url = f"{base_url.rstrip('/')}{push_endpoint}"
@@ -378,6 +438,9 @@ def push_batch_to_ltdb(
             if response.status == 200:
                 resp_data = json.loads(response.read().decode("utf-8"))
                 confirmed = resp_data.get("confirmed_row_indexes", [])
+                if out_row_updates is not None:
+                    out_row_updates.extend(resp_data.get("row_updates", []) or [])
+                    out_row_updates.extend(resp_data.get("async_row_updates", []) or [])
                 logger.info(
                     f"Successfully pushed batch to LTDB ({len(rows)} sent, {len(confirmed)} confirmed by cloud)"
                 )
@@ -437,38 +500,63 @@ def run_cycle(
         return last_push_time
 
     saved_hashes = load_daily_state(state_dir, today)
+    pending_rows = load_pending_rows(state_dir, today)
 
     delta_rows = []
     computed_hashes_by_row = {}
 
     for row in current_rows:
-        row_idx_str = str(row["excel_row_index"])
+        row_idx_int = int(row["excel_row_index"])
+        row_idx_str = str(row_idx_int)
         h = compute_row_hash(row)
         computed_hashes_by_row[row_idx_str] = h
 
-        if row_idx_str not in saved_hashes or saved_hashes[row_idx_str] != h:
+        # Re-send rows whose hash changed OR that are awaiting 2nd-save confirmation (IDENTIFICATION_PENDING)
+        if (
+            row_idx_str not in saved_hashes
+            or saved_hashes[row_idx_str] != h
+            or row_idx_int in pending_rows
+        ):
             delta_rows.append(row)
 
     now = time.time()
 
     if delta_rows:
-        logger.info(f"Detected {len(delta_rows)} modified/new row(s). Pushing delta to LTDB...")
+        logger.info(f"Detected {len(delta_rows)} modified/new/pending row(s). Pushing delta to LTDB...")
+        received_row_updates: List[Dict[str, Any]] = []
         confirmed_indexes = push_batch_to_ltdb(
             base_url=base_url,
             push_endpoint=push_endpoint,
             target_date=today,
             rows=delta_rows,
             timeout=timeout,
-            logger=logger
+            logger=logger,
+            out_row_updates=received_row_updates,
         )
 
         if confirmed_indexes is not None:
-            # Update state only for confirmed rows
+            # Update state for confirmed rows
             for idx in confirmed_indexes:
                 idx_str = str(idx)
                 if idx_str in computed_hashes_by_row:
                     saved_hashes[idx_str] = computed_hashes_by_row[idx_str]
-            save_daily_state(state_dir, today, saved_hashes)
+
+            # Update IDENTIFICATION_PENDING tracking from LTDB row_updates
+            for upd in received_row_updates:
+                upd_idx = upd.get("excel_row_index")
+                if upd_idx is None:
+                    continue
+                upd_idx_int = int(upd_idx)
+                col_p = str(upd.get("col_p_status") or "")
+                is_pending = bool(upd.get("identification_pending")) or (
+                    "Salva il file per confermare" in col_p
+                )
+                if is_pending:
+                    pending_rows.add(upd_idx_int)
+                else:
+                    pending_rows.discard(upd_idx_int)
+
+            save_daily_state(state_dir, today, saved_hashes, pending_rows=pending_rows)
             return now
     else:
         # Check heartbeat if idle for > heartbeat_interval

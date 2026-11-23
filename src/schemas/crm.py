@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from src.models.crm import CustomerStatus, LoyaltyLedgerReason
+from src.models.crm import CustomerIdentificationStatus, CustomerStatus, LoyaltyLedgerReason
 from src.schemas.base import BaseSchema, BaseSchemaWithAudit
 from src.schemas.excel_sales import ExcelSaleStatus
 
@@ -44,6 +44,8 @@ class CustomerUpdateInternal(BaseSchema):
     consent_profiling: Optional[bool] = None
     consent_updated_at: Optional[dt_datetime] = None
     whatsapp_flow_token: Optional[str] = None
+    redemption_otp_code: Optional[str] = None
+    redemption_rule_code: Optional[str] = None
     last_purchase_date: Optional[dt_date] = None
     retention_expires_at: Optional[dt_datetime] = None
 
@@ -62,6 +64,8 @@ class CustomerOut(BaseSchemaWithAudit):
     consent_profiling: bool = False
     consent_updated_at: Optional[dt_datetime] = None
     whatsapp_flow_token: Optional[str] = None
+    redemption_otp_code: Optional[str] = None
+    redemption_rule_code: Optional[str] = None
     last_purchase_date: Optional[dt_date] = None
     retention_expires_at: Optional[dt_datetime] = None
 
@@ -176,6 +180,9 @@ class TransactionOut(BaseSchemaWithAudit):
     customer_id: Optional[str] = None
     loyalty_discount_amount: Decimal = Decimal("0.00")
     discount_rule_code: Optional[str] = None
+    identification_status: CustomerIdentificationStatus = (
+        CustomerIdentificationStatus.IDENTIFICATION_CONFIRMED
+    )
 
     # Economic aggregates (Approach 1)
     net_list_total: Decimal = Decimal("0.00")
@@ -250,3 +257,20 @@ class CustomerMergeRequest(BaseModel):
 
     source_customer_id: str = Field(..., min_length=1)
     target_customer_id: str = Field(..., min_length=1)
+
+
+class WhatsAppQuickReplyPayload(BaseModel):
+    """Payload emitted when a customer taps a loyalty discount Quick Reply button in WhatsApp."""
+
+    phone_number: Optional[str] = None
+    discount_rule_code: str = Field(..., min_length=1, max_length=64)
+
+
+class WhatsAppQuickReplyResponse(BaseSchema):
+    """Response returned when a Quick Reply generates a discount redemption OTP."""
+
+    customer_id: str
+    phone_number: str
+    redemption_otp_code: str
+    redemption_rule_code: str
+    whatsapp_delivery: Dict[str, Any]

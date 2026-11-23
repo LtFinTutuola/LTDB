@@ -19,7 +19,12 @@ from src.core.config import settings
 from src.core.logger import get_logger
 from src.models.crm import Customer, CustomerStatus
 from src.repositories.crm_repo import crm_customer_repo
-from src.schemas.crm import LifecycleMaintenanceResult, WhatsAppFlowCompletionPayload
+from src.schemas.crm import (
+    LifecycleMaintenanceResult,
+    WhatsAppFlowCompletionPayload,
+    WhatsAppQuickReplyPayload,
+    WhatsAppQuickReplyResponse,
+)
 from src.services.whatsapp_service import get_whatsapp_provider, mock_whatsapp_provider
 
 logger = get_logger()
@@ -303,6 +308,173 @@ def extract_flow_payload_from_webhook_body(raw_body: bytes) -> WhatsAppFlowCompl
         raise ValueError(f"Dati del modulo WhatsApp Flow non validi: {exc}") from exc
 
 
+def extract_webhook_event_from_body(
+    raw_body: bytes,
+) -> Tuple[str, Any]:
+    """
+    Inspects an incoming HMAC-verified WhatsApp webhook JSON body and classifies it as either:
+    - ("quick_reply", WhatsAppQuickReplyPayload) when a customer taps a loyalty discount Quick Reply button
+      (supports flat payload or Meta Cloud API `messages[0]` button/interactive envelope).
+    - ("flow_completion", WhatsAppFlowCompletionPayload) for WhatsApp Flow onboarding completion.
+    """
+    try:
+        data = json.loads(raw_body.decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Payload JSON webhook non valido: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise ValueError("Il payload del webhook deve essere un oggetto JSON")
+
+    # 1. Flat Quick Reply payload
+    if data.get("event_type") == "quick_reply" or (
+        "discount_rule_code" in data and "flow_token" not in data
+    ):
+        raw_code = str(data.get("discount_rule_code") or "").strip()
+        if raw_code.startswith("REDEEM_TIER:"):
+            raw_code = raw_code.split("REDEEM_TIER:", 1)[1].strip()
+        return (
+            "quick_reply",
+            WhatsAppQuickReplyPayload(
+                phone_number=data.get("phone_number"),
+                discount_rule_code=raw_code,
+            ),
+        )
+
+    # 2. Meta Cloud API nested envelope for interactive / button Quick Reply
+    if "entry" in data and isinstance(data["entry"], list) and data["entry"]:
+        first_entry = data["entry"][0]
+        if isinstance(first_entry, dict) and first_entry.get("changes"):
+            first_change = first_entry["changes"][0]
+            value_obj = first_change.get("value") if isinstance(first_change, dict) else None
+            if isinstance(value_obj, dict) and isinstance(value_obj.get("messages"), list) and value_obj["messages"]:
+                msg = value_obj["messages"][0]
+                if isinstance(msg, dict):
+                    msg_type = msg.get("type")
+                    sender_phone = msg.get("from")
+                    btn_payload = None
+                    if msg_type == "button" and isinstance(msg.get("button"), dict):
+                        btn_payload = msg["button"].get("payload") or msg["button"].get("text")
+                    elif msg_type == "interactive" and isinstance(msg.get("interactive"), dict):
+                        btn_reply = msg["interactive"].get("button_reply")
+                        if isinstance(btn_reply, dict):
+                            btn_payload = btn_reply.get("id") or btn_reply.get("title")
+                    if btn_payload:
+                        raw_code = str(btn_payload).strip()
+                        if raw_code.startswith("REDEEM_TIER:"):
+                            raw_code = raw_code.split("REDEEM_TIER:", 1)[1].strip()
+                        return (
+                            "quick_reply",
+                            WhatsAppQuickReplyPayload(
+                                phone_number=sender_phone,
+                                discount_rule_code=raw_code,
+                            ),
+                        )
+
+    # 3. Default: WhatsApp Flow onboarding completion
+    return ("flow_completion", extract_flow_payload_from_webhook_body(raw_body))
+
+
+def process_quick_reply_redemption_request(
+    db: Session,
+    phone_number: Optional[str],
+    discount_rule_code: str,
+) -> WhatsAppQuickReplyResponse:
+    """
+    Handles a WhatsApp Quick Reply tap for a loyalty discount tier:
+    - Validates customer exists and is ACTIVE.
+    - Validates requested discount_rule_code and that customer points_balance >= points_required.
+    - Generates a 6-digit OTP and stores it on `customers.redemption_otp_code` / `redemption_rule_code`
+      WITHOUT deducting points yet.
+    - Sends the OTP to the customer via WhatsAppProvider.
+    """
+    from src.services.loyalty_service import get_redemption_tier
+
+    if not phone_number:
+        raise ValueError("Numero di telefono mancante nel callback Quick Reply")
+
+    norm_phone = normalize_phone_number(phone_number)
+    customer = crm_customer_repo.get_by_phone_number(db, norm_phone)
+    if not customer:
+        raise CustomerNotFoundError(f"Nessun cliente trovato per il numero '{norm_phone}'")
+
+    if customer.status != CustomerStatus.ACTIVE:
+        raise ValueError(
+            f"Il riscatto punti è consentito solo ai clienti in stato ACTIVE (stato attuale: {customer.status.value})"
+        )
+
+    tier = get_redemption_tier(discount_rule_code.strip())
+    points_required = int(tier["points_required"])
+    current_balance = crm_customer_repo.get_points_balance(db, customer.id)
+    if current_balance < points_required:
+        raise ValueError(
+            f"Saldo punti insufficiente per '{tier['code']}': richiesti {points_required} pt, disponibili {current_balance} pt"
+        )
+
+    otp_code = f"{secrets.randbelow(900000) + 100000}"
+    customer.redemption_otp_code = otp_code
+    customer.redemption_rule_code = str(tier["code"])
+    db.add(customer)
+    db.commit()
+    db.refresh(customer)
+
+    provider = get_whatsapp_provider()
+    delivery = provider.send_redemption_otp(
+        phone_number=norm_phone,
+        otp_code=otp_code,
+        tier_code=str(tier["code"]),
+        tier_label=str(tier.get("label", tier["code"])),
+    )
+
+    logger.log_execution(
+        "customer_onboarding_service",
+        "quick_reply_otp_generated",
+        "ok",
+        customer_id=customer.id,
+        phone_number=norm_phone,
+        tier_code=str(tier["code"]),
+    )
+
+    return WhatsAppQuickReplyResponse(
+        customer_id=str(customer.id),
+        phone_number=norm_phone,
+        redemption_otp_code=otp_code,
+        redemption_rule_code=str(tier["code"]),
+        whatsapp_delivery=delivery,
+    )
+
+
+def simulate_mock_quick_reply_otp(
+    db: Session,
+    customer_id: str,
+    discount_rule_code: str,
+) -> WhatsAppQuickReplyResponse:
+    """
+    Dev/Test helper with Mock WABA: simulates the customer tapping a discount Quick Reply button
+    by generating and HMAC-signing the webhook payload and executing the full webhook pipeline.
+    """
+    customer = crm_customer_repo.get(db, customer_id)
+    if not customer:
+        raise CustomerNotFoundError(f"Cliente '{customer_id}' non trovato")
+
+    if not customer.phone_number:
+        raise ValueError("Il cliente non possiede un numero di telefono valido")
+
+    simulated = mock_whatsapp_provider.simulate_quick_reply_click(
+        phone_number=customer.phone_number,
+        discount_rule_code=discount_rule_code,
+    )
+    verify_webhook_signature(simulated["raw_body"], simulated["signature"])
+    event_type, parsed_payload = extract_webhook_event_from_body(simulated["raw_body"])
+    if event_type != "quick_reply":
+        raise ValueError("Errore interno: payload Quick Reply non riconosciuto")
+
+    return process_quick_reply_redemption_request(
+        db=db,
+        phone_number=parsed_payload.phone_number,
+        discount_rule_code=parsed_payload.discount_rule_code,
+    )
+
+
 def complete_onboarding_from_flow(
     db: Session,
     payload: WhatsAppFlowCompletionPayload,
@@ -395,6 +567,34 @@ def complete_onboarding_from_flow(
 
     db.commit()
     db.refresh(customer)
+
+    # Queue async Col P update ("Registrazione completata") for any Excel-originated sale lines
+    from src.models.crm import Transaction
+    from src.models.excel_sales import ExcelSale
+    from src.schemas.excel_sales import ExcelRowUpdateItem
+    from src.services.excel_synchronization_service import enqueue_async_row_updates
+
+    excel_rows = (
+        db.query(ExcelSale)
+        .join(Transaction, ExcelSale.transaction_id == Transaction.id)
+        .filter(
+            Transaction.customer_id == customer.id,
+            ExcelSale.excel_row_index.isnot(None),
+        )
+        .order_by(ExcelSale.excel_row_index.asc())
+        .all()
+    )
+    if excel_rows:
+        enqueue_async_row_updates(
+            [
+                ExcelRowUpdateItem(
+                    excel_row_index=int(r.excel_row_index),
+                    col_p_status="Registrazione completata",
+                    identification_pending=False,
+                )
+                for r in excel_rows
+            ]
+        )
 
     logger.log_execution(
         "customer_onboarding_service",

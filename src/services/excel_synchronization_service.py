@@ -1,5 +1,5 @@
 import threading
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import date
 from sqlalchemy.orm import Session
 
@@ -8,7 +8,12 @@ from src.core.logger import get_logger
 from src.core.database import SessionLocal
 from src.repositories.excel_synchronization_repo import excel_synchronization_repo
 from src.repositories.wms_repo import wms_repo
-from src.schemas.excel_sales import ExcelSaleCreate, ExcelSaleStatus, ExcelRowPushItem
+from src.schemas.excel_sales import (
+    ExcelSaleCreate,
+    ExcelSaleStatus,
+    ExcelRowPushItem,
+    ExcelRowUpdateItem,
+)
 from src.schemas.wms import StockUpdate
 from src.models.wms import ArticleStatus, MovementReason
 from src.services.search_service import invalidate_search_cache
@@ -49,21 +54,486 @@ def get_agent_config() -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Phase 4 Part 1: Async Row Updates Queue & 60s Post-Purchase Debounce Manager
+# ---------------------------------------------------------------------------
+
+_async_updates_lock = threading.Lock()
+_async_row_updates_queue: List[ExcelRowUpdateItem] = []
+
+_debounce_lock = threading.Lock()
+_debounce_timers: Dict[str, threading.Timer] = {}
+_debounce_versions: Dict[str, int] = {}
+_debounce_session_factory = SessionLocal
+
+
+def enqueue_async_row_updates(updates: List[ExcelRowUpdateItem]) -> None:
+    """Queues asynchronous Excel row updates (e.g., Col P after WhatsApp onboarding completion)."""
+    if not updates:
+        return
+    with _async_updates_lock:
+        _async_row_updates_queue.extend(updates)
+
+
+def drain_async_row_updates() -> List[ExcelRowUpdateItem]:
+    """Atomically drains and returns all queued asynchronous Excel row updates."""
+    with _async_updates_lock:
+        items = list(_async_row_updates_queue)
+        _async_row_updates_queue.clear()
+        return items
+
+
+def clear_async_row_updates() -> None:
+    """Clears the asynchronous Excel row updates queue (useful for test cleanup)."""
+    with _async_updates_lock:
+        _async_row_updates_queue.clear()
+
+
+def _format_customer_short_name(customer: Any) -> str:
+    """Formats customer display name for Excel Col P as '<Initial>. <LastName>' (e.g. 'M. Rossi')."""
+    first = (getattr(customer, "first_name", None) or "").strip()
+    last = (getattr(customer, "last_name", None) or "").strip()
+    if first and last:
+        return f"{first[0].upper()}. {last}"
+    if last:
+        return last
+    if first:
+        return first
+    return getattr(customer, "phone_number", None) or "Cliente"
+
+
+def execute_post_purchase_notification_now(
+    transaction_id: str,
+    expected_version: Optional[int] = None,
+    db: Optional[Session] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Executes the post-purchase WhatsApp summary dispatch for a confirmed transaction.
+    Verifies under lock that no newer debounce version has superseded this trigger,
+    and verifies on DB that the transaction is still IDENTIFICATION_CONFIRMED.
+    """
+    from src.models.crm import CustomerIdentificationStatus, CustomerStatus, Transaction
+    from src.repositories.crm_repo import crm_customer_repo
+    from src.services.loyalty_service import get_top_redeemable_tiers
+    from src.services.whatsapp_service import get_whatsapp_provider
+
+    if expected_version is not None:
+        with _debounce_lock:
+            if _debounce_versions.get(transaction_id) != expected_version:
+                return None
+            _debounce_timers.pop(transaction_id, None)
+
+    owns_session = db is None
+    session = db if db is not None else _debounce_session_factory()
+    try:
+        tx = session.query(Transaction).filter(Transaction.id == transaction_id).first()
+        if not tx or not tx.customer_id:
+            return None
+        if tx.identification_status != CustomerIdentificationStatus.IDENTIFICATION_CONFIRMED:
+            return None
+
+        customer = crm_customer_repo.get(session, tx.customer_id)
+        if not customer or not customer.phone_number:
+            return None
+        if customer.status not in (CustomerStatus.ACTIVE, CustomerStatus.INACTIVE_EXPIRED):
+            return None
+
+        points_balance = crm_customer_repo.get_points_balance(session, customer.id)
+        top_tiers = get_top_redeemable_tiers(points_balance, max_tiers=3)
+        quick_replies = [
+            {
+                "id": f"REDEEM_TIER:{tier['code']}",
+                "code": str(tier["code"]),
+                "title": str(tier.get("label", tier["code"])),
+                "points_required": int(tier["points_required"]),
+            }
+            for tier in top_tiers
+        ]
+
+        provider = get_whatsapp_provider()
+        delivery = provider.send_post_purchase_summary(
+            phone_number=customer.phone_number,
+            customer_name=_format_customer_short_name(customer),
+            points_balance=points_balance,
+            transaction_id=str(tx.id),
+            quick_replies=quick_replies,
+        )
+        logger.log_execution(
+            "excel_synchronization_service",
+            "post_purchase_whatsapp_sent",
+            "ok",
+            transaction_id=str(tx.id),
+            customer_id=str(customer.id),
+            points_balance=points_balance,
+            quick_replies_count=len(quick_replies),
+        )
+        return delivery
+    except Exception as exc:
+        logger.log_execution(
+            "excel_synchronization_service",
+            "post_purchase_whatsapp_error",
+            "err",
+            transaction_id=transaction_id,
+            exc=exc,
+        )
+        return None
+    finally:
+        if owns_session:
+            session.close()
+
+
+def schedule_post_purchase_notification(
+    transaction_id: str,
+    delay_seconds: Optional[float] = None,
+) -> int:
+    """
+    Starts or resets the 60-second debounce timer for a confirmed transaction.
+    Returns the new monotonic debounce version for `transaction_id`.
+    """
+    delay = (
+        float(delay_seconds)
+        if delay_seconds is not None
+        else float(settings.LOYALTY_POST_PURCHASE_DEBOUNCE_SECONDS)
+    )
+    with _debounce_lock:
+        existing_timer = _debounce_timers.pop(transaction_id, None)
+        if existing_timer is not None:
+            existing_timer.cancel()
+
+        version = _debounce_versions.get(transaction_id, 0) + 1
+        _debounce_versions[transaction_id] = version
+
+        timer = threading.Timer(
+            delay,
+            execute_post_purchase_notification_now,
+            kwargs={"transaction_id": transaction_id, "expected_version": version},
+        )
+        timer.daemon = True
+        _debounce_timers[transaction_id] = timer
+        timer.start()
+        return version
+
+
+def cancel_all_post_purchase_timers() -> None:
+    """Cancels and clears all pending post-purchase debounce timers (useful for shutdown/tests)."""
+    with _debounce_lock:
+        for timer in _debounce_timers.values():
+            timer.cancel()
+        _debounce_timers.clear()
+        _debounce_versions.clear()
+
+
+def _process_crm_for_pushed_rows(
+    db: Session,
+    rows: List[ExcelRowPushItem],
+    existing_by_row: Dict[int, Any],
+    target_date: date,
+) -> Tuple[List[ExcelRowUpdateItem], List[str]]:
+    """
+    Processes Phase 4 Macro-Area 1 CRM/Loyalty logic for pushed Excel rows:
+    - Groups contiguous rows sharing the same normalized phone number (Col O) into a single Transaction.
+    - Deduplicates DB customer lookup/onboarding per phone number within the batch.
+    - Flusso A (new customer): creates PENDING_ONBOARDING, sends single WhatsApp Flow, credits frozen points,
+      returns Col P = "Richiesta inviata".
+    - Flusso B (registered customer): 2-step confirmation (IDENTIFICATION_PENDING -> IDENTIFICATION_CONFIRMED).
+    - OTP Redemption (Col Q): validates OTP, consumes it, spreads discount proportionally on purchase rows,
+      and returns updated selling_price + Col P status.
+    Returns (row_updates, confirmed_tx_ids_to_notify).
+    """
+    from decimal import Decimal
+    from src.models.crm import (
+        Customer,
+        CustomerIdentificationStatus,
+        CustomerStatus,
+        Transaction,
+    )
+    from src.repositories.crm_repo import crm_customer_repo
+    from src.services import customer_onboarding_service
+    from src.services.loyalty_service import _apply_loyalty_engine
+
+    row_updates_by_idx: Dict[int, ExcelRowUpdateItem] = {}
+    confirmed_tx_ids_to_notify: List[str] = []
+
+    # 1. Validate phone numbers and separate valid CRM rows
+    valid_crm_entries: List[Tuple[int, ExcelRowPushItem, Any, str]] = []
+    sorted_items = sorted(rows, key=lambda r: r.excel_row_index)
+
+    for item in sorted_items:
+        raw_phone = (item.phone_number or "").strip()
+        if not raw_phone:
+            continue
+
+        sale = existing_by_row.get(item.excel_row_index)
+        if not sale or sale.status == ExcelSaleStatus.UNPROCESSABLE:
+            continue
+
+        try:
+            norm_phone = customer_onboarding_service.normalize_phone_number(raw_phone)
+        except ValueError:
+            sale.customer_phone = None
+            db.add(sale)
+            row_updates_by_idx[item.excel_row_index] = ExcelRowUpdateItem(
+                excel_row_index=item.excel_row_index,
+                col_p_status="⚠️ Telefono non valido",
+                identification_pending=False,
+            )
+            continue
+
+        sale.customer_phone = norm_phone
+        db.add(sale)
+        valid_crm_entries.append((item.excel_row_index, item, sale, norm_phone))
+
+    if not valid_crm_entries:
+        return [row_updates_by_idx[k] for k in sorted(row_updates_by_idx.keys())], []
+
+    # 2. Group contiguous rows sharing the same normalized phone number
+    groups: List[Tuple[str, List[Tuple[int, ExcelRowPushItem, Any]]]] = []
+    for row_idx, item, sale, norm_phone in valid_crm_entries:
+        if (
+            groups
+            and groups[-1][0] == norm_phone
+            and row_idx == groups[-1][1][-1][0] + 1
+        ):
+            groups[-1][1].append((row_idx, item, sale))
+        else:
+            groups.append((norm_phone, [(row_idx, item, sale)]))
+
+    # 3. Deduplicated customer cache within this batch
+    customer_cache: Dict[str, Customer] = {}
+
+    def _find_existing_tx_for_customer(
+        group_entries: List[Tuple[int, ExcelRowPushItem, Any]],
+        customer_id: str,
+    ) -> Optional[Transaction]:
+        # First check if any row in the group is already linked to a Transaction of this customer
+        for _, _, sale_obj in group_entries:
+            if sale_obj.transaction_id:
+                tx_obj = (
+                    db.query(Transaction)
+                    .filter(Transaction.id == sale_obj.transaction_id)
+                    .first()
+                )
+                if tx_obj and tx_obj.customer_id == customer_id:
+                    return tx_obj
+
+        # Next check immediately adjacent rows (min_idx - 1 or max_idx + 1) on the same date
+        min_idx = group_entries[0][0]
+        max_idx = group_entries[-1][0]
+        for adj_idx in (min_idx - 1, max_idx + 1):
+            adj_sale = existing_by_row.get(adj_idx)
+            if adj_sale and adj_sale.transaction_id:
+                tx_obj = (
+                    db.query(Transaction)
+                    .filter(Transaction.id == adj_sale.transaction_id)
+                    .first()
+                )
+                if tx_obj and tx_obj.customer_id == customer_id:
+                    return tx_obj
+
+        return None
+
+    for norm_phone, group_entries in groups:
+        if norm_phone in customer_cache:
+            customer = customer_cache[norm_phone]
+        else:
+            customer = crm_customer_repo.get_by_phone_number(db, norm_phone)
+            if customer is None:
+                # Flusso A — New customer: immediate onboarding (single WhatsApp Flow)
+                customer, _, _ = customer_onboarding_service.initiate_onboarding(
+                    db=db,
+                    raw_phone=norm_phone,
+                )
+            customer_cache[norm_phone] = customer
+
+        # Re-fetch sales in case initiate_onboarding committed the session
+        refreshed_entries = []
+        for r_idx, item_obj, sale_obj in group_entries:
+            db.add(sale_obj)
+            refreshed_entries.append((r_idx, item_obj, sale_obj))
+
+        if customer.status == CustomerStatus.PENDING_ONBOARDING:
+            # Flusso A: Associate rows, credit frozen points immediately, Col P = "Richiesta inviata"
+            tx = _find_existing_tx_for_customer(refreshed_entries, customer.id)
+            if tx is None:
+                tx = Transaction(
+                    date=target_date,
+                    customer_id=customer.id,
+                    loyalty_discount_amount=Decimal("0.00"),
+                    discount_rule_code=None,
+                    identification_status=CustomerIdentificationStatus.IDENTIFICATION_CONFIRMED,
+                )
+                db.add(tx)
+                db.flush()
+
+            for _, _, sale_obj in refreshed_entries:
+                sale_obj.transaction_id = tx.id
+                db.add(sale_obj)
+            db.flush()
+            db.refresh(tx)
+
+            _apply_loyalty_engine(
+                db=db,
+                transaction=tx,
+                target_discount_rule_code=None,
+                previous_customer_id=None,
+            )
+
+            for r_idx, _, _ in refreshed_entries:
+                row_updates_by_idx[r_idx] = ExcelRowUpdateItem(
+                    excel_row_index=r_idx,
+                    col_p_status="Richiesta inviata",
+                    identification_pending=False,
+                )
+            continue
+
+        if customer.status in (CustomerStatus.ACTIVE, CustomerStatus.INACTIVE_EXPIRED):
+            # Flusso B — Registered customer: 2-Step Confirmation + OTP Redemption
+            short_name = _format_customer_short_name(customer)
+            tx = _find_existing_tx_for_customer(refreshed_entries, customer.id)
+
+            if tx is None:
+                # 1st Save (Ctrl+S): Create IDENTIFICATION_PENDING transaction, do NOT credit points yet
+                tx = Transaction(
+                    date=target_date,
+                    customer_id=customer.id,
+                    loyalty_discount_amount=Decimal("0.00"),
+                    discount_rule_code=None,
+                    identification_status=CustomerIdentificationStatus.IDENTIFICATION_PENDING,
+                )
+                db.add(tx)
+                db.flush()
+
+                for _, _, sale_obj in refreshed_entries:
+                    sale_obj.transaction_id = tx.id
+                    db.add(sale_obj)
+                db.flush()
+
+                for r_idx, _, _ in refreshed_entries:
+                    row_updates_by_idx[r_idx] = ExcelRowUpdateItem(
+                        excel_row_index=r_idx,
+                        col_p_status=f"{short_name} - Salva il file per confermare",
+                        identification_pending=True,
+                    )
+                continue
+
+            # 2nd Save (confirmation) or subsequent update on an already confirmed transaction
+            if tx.identification_status == CustomerIdentificationStatus.IDENTIFICATION_PENDING:
+                tx.identification_status = CustomerIdentificationStatus.IDENTIFICATION_CONFIRMED
+                db.add(tx)
+
+            for _, _, sale_obj in refreshed_entries:
+                if sale_obj.transaction_id != tx.id:
+                    sale_obj.transaction_id = tx.id
+                    db.add(sale_obj)
+            db.flush()
+            db.refresh(tx)
+
+            # Check for OTP code in Col Q across the group
+            otp_input: Optional[str] = None
+            for _, item_obj, _ in refreshed_entries:
+                candidate_otp = (item_obj.redemption_otp or "").strip()
+                if candidate_otp:
+                    otp_input = candidate_otp
+                    break
+
+            otp_error = False
+            applied_new_otp = False
+            target_rule_code = tx.discount_rule_code
+
+            if otp_input:
+                stored_otp = (customer.redemption_otp_code or "").strip()
+                if stored_otp and otp_input.upper() == stored_otp.upper() and customer.redemption_rule_code:
+                    target_rule_code = customer.redemption_rule_code
+                    applied_new_otp = True
+                else:
+                    otp_error = True
+
+            # Execute loyalty engine (idempotent if already credited; spreads discount if OTP valid)
+            try:
+                _apply_loyalty_engine(
+                    db=db,
+                    transaction=tx,
+                    target_discount_rule_code=target_rule_code,
+                    previous_customer_id=None,
+                )
+                if applied_new_otp:
+                    customer.redemption_otp_code = None
+                    customer.redemption_rule_code = None
+                    db.add(customer)
+                    db.flush()
+            except ValueError as exc:
+                logger.log_execution(
+                    "excel_synchronization_service",
+                    "otp_redemption_rejected",
+                    "warning",
+                    transaction_id=str(tx.id),
+                    customer_id=str(customer.id),
+                    error=str(exc),
+                )
+                otp_error = True
+                applied_new_otp = False
+                _apply_loyalty_engine(
+                    db=db,
+                    transaction=tx,
+                    target_discount_rule_code=tx.discount_rule_code,
+                    previous_customer_id=None,
+                )
+
+            balance = crm_customer_repo.get_points_balance(db, customer.id)
+            col_p_text = (
+                f"⚠️ OTP ERRATO | {short_name} ({balance} pt)"
+                if otp_error
+                else f"{short_name} ({balance} pt)"
+            )
+
+            # Determine which rows to emit updates for:
+            # If a discount was applied/spread, emit updated selling_price for all Excel rows in the transaction
+            tx_rows_to_emit = (
+                [r for r in tx.excel_sales if r.excel_row_index is not None]
+                if applied_new_otp or tx.discount_rule_code
+                else [sale_obj for _, _, sale_obj in refreshed_entries]
+            )
+            for sale_obj in tx_rows_to_emit:
+                r_idx = int(sale_obj.excel_row_index)
+                row_updates_by_idx[r_idx] = ExcelRowUpdateItem(
+                    excel_row_index=r_idx,
+                    col_p_status=col_p_text,
+                    selling_price=(
+                        float(sale_obj.selling_price)
+                        if (applied_new_otp or tx.discount_rule_code)
+                        and sale_obj.selling_price is not None
+                        else None
+                    ),
+                    identification_pending=False,
+                )
+
+            if str(tx.id) not in confirmed_tx_ids_to_notify:
+                confirmed_tx_ids_to_notify.append(str(tx.id))
+
+    ordered_updates = [row_updates_by_idx[k] for k in sorted(row_updates_by_idx.keys())]
+    return ordered_updates, confirmed_tx_ids_to_notify
+
+
 def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: date) -> Dict[str, Any]:
     """
     Ingests a batch of sales pushed by the standalone edge agent.
-    - Handles heartbeats (empty rows)
+    - Handles heartbeats (empty rows) and drains async_row_updates
     - Validates against historical file patterns (Level 3 protection)
+    - Auto-detects returns (is_exchange = True) when starting_price < 0 or selling_price < 0
     - Performs idempotent upsert (updates ORPHAN / UNPROCESSABLE, inserts new)
-    - Returns confirmed row indexes and created/updated record IDs
+    - Processes CRM identification (Flusso A / Flusso B), OTP redemption, and 60s debounce notification
+    - Returns confirmed row indexes, created/updated record IDs, row_updates, and async_row_updates
     """
     # 1. Heartbeat check
     if not rows:
         _record_sync(True, 0)
+        async_updates = drain_async_row_updates()
         logger.log_execution("excel_synchronization_service", "heartbeat_received", "ok", target_date=str(target_date))
         return {
             "confirmed_row_indexes": [],
-            "inserted_ids": []
+            "inserted_ids": [],
+            "row_updates": [],
+            "async_row_updates": async_updates,
         }
 
     # 2. Level 3 Safety: Historical pattern detection (>= 10 matches on a single historical date)
@@ -103,6 +573,13 @@ def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: 
             except (ValueError, TypeError):
                 status = ExcelSaleStatus.UNPROCESSABLE
 
+        # Auto-detect returns from negative prices in addition to legacy Col L == "X"
+        is_exchange_val = bool(item.is_exchange)
+        if (starting_price_val is not None and starting_price_val < 0) or (
+            selling_price_val is not None and selling_price_val < 0
+        ):
+            is_exchange_val = True
+
         existing_record = existing_by_row.get(row_idx)
         if existing_record:
             if existing_record.status in (ExcelSaleStatus.ORPHAN, ExcelSaleStatus.UNPROCESSABLE):
@@ -116,8 +593,8 @@ def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: 
                 if existing_record.selling_price != new_selling:
                     existing_record.selling_price = new_selling
                     changed = True
-                if existing_record.is_exchange != item.is_exchange:
-                    existing_record.is_exchange = item.is_exchange
+                if existing_record.is_exchange != is_exchange_val:
+                    existing_record.is_exchange = is_exchange_val
                     changed = True
                 if existing_record.raw_article_code != item.raw_article_code:
                     existing_record.raw_article_code = item.raw_article_code
@@ -139,18 +616,36 @@ def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: 
                 status=status,
                 starting_price=starting_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None,
                 selling_price=selling_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None,
-                is_exchange=item.is_exchange,
+                is_exchange=is_exchange_val,
                 raw_article_code=item.raw_article_code
             )
             sales_to_insert.append(sale_in)
 
-    if sales_to_update:
-        db.commit()
-
     created_records = []
     if sales_to_insert:
-        created_records = excel_synchronization_repo.bulk_create(db, sales_to_insert)
+        created_records = excel_synchronization_repo.bulk_create(
+            db, sales_to_insert, commit_changes=False
+        )
+        for rec in created_records:
+            existing_by_row[rec.excel_row_index] = rec
 
+    db.flush()
+
+    # 4. CRM Identification, Contiguous Grouping & OTP Redemption
+    row_updates, confirmed_tx_ids = _process_crm_for_pushed_rows(
+        db=db,
+        rows=rows,
+        existing_by_row=existing_by_row,
+        target_date=target_date,
+    )
+
+    db.commit()
+
+    # Schedule / reset 60s post-purchase debounce timers after commit
+    for tx_id in confirmed_tx_ids:
+        schedule_post_purchase_notification(tx_id)
+
+    async_updates = drain_async_row_updates()
     inserted_or_updated_ids = [str(r.id) for r in created_records] + [str(r.id) for r in sales_to_update]
 
     _record_sync(True, len(inserted_or_updated_ids))
@@ -161,12 +656,15 @@ def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: 
         target_date=str(target_date),
         records_inserted=len(created_records),
         records_updated=len(sales_to_update),
-        confirmed_count=len(confirmed_row_indexes)
+        confirmed_count=len(confirmed_row_indexes),
+        row_updates_count=len(row_updates),
     )
 
     return {
         "confirmed_row_indexes": confirmed_row_indexes,
-        "inserted_ids": inserted_or_updated_ids
+        "inserted_ids": inserted_or_updated_ids,
+        "row_updates": row_updates,
+        "async_row_updates": async_updates,
     }
 
 # ---------------------------------------------------------------------------
@@ -237,10 +735,14 @@ def ingest_daily_sales(db: Session, file_path: str, target_date: date) -> List[s
                     status = ExcelSaleStatus.UNPROCESSABLE
                 break
                 
-        # Parse is_exchange (Column L, index 11)
+        # Parse is_exchange (Column L, index 11 OR negative price)
         is_exchange = False
         val_l = row[11].value
         if val_l is not None and str(val_l).strip().upper() == "X":
+            is_exchange = True
+        if (starting_price_val is not None and starting_price_val < 0) or (
+            selling_price_val is not None and selling_price_val < 0
+        ):
             is_exchange = True
 
         # Parse raw_article_code

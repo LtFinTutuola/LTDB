@@ -121,6 +121,16 @@ class ExcelRowPushItem(BaseModel):
     is_exchange: bool = False
     raw_article_code: Optional[str] = None
     is_unprocessable: bool = False
+    phone_number: Optional[str] = None
+    redemption_otp: Optional[str] = None
+
+
+class ExcelRowUpdateItem(BaseModel):
+    excel_row_index: int
+    col_p_status: Optional[str] = None
+    selling_price: Optional[float] = None
+    col_o_phone: Optional[str] = None
+    identification_pending: bool = False
 
 
 class ExcelPushBatchRequest(BaseModel):
@@ -133,3 +143,5 @@ class ExcelPushBatchResponse(BaseModel):
     message: str
     confirmed_row_indexes: list[int]
     inserted_ids: list[str] = []
+    row_updates: list[ExcelRowUpdateItem] = []
+    async_row_updates: list[ExcelRowUpdateItem] = []
