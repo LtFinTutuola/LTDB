@@ -458,6 +458,216 @@ def push_batch_to_ltdb(
     return None
 
 
+def recalculate_hashes_for_updated_rows(
+    saved_hashes: Dict[str, str],
+    current_rows_by_idx: Dict[int, Dict[str, Any]],
+    row_updates: List[Dict[str, Any]],
+) -> None:
+    """
+    Updates the in-memory row representations with values returned by LTDB (`col_o_phone`,
+    `selling_price`) and immediately recalculates their SHA-256 hashes in `saved_hashes`
+    so that restored Col O phones or spread OTP discount prices never cause duplicate pushes.
+    """
+    for upd in row_updates:
+        upd_idx = upd.get("excel_row_index")
+        if upd_idx is None:
+            continue
+        upd_idx_int = int(upd_idx)
+        row_dict = current_rows_by_idx.get(upd_idx_int)
+        if row_dict is None:
+            continue
+
+        if upd.get("col_o_phone") is not None:
+            row_dict["phone_number"] = _clean_excel_cell_str(upd.get("col_o_phone"))
+
+        if upd.get("selling_price") is not None:
+            new_sell = float(upd["selling_price"])
+            row_dict["selling_price"] = new_sell
+            if new_sell < 0:
+                row_dict["is_exchange"] = True
+
+        saved_hashes[str(upd_idx_int)] = compute_row_hash(row_dict)
+
+
+def _apply_updates_via_openpyxl(
+    excel_path: Path,
+    row_updates: List[Dict[str, Any]],
+    current_rows_by_idx: Dict[int, Dict[str, Any]],
+    logger: Optional[logging.Logger] = None,
+) -> bool:
+    """
+    Writes LTDB `row_updates` (`col_o_phone` -> Col O, `col_p_status` -> Col P,
+    `selling_price` -> Col B..I) directly to the `.xlsx` file on disk using openpyxl.
+    Used when `target_os` is `"mac"` or as fallback when Excel Desktop COM is not active.
+    """
+    if not openpyxl or not row_updates:
+        return False
+
+    try:
+        wb = openpyxl.load_workbook(str(excel_path))
+        sheet = wb.active
+        modified = False
+
+        for upd in row_updates:
+            upd_idx = upd.get("excel_row_index")
+            if upd_idx is None:
+                continue
+            r_idx = int(upd_idx)
+
+            if upd.get("col_o_phone") is not None:
+                sheet.cell(row=r_idx, column=15, value=str(upd["col_o_phone"]))
+                modified = True
+
+            if upd.get("col_p_status") is not None:
+                sheet.cell(row=r_idx, column=16, value=str(upd["col_p_status"]))
+                modified = True
+
+            if upd.get("selling_price") is not None:
+                sell_val = float(upd["selling_price"])
+                row_info = current_rows_by_idx.get(r_idx) or {}
+                cat_col = row_info.get("excel_file_column")
+                target_col_1based: Optional[int] = None
+                if cat_col is not None:
+                    target_col_1based = int(cat_col) + 2  # Col B = 2 (cat 0) .. Col I = 9 (cat 7)
+                else:
+                    for col_1b in range(2, 10):
+                        if sheet.cell(row=r_idx, column=col_1b).value is not None:
+                            target_col_1based = col_1b
+                            break
+                if target_col_1based is not None:
+                    sheet.cell(row=r_idx, column=target_col_1based, value=sell_val)
+                    modified = True
+
+        if modified:
+            wb.save(str(excel_path))
+        wb.close()
+        return modified
+    except Exception as exc:
+        if logger:
+            logger.error(f"Failed to apply row_updates via openpyxl on {excel_path}: {exc}")
+        return False
+
+
+def _apply_updates_via_windows_com(
+    excel_path: Path,
+    row_updates: List[Dict[str, Any]],
+    current_rows_by_idx: Dict[int, Dict[str, Any]],
+    logger: Optional[logging.Logger] = None,
+    max_retries: int = 10,
+) -> bool:
+    """
+    Writes LTDB `row_updates` live into an open Excel workbook via `pywin32` COM
+    (`win32com.client.GetActiveObject("Excel.Application")`), retrying with progressive
+    backoff if the cashier is currently in cell Edit Mode.
+    """
+    try:
+        import win32com.client  # type: ignore
+    except ImportError:
+        return False
+
+    target_name = excel_path.name.lower()
+    target_resolved = str(excel_path.resolve()).lower() if excel_path.exists() else str(excel_path).lower()
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            excel_app = win32com.client.GetActiveObject("Excel.Application")
+            target_wb = None
+            for wb in excel_app.Workbooks:
+                wb_full = str(getattr(wb, "FullName", "")).lower()
+                wb_name = str(getattr(wb, "Name", "")).lower()
+                if wb_full == target_resolved or wb_name == target_name:
+                    target_wb = wb
+                    break
+
+            if target_wb is None:
+                return False
+
+            sheet = target_wb.ActiveSheet
+            modified = False
+            for upd in row_updates:
+                upd_idx = upd.get("excel_row_index")
+                if upd_idx is None:
+                    continue
+                r_idx = int(upd_idx)
+
+                if upd.get("col_o_phone") is not None:
+                    sheet.Cells(r_idx, 15).Value = str(upd["col_o_phone"])
+                    modified = True
+
+                if upd.get("col_p_status") is not None:
+                    sheet.Cells(r_idx, 16).Value = str(upd["col_p_status"])
+                    modified = True
+
+                if upd.get("selling_price") is not None:
+                    sell_val = float(upd["selling_price"])
+                    row_info = current_rows_by_idx.get(r_idx) or {}
+                    cat_col = row_info.get("excel_file_column")
+                    target_col_1based: Optional[int] = None
+                    if cat_col is not None:
+                        target_col_1based = int(cat_col) + 2
+                    else:
+                        for col_1b in range(2, 10):
+                            if sheet.Cells(r_idx, col_1b).Value is not None:
+                                target_col_1based = col_1b
+                                break
+                    if target_col_1based is not None:
+                        sheet.Cells(r_idx, target_col_1based).Value = sell_val
+                        modified = True
+
+            if modified:
+                target_wb.Save()
+            return modified
+        except Exception as exc:
+            if logger:
+                logger.warning(
+                    f"COM write attempt {attempt}/{max_retries} deferred (Excel Edit Mode / busy): {exc}"
+                )
+            time.sleep(min(0.5 * attempt, 2.0))
+
+    return False
+
+
+def apply_row_updates_to_excel(
+    excel_path: Path,
+    row_updates: List[Dict[str, Any]],
+    current_rows_by_idx: Dict[int, Dict[str, Any]],
+    target_os: str = "mac",
+    logger: Optional[logging.Logger] = None,
+) -> bool:
+    """
+    Applies LTDB `row_updates` (`col_o_phone`, `col_p_status`, `selling_price`) to the Excel file
+    according to the configured `target_os` parameter in `config.json`:
+    - `"windows"` / `"win32"`: writes live via `pywin32` COM if open in Excel, with openpyxl fallback.
+    - `"mac"` / `"macos"`: writes directly to the `.xlsx` file on disk via `openpyxl`.
+    """
+    actionable = [
+        u
+        for u in (row_updates or [])
+        if u.get("col_o_phone") is not None
+        or u.get("col_p_status") is not None
+        or u.get("selling_price") is not None
+    ]
+    if not actionable:
+        return False
+
+    norm_os = (target_os or "mac").strip().lower()
+    if norm_os in ("windows", "win", "win32"):
+        if _apply_updates_via_windows_com(
+            excel_path=excel_path,
+            row_updates=actionable,
+            current_rows_by_idx=current_rows_by_idx,
+            logger=logger,
+        ):
+            return True
+
+    return _apply_updates_via_openpyxl(
+        excel_path=excel_path,
+        row_updates=actionable,
+        current_rows_by_idx=current_rows_by_idx,
+        logger=logger,
+    )
+
+
 def run_cycle(
     base_dir: Path,
     config: Dict[str, Any],
@@ -476,6 +686,10 @@ def run_cycle(
     push_endpoint = local_config.get("push_endpoint", "/api/v1/excel-synchronization/push-batch")
     timeout = local_config.get("http_timeout_seconds", 10)
     heartbeat_interval = local_config.get("heartbeat_interval_seconds", 180)
+    target_os = str(
+        local_config.get("target_os")
+        or ("windows" if sys.platform == "win32" else "mac")
+    ).strip().lower()
     state_dir = base_dir / "state"
 
     excel_path = None
@@ -504,10 +718,12 @@ def run_cycle(
 
     delta_rows = []
     computed_hashes_by_row = {}
+    current_rows_by_idx: Dict[int, Dict[str, Any]] = {}
 
     for row in current_rows:
         row_idx_int = int(row["excel_row_index"])
         row_idx_str = str(row_idx_int)
+        current_rows_by_idx[row_idx_int] = dict(row)
         h = compute_row_hash(row)
         computed_hashes_by_row[row_idx_str] = h
 
@@ -535,13 +751,28 @@ def run_cycle(
         )
 
         if confirmed_indexes is not None:
-            # Update state for confirmed rows
+            # 1. Update baseline state for confirmed rows
             for idx in confirmed_indexes:
                 idx_str = str(idx)
                 if idx_str in computed_hashes_by_row:
                     saved_hashes[idx_str] = computed_hashes_by_row[idx_str]
 
-            # Update IDENTIFICATION_PENDING tracking from LTDB row_updates
+            # 2. Apply LTDB row_updates to Excel and recalculate hashes for updated rows
+            if received_row_updates:
+                apply_row_updates_to_excel(
+                    excel_path=excel_path,
+                    row_updates=received_row_updates,
+                    current_rows_by_idx=current_rows_by_idx,
+                    target_os=target_os,
+                    logger=logger,
+                )
+                recalculate_hashes_for_updated_rows(
+                    saved_hashes=saved_hashes,
+                    current_rows_by_idx=current_rows_by_idx,
+                    row_updates=received_row_updates,
+                )
+
+            # 3. Update IDENTIFICATION_PENDING tracking from LTDB row_updates
             for upd in received_row_updates:
                 upd_idx = upd.get("excel_row_index")
                 if upd_idx is None:
@@ -562,14 +793,30 @@ def run_cycle(
         # Check heartbeat if idle for > heartbeat_interval
         if (now - last_push_time) >= heartbeat_interval:
             logger.debug("Idle threshold reached. Sending heartbeat to LTDB...")
+            hb_updates: List[Dict[str, Any]] = []
             push_batch_to_ltdb(
                 base_url=base_url,
                 push_endpoint=push_endpoint,
                 target_date=today,
                 rows=[],
                 timeout=timeout,
-                logger=logger
+                logger=logger,
+                out_row_updates=hb_updates,
             )
+            if hb_updates:
+                apply_row_updates_to_excel(
+                    excel_path=excel_path,
+                    row_updates=hb_updates,
+                    current_rows_by_idx=current_rows_by_idx,
+                    target_os=target_os,
+                    logger=logger,
+                )
+                recalculate_hashes_for_updated_rows(
+                    saved_hashes=saved_hashes,
+                    current_rows_by_idx=current_rows_by_idx,
+                    row_updates=hb_updates,
+                )
+                save_daily_state(state_dir, today, saved_hashes, pending_rows=pending_rows)
             return now
 
     return last_push_time

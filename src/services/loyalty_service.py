@@ -318,18 +318,23 @@ def _apply_loyalty_engine(
     target_discount_rule_code: Optional[str],
     previous_customer_id: Optional[str] = None,
     now: Optional[datetime] = None,
+    preserve_manual_prices: bool = False,
 ) -> None:
     """
     Executes Steps 1 to 4 of the Loyalty Mathematical Engine inside the current DB transaction:
-    - Step 1: Restores pre-loyalty selling prices if transaction.loyalty_discount_amount > 0.
+    - Step 1: Restores pre-loyalty selling prices if transaction.loyalty_discount_amount > 0
+      (skipped when `preserve_manual_prices=True` for direct Excel price edits on confirmed sales).
     - Step 2: Computes net discountable total T_netto = S_acq - S_resi.
-    - Step 3: Validates and spreads loyalty discount proportionally across purchase rows.
-    - Step 4: Writes immutable entries to loyalty_point_ledger (or PRICE_CORRECTION on edit).
+    - Step 3: Validates and spreads loyalty discount proportionally across purchase rows
+      (when `preserve_manual_prices=False`).
+    - Step 4: Writes immutable entries to loyalty_point_ledger (or PRICE_CORRECTION on edit),
+      preventing duplicate DISCOUNT_REDEMPTION or PURCHASE_EARN entries.
     """
     current_dt = now or _utc_now_naive()
+    prior_discount_rule_code = transaction.discount_rule_code
 
     # Step 1: Restore pre-loyalty prices if transaction still carries old_discount > 0
-    if _to_cents(transaction.loyalty_discount_amount) > Decimal("0.00"):
+    if not preserve_manual_prices and _to_cents(transaction.loyalty_discount_amount) > Decimal("0.00"):
         restore_pre_loyalty_prices(transaction)
 
     # Fetch and validate target customer if any
@@ -343,6 +348,24 @@ def _apply_loyalty_engine(
                 "Impossibile associare una transazione a un profilo cliente anonimizzato"
             )
 
+    existing_tx_entries: List[LoyaltyPointLedger] = []
+    if customer:
+        existing_tx_entries = (
+            db.query(LoyaltyPointLedger)
+            .filter(
+                LoyaltyPointLedger.customer_id == customer.id,
+                LoyaltyPointLedger.transaction_id == transaction.id,
+            )
+            .all()
+        )
+    existing_redemption_entries = [
+        e for e in existing_tx_entries if e.reason == LoyaltyLedgerReason.DISCOUNT_REDEMPTION
+    ]
+    has_redemption_entry = len(existing_redemption_entries) > 0
+    existing_redeemed_points = sum(
+        abs(int(e.points_delta)) for e in existing_redemption_entries
+    )
+
     purchase_rows = [r for r in transaction.excel_sales if not r.is_exchange]
     return_rows = [r for r in transaction.excel_sales if r.is_exchange]
 
@@ -355,7 +378,15 @@ def _apply_loyalty_engine(
     tier: Optional[Dict[str, Any]] = None
     discount_amount = Decimal("0.00")
 
-    if target_discount_rule_code:
+    if preserve_manual_prices:
+        # Excel is the single source of truth for row prices on manual post-confirmation price edits:
+        # keep existing row prices and keep any already-redeemed discount rule/amount immutable.
+        if transaction.discount_rule_code:
+            try:
+                tier = get_redemption_tier(transaction.discount_rule_code)
+            except ValueError:
+                tier = None
+    elif target_discount_rule_code:
         if not customer:
             raise ValueError(
                 "Per applicare uno sconto punti è necessario associare un cliente alla transazione"
@@ -368,14 +399,18 @@ def _apply_loyalty_engine(
         tier = get_redemption_tier(target_discount_rule_code)
         points_required = int(tier["points_required"])
 
-        # Available points excluding any movements already recorded on this transaction
-        available_points = crm_customer_repo.get_points_balance(
-            db, customer.id, exclude_transaction_id=transaction.id
+        is_same_already_redeemed_rule = (
+            has_redemption_entry and prior_discount_rule_code == target_discount_rule_code
         )
-        if available_points < points_required:
-            raise ValueError(
-                f"Saldo punti insufficiente per '{tier['code']}': richiesti {points_required} pt, disponibili {available_points} pt"
+        if not is_same_already_redeemed_rule:
+            # Available points excluding any movements already recorded on this transaction
+            available_points = crm_customer_repo.get_points_balance(
+                db, customer.id, exclude_transaction_id=transaction.id
             )
+            if available_points < points_required:
+                raise ValueError(
+                    f"Saldo punti insufficiente per '{tier['code']}': richiesti {points_required} pt, disponibili {available_points} pt"
+                )
 
         if not purchase_rows or t_netto <= Decimal("0.00") or s_acq <= Decimal("0.00"):
             raise ValueError(
@@ -453,20 +488,20 @@ def _apply_loyalty_engine(
 
     p_acq = int(post_s_acq // euro_per_point) if post_s_acq > Decimal("0.00") else 0
     p_resi = int(post_s_resi // euro_per_point) if post_s_resi > Decimal("0.00") else 0
-    p_redeem = int(tier["points_required"]) if tier is not None else 0
+
+    if transaction.discount_rule_code:
+        if has_redemption_entry and prior_discount_rule_code == transaction.discount_rule_code:
+            p_redeem = existing_redeemed_points
+        elif tier is not None:
+            p_redeem = int(tier["points_required"])
+        else:
+            p_redeem = existing_redeemed_points
+    else:
+        p_redeem = 0
 
     eligible_bday = is_customer_eligible_for_birthday_bonus(db, customer, transaction.date)
     bday_extra_multiplier = max(0, int(settings.LOYALTY_BIRTHDAY_MULTIPLIER) - 1)
     p_bday = (p_acq * bday_extra_multiplier) if (eligible_bday and p_acq > 0) else 0
-
-    existing_tx_entries = (
-        db.query(LoyaltyPointLedger)
-        .filter(
-            LoyaltyPointLedger.customer_id == customer.id,
-            LoyaltyPointLedger.transaction_id == transaction.id,
-        )
-        .all()
-    )
 
     if not existing_tx_entries:
         if p_redeem > 0:
@@ -512,9 +547,6 @@ def _apply_loyalty_engine(
     else:
         p_nuovo = (-p_redeem) + p_acq - p_resi + p_bday
         p_attuale = sum(int(e.points_delta) for e in existing_tx_entries)
-        has_redemption_entry = any(
-            e.reason == LoyaltyLedgerReason.DISCOUNT_REDEMPTION for e in existing_tx_entries
-        )
         if p_redeem > 0 and not has_redemption_entry:
             db.add(
                 LoyaltyPointLedger(

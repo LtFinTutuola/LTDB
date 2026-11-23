@@ -31,7 +31,9 @@ from scripts.excel_agent.ltdb_forwarder import (
     run_cycle,
     FALLBACK_EXCEL_PATHS,
     get_candidate_excel_paths,
-    resolve_excel_path
+    resolve_excel_path,
+    apply_row_updates_to_excel,
+    recalculate_hashes_for_updated_rows,
 )
 
 
@@ -513,5 +515,69 @@ def test_run_cycle_resends_identification_pending_rows_on_second_save(mock_push,
     mock_push.reset_mock()
     run_cycle(agent_dir, runtime_cfg, local_cfg, logger, last_push_time=time.time())
     assert mock_push.call_count == 0
+
+
+@patch("scripts.excel_agent.ltdb_forwarder.push_batch_to_ltdb")
+def test_run_cycle_applies_col_o_restore_and_selling_price_and_recalculates_hashes(mock_push, agent_dir):
+    """
+    Verifies Macro-Area 2 forwarder behavior:
+    When LTDB returns `row_updates` containing a forced `col_o_phone` restoration and/or
+    a discounted `selling_price`, the forwarder writes those values back to the Excel file
+    (using `target_os="mac"` / openpyxl) AND recalculates `saved_hashes` for the updated rows,
+    so the next `run_cycle` detects 0 changes and does NOT enter a re-send loop.
+    """
+    logger = setup_logging(agent_dir)
+    local_cfg = load_local_config(agent_dir)
+    local_cfg["target_os"] = "mac"
+    runtime_cfg = local_cfg["fallback_config"]
+
+    excel_file = Path(runtime_cfg["excel_file_path"])
+    wb = openpyxl.Workbook()
+    sheet = wb.active
+    # Row 2: Cashier entered wrong/modified phone "3409999999" on an already confirmed row of "3401112233",
+    # and redeemed an OTP that reduces selling_price in Col C (cat 1) from 100.0 to 95.0
+    sheet.cell(row=2, column=1, value=100.0)
+    sheet.cell(row=2, column=3, value=100.0)
+    sheet.cell(row=2, column=15, value="3409999999")
+    sheet.cell(row=2, column=17, value="123456")
+    wb.save(str(excel_file))
+    wb.close()
+
+    def push_side_effect(**kwargs):
+        out_updates = kwargs.get("out_row_updates")
+        if out_updates is not None:
+            out_updates.append({
+                "excel_row_index": 2,
+                "col_p_status": "M. Rossi (195 pt)",
+                "selling_price": 95.0,
+                "col_o_phone": "3401112233",
+                "identification_pending": False,
+            })
+        return [2]
+
+    mock_push.side_effect = push_side_effect
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, last_push_time=0.0)
+    assert mock_push.call_count == 1
+
+    # 1. Verify the Excel file on disk was updated with restored Col O, discounted Col C, and Col P status
+    wb_after = openpyxl.load_workbook(str(excel_file))
+    sh_after = wb_after.active
+    assert float(sh_after.cell(row=2, column=3).value) == 95.0
+    assert str(sh_after.cell(row=2, column=15).value) == "3401112233"
+    assert str(sh_after.cell(row=2, column=16).value) == "M. Rossi (195 pt)"
+    wb_after.close()
+
+    # 2. Verify saved_hashes["2"] was recalculated to match the post-update row state
+    state = load_daily_state(agent_dir / "state", date.today())
+    reread_rows = read_excel_rows(excel_file, start_row=2, code_column="N")
+    assert len(reread_rows) == 1
+    assert state["2"] == compute_row_hash(reread_rows[0])
+
+    # 3. Run next cycle immediately: because hash was recalculated after writing row_updates,
+    # 0 delta rows are detected and push_batch_to_ltdb is NOT called again!
+    mock_push.reset_mock()
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, last_push_time=time.time())
+    assert mock_push.call_count == 0
+
 
 

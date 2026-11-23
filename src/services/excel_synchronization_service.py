@@ -214,6 +214,15 @@ def schedule_post_purchase_notification(
         return version
 
 
+def cancel_post_purchase_timer(transaction_id: str) -> None:
+    """Cancels and removes a single pending post-purchase debounce timer if present."""
+    with _debounce_lock:
+        existing_timer = _debounce_timers.pop(transaction_id, None)
+        if existing_timer is not None:
+            existing_timer.cancel()
+        _debounce_versions.pop(transaction_id, None)
+
+
 def cancel_all_post_purchase_timers() -> None:
     """Cancels and clears all pending post-purchase debounce timers (useful for shutdown/tests)."""
     with _debounce_lock:
@@ -223,21 +232,65 @@ def cancel_all_post_purchase_timers() -> None:
         _debounce_versions.clear()
 
 
+def _recalculate_or_cleanup_detached_transaction(db: Session, old_tx_id: str) -> None:
+    """
+    Reconciles or removes an unconfirmed/provisional transaction after one of its ExcelSale
+    rows has been detached due to a pre-confirmation phone number correction in Col O.
+    """
+    from src.models.crm import (
+        CustomerIdentificationStatus,
+        LoyaltyPointLedger,
+        Transaction,
+    )
+    from src.services.loyalty_service import _apply_loyalty_engine
+
+    old_tx = db.query(Transaction).filter(Transaction.id == old_tx_id).first()
+    if not old_tx:
+        return
+
+    db.flush()
+    db.refresh(old_tx)
+    remaining_sales = [s for s in old_tx.excel_sales if s.transaction_id == old_tx.id]
+
+    if not remaining_sales:
+        for entry in list(old_tx.loyalty_ledger_entries):
+            db.delete(entry)
+        old_tx.customer = None
+        db.flush()
+        cancel_post_purchase_timer(str(old_tx.id))
+        db.delete(old_tx)
+        db.flush()
+    elif old_tx.identification_status == CustomerIdentificationStatus.IDENTIFICATION_CONFIRMED:
+        _apply_loyalty_engine(
+            db=db,
+            transaction=old_tx,
+            target_discount_rule_code=old_tx.discount_rule_code,
+            previous_customer_id=None,
+        )
+        db.flush()
+
+
 def _process_crm_for_pushed_rows(
     db: Session,
     rows: List[ExcelRowPushItem],
     existing_by_row: Dict[int, Any],
     target_date: date,
+    price_changed_row_indexes: Optional[set[int]] = None,
 ) -> Tuple[List[ExcelRowUpdateItem], List[str]]:
     """
-    Processes Phase 4 Macro-Area 1 CRM/Loyalty logic for pushed Excel rows:
-    - Groups contiguous rows sharing the same normalized phone number (Col O) into a single Transaction.
-    - Deduplicates DB customer lookup/onboarding per phone number within the batch.
-    - Flusso A (new customer): creates PENDING_ONBOARDING, sends single WhatsApp Flow, credits frozen points,
-      returns Col P = "Richiesta inviata".
-    - Flusso B (registered customer): 2-step confirmation (IDENTIFICATION_PENDING -> IDENTIFICATION_CONFIRMED).
-    - OTP Redemption (Col Q): validates OTP, consumes it, spreads discount proportionally on purchase rows,
-      and returns updated selling_price + Col P status.
+    Processes Phase 4 Macro-Area 1 & Macro-Area 2 CRM/Loyalty logic for pushed Excel rows:
+    - Enforces post-confirmation customer immutability (`IDENTIFICATION_CONFIRMED` on registered
+      customers): ignores unauthorized Col O changes/deletions and emits `col_o_phone` to restore it.
+    - Allows pre-confirmation Col O corrections (when `IDENTIFICATION_PENDING` or `PENDING_ONBOARDING`),
+      detaching the row and cleaning up/recalculating provisional transaction points.
+    - Groups contiguous rows sharing the same normalized phone number (Col O) into a single Transaction,
+      automatically merging split receipts (`Ctrl+S` partial saves) and bridging contiguous blocks.
+    - Restores pre-loyalty prices (`restore_pre_loyalty_prices`) BEFORE attaching newly added split-receipt
+      rows so existing OTP discounts are re-spread accurately across all purchase rows without duplicate
+      `DISCOUNT_REDEMPTION` or `PURCHASE_EARN` movements.
+    - Preserves manual Excel price edits on already-confirmed rows (`preserve_manual_prices=True`),
+      appending `PRICE_CORRECTION` for the algebraic point difference while keeping `DISCOUNT_REDEMPTION`
+      immutable.
     Returns (row_updates, confirmed_tx_ids_to_notify).
     """
     from decimal import Decimal
@@ -245,32 +298,93 @@ def _process_crm_for_pushed_rows(
         Customer,
         CustomerIdentificationStatus,
         CustomerStatus,
+        LoyaltyPointLedger,
         Transaction,
     )
     from src.repositories.crm_repo import crm_customer_repo
     from src.services import customer_onboarding_service
-    from src.services.loyalty_service import _apply_loyalty_engine
+    from src.services.loyalty_service import (
+        _apply_loyalty_engine,
+        _to_cents,
+        restore_pre_loyalty_prices,
+    )
 
+    changed_prices = price_changed_row_indexes or set()
     row_updates_by_idx: Dict[int, ExcelRowUpdateItem] = {}
     confirmed_tx_ids_to_notify: List[str] = []
+    forced_col_o_restore: Dict[int, str] = {}
 
-    # 1. Validate phone numbers and separate valid CRM rows
+    # 1. Validate phone numbers, enforce post-confirmation lock, or handle pre-confirmation unlinking
     valid_crm_entries: List[Tuple[int, ExcelRowPushItem, Any, str]] = []
     sorted_items = sorted(rows, key=lambda r: r.excel_row_index)
 
     for item in sorted_items:
-        raw_phone = (item.phone_number or "").strip()
-        if not raw_phone:
-            continue
-
         sale = existing_by_row.get(item.excel_row_index)
         if not sale or sale.status == ExcelSaleStatus.UNPROCESSABLE:
             continue
 
-        try:
-            norm_phone = customer_onboarding_service.normalize_phone_number(raw_phone)
-        except ValueError:
+        raw_phone = (item.phone_number or "").strip()
+        parsed_phone: Optional[str] = None
+        phone_invalid = False
+        if raw_phone:
+            try:
+                parsed_phone = customer_onboarding_service.normalize_phone_number(raw_phone)
+            except ValueError:
+                phone_invalid = True
+
+        old_tx: Optional[Transaction] = None
+        old_customer: Optional[Customer] = None
+        if sale.transaction_id:
+            old_tx = (
+                db.query(Transaction)
+                .filter(Transaction.id == sale.transaction_id)
+                .first()
+            )
+            if old_tx and old_tx.customer_id:
+                old_customer = crm_customer_repo.get(db, old_tx.customer_id)
+
+        is_locked_confirmed = (
+            old_tx is not None
+            and old_customer is not None
+            and old_tx.identification_status == CustomerIdentificationStatus.IDENTIFICATION_CONFIRMED
+            and old_customer.status != CustomerStatus.PENDING_ONBOARDING
+        )
+
+        if is_locked_confirmed and old_customer and old_customer.phone_number:
+            locked_phone = old_customer.phone_number
+            if not raw_phone or phone_invalid or parsed_phone != locked_phone:
+                # Macro-Area 2.1.3: Post-confirmation lock — ignore Col O edit and force restore
+                forced_col_o_restore[item.excel_row_index] = locked_phone
+                parsed_phone = locked_phone
+                phone_invalid = False
+            sale.customer_phone = locked_phone
+            db.add(sale)
+            valid_crm_entries.append((item.excel_row_index, item, sale, locked_phone))
+            continue
+
+        # Row is not locked post-confirmation: check if it was previously linked to a provisional transaction
+        if old_tx is not None:
+            old_phone = old_customer.phone_number if old_customer else None
+            if not raw_phone or phone_invalid or parsed_phone != old_phone:
+                old_tx_id_str = str(old_tx.id)
+                sale.transaction_id = None
+                sale.customer_phone = None
+                db.add(sale)
+                db.flush()
+                _recalculate_or_cleanup_detached_transaction(db, old_tx_id_str)
+
+        if not raw_phone:
+            if old_tx is not None:
+                row_updates_by_idx[item.excel_row_index] = ExcelRowUpdateItem(
+                    excel_row_index=item.excel_row_index,
+                    col_p_status="",
+                    identification_pending=False,
+                )
+            continue
+
+        if phone_invalid or not parsed_phone:
             sale.customer_phone = None
+            sale.transaction_id = None
             db.add(sale)
             row_updates_by_idx[item.excel_row_index] = ExcelRowUpdateItem(
                 excel_row_index=item.excel_row_index,
@@ -279,9 +393,9 @@ def _process_crm_for_pushed_rows(
             )
             continue
 
-        sale.customer_phone = norm_phone
+        sale.customer_phone = parsed_phone
         db.add(sale)
-        valid_crm_entries.append((item.excel_row_index, item, sale, norm_phone))
+        valid_crm_entries.append((item.excel_row_index, item, sale, parsed_phone))
 
     if not valid_crm_entries:
         return [row_updates_by_idx[k] for k in sorted(row_updates_by_idx.keys())], []
@@ -301,36 +415,74 @@ def _process_crm_for_pushed_rows(
     # 3. Deduplicated customer cache within this batch
     customer_cache: Dict[str, Customer] = {}
 
-    def _find_existing_tx_for_customer(
+    def _find_matching_txs_for_customer(
         group_entries: List[Tuple[int, ExcelRowPushItem, Any]],
         customer_id: str,
-    ) -> Optional[Transaction]:
-        # First check if any row in the group is already linked to a Transaction of this customer
-        for _, _, sale_obj in group_entries:
-            if sale_obj.transaction_id:
-                tx_obj = (
-                    db.query(Transaction)
-                    .filter(Transaction.id == sale_obj.transaction_id)
-                    .first()
-                )
-                if tx_obj and tx_obj.customer_id == customer_id:
-                    return tx_obj
+    ) -> List[Transaction]:
+        """
+        Finds all existing Transactions on target_date belonging to `customer_id` that are
+        linked either to rows inside `group_entries` or to immediately adjacent rows
+        (`min_idx - 1` and `max_idx + 1`), ordered by lowest Excel row index / creation order.
+        """
+        found_txs: List[Transaction] = []
+        seen_tx_ids: set[str] = set()
 
-        # Next check immediately adjacent rows (min_idx - 1 or max_idx + 1) on the same date
         min_idx = group_entries[0][0]
         max_idx = group_entries[-1][0]
-        for adj_idx in (min_idx - 1, max_idx + 1):
-            adj_sale = existing_by_row.get(adj_idx)
-            if adj_sale and adj_sale.transaction_id:
+
+        candidate_sales: List[Any] = []
+        prev_sale = existing_by_row.get(min_idx - 1)
+        if prev_sale is not None:
+            candidate_sales.append(prev_sale)
+        for _, _, sale_obj in group_entries:
+            candidate_sales.append(sale_obj)
+        next_sale = existing_by_row.get(max_idx + 1)
+        if next_sale is not None:
+            candidate_sales.append(next_sale)
+
+        for cand in candidate_sales:
+            if cand and cand.transaction_id and str(cand.transaction_id) not in seen_tx_ids:
                 tx_obj = (
                     db.query(Transaction)
-                    .filter(Transaction.id == adj_sale.transaction_id)
+                    .filter(Transaction.id == cand.transaction_id)
                     .first()
                 )
                 if tx_obj and tx_obj.customer_id == customer_id:
-                    return tx_obj
+                    seen_tx_ids.add(str(tx_obj.id))
+                    found_txs.append(tx_obj)
 
-        return None
+        return found_txs
+
+    def _consolidate_secondary_transactions(
+        primary_tx: Transaction,
+        secondary_txs: List[Transaction],
+    ) -> None:
+        """
+        Merges contiguous secondary transactions of the same customer into `primary_tx`,
+        re-pointing their ExcelSale rows and LoyaltyPointLedger entries without duplicating points.
+        """
+        for sec_tx in secondary_txs:
+            if str(sec_tx.id) == str(primary_tx.id):
+                continue
+            if _to_cents(sec_tx.loyalty_discount_amount) > Decimal("0.00"):
+                restore_pre_loyalty_prices(sec_tx)
+            if not primary_tx.discount_rule_code and sec_tx.discount_rule_code:
+                primary_tx.discount_rule_code = sec_tx.discount_rule_code
+
+            for sec_sale in list(sec_tx.excel_sales):
+                sec_sale.transaction = primary_tx
+                db.add(sec_sale)
+
+            for sec_entry in list(sec_tx.loyalty_ledger_entries):
+                sec_entry.transaction = primary_tx
+                db.add(sec_entry)
+
+            sec_tx.customer = None
+            cancel_post_purchase_timer(str(sec_tx.id))
+            db.flush()
+            db.delete(sec_tx)
+            db.flush()
+            db.refresh(primary_tx)
 
     for norm_phone, group_entries in groups:
         if norm_phone in customer_cache:
@@ -351,9 +503,12 @@ def _process_crm_for_pushed_rows(
             db.add(sale_obj)
             refreshed_entries.append((r_idx, item_obj, sale_obj))
 
+        matching_txs = _find_matching_txs_for_customer(refreshed_entries, customer.id)
+        tx = matching_txs[0] if matching_txs else None
+        secondary_txs = matching_txs[1:] if len(matching_txs) > 1 else []
+
         if customer.status == CustomerStatus.PENDING_ONBOARDING:
             # Flusso A: Associate rows, credit frozen points immediately, Col P = "Richiesta inviata"
-            tx = _find_existing_tx_for_customer(refreshed_entries, customer.id)
             if tx is None:
                 tx = Transaction(
                     date=target_date,
@@ -364,10 +519,13 @@ def _process_crm_for_pushed_rows(
                 )
                 db.add(tx)
                 db.flush()
+            elif secondary_txs:
+                _consolidate_secondary_transactions(tx, secondary_txs)
 
             for _, _, sale_obj in refreshed_entries:
-                sale_obj.transaction_id = tx.id
-                db.add(sale_obj)
+                if sale_obj.transaction_id != tx.id:
+                    sale_obj.transaction_id = tx.id
+                    db.add(sale_obj)
             db.flush()
             db.refresh(tx)
 
@@ -378,18 +536,20 @@ def _process_crm_for_pushed_rows(
                 previous_customer_id=None,
             )
 
-            for r_idx, _, _ in refreshed_entries:
+            tx_rows_to_emit = [r for r in tx.excel_sales if r.excel_row_index is not None]
+            for sale_obj in tx_rows_to_emit:
+                r_idx = int(sale_obj.excel_row_index)
                 row_updates_by_idx[r_idx] = ExcelRowUpdateItem(
                     excel_row_index=r_idx,
                     col_p_status="Richiesta inviata",
+                    col_o_phone=forced_col_o_restore.get(r_idx),
                     identification_pending=False,
                 )
             continue
 
         if customer.status in (CustomerStatus.ACTIVE, CustomerStatus.INACTIVE_EXPIRED):
-            # Flusso B — Registered customer: 2-Step Confirmation + OTP Redemption
+            # Flusso B — Registered customer: 2-Step Confirmation + OTP Redemption + Split Receipt & Price Edits
             short_name = _format_customer_short_name(customer)
-            tx = _find_existing_tx_for_customer(refreshed_entries, customer.id)
 
             if tx is None:
                 # 1st Save (Ctrl+S): Create IDENTIFICATION_PENDING transaction, do NOT credit points yet
@@ -412,19 +572,39 @@ def _process_crm_for_pushed_rows(
                     row_updates_by_idx[r_idx] = ExcelRowUpdateItem(
                         excel_row_index=r_idx,
                         col_p_status=f"{short_name} - Salva il file per confermare",
+                        col_o_phone=forced_col_o_restore.get(r_idx),
                         identification_pending=True,
                     )
                 continue
 
-            # 2nd Save (confirmation) or subsequent update on an already confirmed transaction
+            # 2nd Save (confirmation) or subsequent update (split receipt / price edit / OTP retry)
+            was_already_confirmed = (
+                tx.identification_status == CustomerIdentificationStatus.IDENTIFICATION_CONFIRMED
+            )
             if tx.identification_status == CustomerIdentificationStatus.IDENTIFICATION_PENDING:
                 tx.identification_status = CustomerIdentificationStatus.IDENTIFICATION_CONFIRMED
                 db.add(tx)
 
-            for _, _, sale_obj in refreshed_entries:
-                if sale_obj.transaction_id != tx.id:
-                    sale_obj.transaction_id = tx.id
-                    db.add(sale_obj)
+            newly_attached_sales = [
+                sale_obj
+                for _, _, sale_obj in refreshed_entries
+                if sale_obj.transaction_id != tx.id
+            ]
+
+            # Macro-Area 2.1.1: If new rows are joining an already-discounted transaction (or two txs are bridged),
+            # restore pre-loyalty prices on existing rows BEFORE attaching the new rows so the discount
+            # is re-spread accurately across all purchase rows.
+            if (newly_attached_sales or secondary_txs) and _to_cents(
+                tx.loyalty_discount_amount
+            ) > Decimal("0.00"):
+                restore_pre_loyalty_prices(tx)
+
+            if secondary_txs:
+                _consolidate_secondary_transactions(tx, secondary_txs)
+
+            for sale_obj in newly_attached_sales:
+                sale_obj.transaction_id = tx.id
+                db.add(sale_obj)
             db.flush()
             db.refresh(tx)
 
@@ -442,19 +622,41 @@ def _process_crm_for_pushed_rows(
 
             if otp_input:
                 stored_otp = (customer.redemption_otp_code or "").strip()
-                if stored_otp and otp_input.upper() == stored_otp.upper() and customer.redemption_rule_code:
+                if (
+                    stored_otp
+                    and otp_input.upper() == stored_otp.upper()
+                    and customer.redemption_rule_code
+                ):
                     target_rule_code = customer.redemption_rule_code
                     applied_new_otp = True
-                else:
+                elif tx.discount_rule_code is None:
                     otp_error = True
 
-            # Execute loyalty engine (idempotent if already credited; spreads discount if OTP valid)
+            # Macro-Area 2.1.4: When an already-confirmed transaction is updated without adding new rows,
+            # merging transactions, or redeeming a new OTP, preserve the exact manual Excel prices
+            # and record any point difference as PRICE_CORRECTION while keeping DISCOUNT_REDEMPTION immutable.
+            preserve_manual_prices = bool(
+                was_already_confirmed
+                and not applied_new_otp
+                and not newly_attached_sales
+                and not secondary_txs
+            )
+            discount_was_spread = bool(
+                applied_new_otp
+                or (
+                    tx.discount_rule_code
+                    and (newly_attached_sales or secondary_txs or not was_already_confirmed)
+                )
+            )
+
+            # Execute loyalty engine (idempotent if already credited; spreads discount if OTP valid / split receipt)
             try:
                 _apply_loyalty_engine(
                     db=db,
                     transaction=tx,
                     target_discount_rule_code=target_rule_code,
                     previous_customer_id=None,
+                    preserve_manual_prices=preserve_manual_prices,
                 )
                 if applied_new_otp:
                     customer.redemption_otp_code = None
@@ -472,11 +674,13 @@ def _process_crm_for_pushed_rows(
                 )
                 otp_error = True
                 applied_new_otp = False
+                discount_was_spread = False
                 _apply_loyalty_engine(
                     db=db,
                     transaction=tx,
                     target_discount_rule_code=tx.discount_rule_code,
                     previous_customer_id=None,
+                    preserve_manual_prices=preserve_manual_prices,
                 )
 
             balance = crm_customer_repo.get_points_balance(db, customer.id)
@@ -486,13 +690,8 @@ def _process_crm_for_pushed_rows(
                 else f"{short_name} ({balance} pt)"
             )
 
-            # Determine which rows to emit updates for:
-            # If a discount was applied/spread, emit updated selling_price for all Excel rows in the transaction
-            tx_rows_to_emit = (
-                [r for r in tx.excel_sales if r.excel_row_index is not None]
-                if applied_new_otp or tx.discount_rule_code
-                else [sale_obj for _, _, sale_obj in refreshed_entries]
-            )
+            # Emit row_updates for all Excel rows belonging to the transaction so multi-row receipts stay consistent
+            tx_rows_to_emit = [r for r in tx.excel_sales if r.excel_row_index is not None]
             for sale_obj in tx_rows_to_emit:
                 r_idx = int(sale_obj.excel_row_index)
                 row_updates_by_idx[r_idx] = ExcelRowUpdateItem(
@@ -500,10 +699,10 @@ def _process_crm_for_pushed_rows(
                     col_p_status=col_p_text,
                     selling_price=(
                         float(sale_obj.selling_price)
-                        if (applied_new_otp or tx.discount_rule_code)
-                        and sale_obj.selling_price is not None
+                        if discount_was_spread and sale_obj.selling_price is not None
                         else None
                     ),
+                    col_o_phone=forced_col_o_restore.get(r_idx),
                     identification_pending=False,
                 )
 
@@ -552,6 +751,7 @@ def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: 
     sales_to_insert = []
     sales_to_update = []
     confirmed_row_indexes = []
+    price_changed_row_indexes: set[int] = set()
 
     for item in rows:
         row_idx = item.excel_row_index
@@ -582,32 +782,58 @@ def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: 
 
         existing_record = existing_by_row.get(row_idx)
         if existing_record:
-            if existing_record.status in (ExcelSaleStatus.ORPHAN, ExcelSaleStatus.UNPROCESSABLE):
-                new_starting = starting_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None
-                new_selling = selling_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None
+            # Macro-Area 2.1.4: Excel is the single source of truth for prices even on RECONCILED
+            # or already-confirmed transaction rows. Preserve RECONCILED status if row remains valid.
+            if (
+                existing_record.status == ExcelSaleStatus.RECONCILED
+                and status == ExcelSaleStatus.UNPROCESSABLE
+            ):
+                continue
 
-                changed = False
-                if existing_record.starting_price != new_starting:
-                    existing_record.starting_price = new_starting
-                    changed = True
-                if existing_record.selling_price != new_selling:
-                    existing_record.selling_price = new_selling
-                    changed = True
-                if existing_record.is_exchange != is_exchange_val:
-                    existing_record.is_exchange = is_exchange_val
-                    changed = True
-                if existing_record.raw_article_code != item.raw_article_code:
-                    existing_record.raw_article_code = item.raw_article_code
-                    changed = True
-                if existing_record.excel_file_column != item.excel_file_column:
-                    existing_record.excel_file_column = item.excel_file_column
-                    changed = True
-                if existing_record.status != status:
-                    existing_record.status = status
-                    changed = True
+            new_starting = starting_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None
+            new_selling = selling_price_val if status != ExcelSaleStatus.UNPROCESSABLE else None
 
-                if changed:
-                    sales_to_update.append(existing_record)
+            changed = False
+            price_changed = False
+            old_start_f = (
+                float(existing_record.starting_price)
+                if existing_record.starting_price is not None
+                else None
+            )
+            old_sell_f = (
+                float(existing_record.selling_price)
+                if existing_record.selling_price is not None
+                else None
+            )
+            if old_start_f != new_starting:
+                existing_record.starting_price = new_starting
+                changed = True
+                price_changed = True
+            if old_sell_f != new_selling:
+                existing_record.selling_price = new_selling
+                changed = True
+                price_changed = True
+            if bool(existing_record.is_exchange) != bool(is_exchange_val):
+                existing_record.is_exchange = is_exchange_val
+                changed = True
+                price_changed = True
+            if existing_record.raw_article_code != item.raw_article_code:
+                existing_record.raw_article_code = item.raw_article_code
+                changed = True
+            if existing_record.excel_file_column != item.excel_file_column:
+                existing_record.excel_file_column = item.excel_file_column
+                changed = True
+            if existing_record.status in (
+                ExcelSaleStatus.ORPHAN,
+                ExcelSaleStatus.UNPROCESSABLE,
+            ) and existing_record.status != status:
+                existing_record.status = status
+                changed = True
+
+            if price_changed:
+                price_changed_row_indexes.add(row_idx)
+            if changed:
+                sales_to_update.append(existing_record)
         else:
             sale_in = ExcelSaleCreate(
                 date=target_date,
@@ -631,12 +857,13 @@ def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: 
 
     db.flush()
 
-    # 4. CRM Identification, Contiguous Grouping & OTP Redemption
+    # 4. CRM Identification, Contiguous Grouping, Error Handling & OTP Redemption
     row_updates, confirmed_tx_ids = _process_crm_for_pushed_rows(
         db=db,
         rows=rows,
         existing_by_row=existing_by_row,
         target_date=target_date,
+        price_changed_row_indexes=price_changed_row_indexes,
     )
 
     db.commit()

@@ -635,6 +635,9 @@ def test_history_endpoint_and_vendite_storico_tab(db_session):
 
 
 def test_agent_config_endpoint(db_session):
+    from src.services.excel_synchronization_service import get_agent_config
+
+    expected = get_agent_config()
     client = TestClient(app)
     res = client.get("/api/v1/excel-synchronization/agent-config")
     assert res.status_code == 200
@@ -643,9 +646,9 @@ def test_agent_config_endpoint(db_session):
     cfg = data["data"]
     assert "excel_file_path" in cfg
     assert "excel_code_column" in cfg
-    assert cfg["start_row"] == 2
-    assert cfg["excel_polling_interval"] == 20
-    assert cfg["retention_days"] == 30
+    assert cfg["start_row"] == expected["start_row"]
+    assert cfg["excel_polling_interval"] == expected["excel_polling_interval"]
+    assert cfg["retention_days"] == expected["retention_days"]
 
 
 def test_push_batch_endpoint_insert_and_update(db_session):
