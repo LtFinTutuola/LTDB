@@ -53,7 +53,8 @@ def push_batch(
         result = excel_synchronization_service.ingest_pushed_sales(
             db=db,
             rows=payload.rows,
-            target_date=target_date
+            target_date=target_date,
+            agent_status=payload.agent_status.model_dump() if payload.agent_status is not None else None,
         )
         latency_ms = int((time.time() - start_time) * 1000)
         logger.log_execution(
@@ -72,6 +73,7 @@ def push_batch(
             inserted_ids=result["inserted_ids"],
             row_updates=result.get("row_updates", []),
             async_row_updates=result.get("async_row_updates", []),
+            agent_commands=result.get("agent_commands", []),
         )
     except HistoricalFileError as e:
         db.rollback()
@@ -116,6 +118,26 @@ def poll_rows(
     except Exception as e:
         db.rollback()
         logger.log_execution("excel_synchronization_router", "poll_rows", "err", exc=e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/force-sync", status_code=status.HTTP_200_OK)
+def force_agent_sync():
+    """
+    Queues a `force_sync` remote command for the standalone Edge Agent so that on its
+    next Control Poll it clears its daily hash cache and performs a full rescan & push.
+    """
+    try:
+        cmd = {"command": "force_sync"}
+        excel_synchronization_service.enqueue_agent_command(cmd)
+        logger.log_execution("excel_synchronization_router", "force_agent_sync", "ok")
+        return {
+            "status": "success",
+            "message": "Comando force_sync accodato per l'Edge Agent.",
+            "queued_command": cmd,
+        }
+    except Exception as e:
+        logger.log_execution("excel_synchronization_router", "force_agent_sync", "err", exc=e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

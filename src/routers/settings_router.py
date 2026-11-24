@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, status
 from src.schemas.settings import SettingsResponse, SettingsUpdateRequest
 from src.core.logger import get_logger
 from src.core.config import settings, BASE_DIR
+from src.services import excel_synchronization_service
 
 logger = get_logger()
 
@@ -66,9 +67,15 @@ def update_settings(request: SettingsUpdateRequest):
     try:
         # 1. Update src/config.yaml
         cfg = _read_yaml(CONFIG_YAML_PATH)
+        old_excel_path = str(cfg.get("excel_file_path", "")).strip()
+        old_code_col = str(cfg.get("excel_code_column", "")).strip()
+
+        new_excel_path = request.excel_file_path.strip()
+        new_code_col = request.excel_code_column.strip()
+
         cfg["db_connection_string"] = request.db_connection_string.strip()
-        cfg["excel_file_path"] = request.excel_file_path.strip()
-        cfg["excel_code_column"] = request.excel_code_column.strip()
+        cfg["excel_file_path"] = new_excel_path
+        cfg["excel_code_column"] = new_code_col
         _write_yaml(CONFIG_YAML_PATH, cfg)
 
         # 2. Update src/agents/gemini.yaml
@@ -81,6 +88,18 @@ def update_settings(request: SettingsUpdateRequest):
         settings.SQLITE_URL = cfg["db_connection_string"].replace("{BASE_DIR}", str(BASE_DIR))
         settings.EXCEL_FILE_PATH = cfg["excel_file_path"].replace("{BASE_DIR}", str(BASE_DIR))
         settings.EXCEL_CODE_COLUMN = cfg["excel_code_column"]
+
+        # 4. Macro-Area 4: Queue remote commands for the standalone Edge Agent if Excel settings changed
+        if new_excel_path and new_excel_path != old_excel_path:
+            excel_synchronization_service.enqueue_agent_command({
+                "command": "update_excel_path",
+                "new_excel_path": new_excel_path,
+            })
+        if new_code_col and new_code_col != old_code_col:
+            excel_synchronization_service.enqueue_agent_command({
+                "command": "update_config",
+                "data": {"excel_code_column": new_code_col},
+            })
 
         logger.log_execution("settings_router", "update_settings_success", "ok")
         return SettingsResponse(

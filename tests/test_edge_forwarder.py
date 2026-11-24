@@ -26,6 +26,7 @@ from scripts.excel_agent.ltdb_forwarder import (
     compute_row_hash,
     load_daily_state,
     save_daily_state,
+    clear_daily_state,
     read_excel_rows,
     push_batch_to_ltdb,
     run_cycle,
@@ -34,6 +35,9 @@ from scripts.excel_agent.ltdb_forwarder import (
     resolve_excel_path,
     apply_row_updates_to_excel,
     recalculate_hashes_for_updated_rows,
+    create_agent_state,
+    get_file_mtime,
+    execute_agent_commands,
 )
 
 
@@ -578,6 +582,477 @@ def test_run_cycle_applies_col_o_restore_and_selling_price_and_recalculates_hash
     mock_push.reset_mock()
     run_cycle(agent_dir, runtime_cfg, local_cfg, logger, last_push_time=time.time())
     assert mock_push.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Macro-Area 3 & Macro-Area 4 Tests (Live Excel COM/mtime & Dual-Timer)
+# ---------------------------------------------------------------------------
+
+
+@patch("scripts.excel_agent.ltdb_forwarder.read_excel_rows", wraps=read_excel_rows)
+@patch("scripts.excel_agent.ltdb_forwarder.push_batch_to_ltdb")
+def test_fast_watcher_skips_excel_read_when_mtime_unchanged(mock_push, spy_read, agent_dir):
+    """
+    Macro-Area 3 (3.1.1):
+    Verifies that with `agent_state` active (0.5s Fast Data Watcher), `read_excel_rows`
+    is NOT called at all when the file's `mtime` has not changed since `last_seen_mtime`,
+    and is immediately triggered as soon as `mtime` changes (cashier presses Ctrl+S).
+    """
+    logger = setup_logging(agent_dir)
+    local_cfg = load_local_config(agent_dir)
+    runtime_cfg = local_cfg["fallback_config"]
+    agent_state = create_agent_state()
+
+    excel_file = Path(runtime_cfg["excel_file_path"])
+    wb = openpyxl.Workbook()
+    sheet = wb.active
+    sheet.cell(row=2, column=1, value=100.0)
+    sheet.cell(row=2, column=2, value=90.0)
+    wb.save(str(excel_file))
+    wb.close()
+
+    mock_push.return_value = [2]
+
+    # Tick 1 (0.5s): first observation of file -> reads Excel and pushes row 2
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert spy_read.call_count == 1
+    assert mock_push.call_count == 1
+    assert agent_state["last_seen_mtime"] == get_file_mtime(excel_file)
+
+    # Tick 2 & Tick 3 (0.5s later, no Ctrl+S): mtime unchanged -> 0 Excel reads, 0 HTTP calls
+    spy_read.reset_mock()
+    mock_push.reset_mock()
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert spy_read.call_count == 0
+    assert mock_push.call_count == 0
+
+    # Cashier adds row 3 and presses Ctrl+S (mtime advances)
+    wb2 = openpyxl.load_workbook(str(excel_file))
+    sh2 = wb2.active
+    sh2.cell(row=3, column=1, value=50.0)
+    sh2.cell(row=3, column=2, value=45.0)
+    wb2.save(str(excel_file))
+    wb2.close()
+    new_mtime = (agent_state["last_seen_mtime"] or time.time()) + 2.0
+    os.utime(str(excel_file), (new_mtime, new_mtime))
+
+    mock_push.return_value = [3]
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert spy_read.call_count == 1
+    assert mock_push.call_count == 1
+    sent_rows = mock_push.call_args[1]["rows"]
+    assert len(sent_rows) == 1
+    assert sent_rows[0]["excel_row_index"] == 3
+    assert agent_state["last_seen_mtime"] == get_file_mtime(excel_file)
+
+
+@patch("scripts.excel_agent.ltdb_forwarder.read_excel_rows", wraps=read_excel_rows)
+@patch("scripts.excel_agent.ltdb_forwarder.push_batch_to_ltdb")
+def test_com_write_saves_recalculates_hash_and_updates_last_seen_mtime_preventing_loop(
+    mock_push, spy_read, agent_dir, monkeypatch
+):
+    """
+    Macro-Area 3 (3.1.2, 3.1.3, 3.1.4):
+    Simulates Windows `pywin32` COM (`win32com.client.GetActiveObject("Excel.Application")`)
+    including a transient `COMError` on attempt 1 (cashier in Edit Mode), followed by
+    live cell updates (`Col B..I`, `Col O`, `Col P`) and `workbook.Save()` on attempt 2.
+    Verifies that `workbook.Save()` updating the disk `mtime` does NOT cause an infinite loop
+    because `saved_hashes` and `last_seen_mtime` are atomically realigned right after COM Save.
+    """
+    import sys
+    import types
+
+    logger = setup_logging(agent_dir)
+    local_cfg = load_local_config(agent_dir)
+    local_cfg["target_os"] = "windows"
+    runtime_cfg = local_cfg["fallback_config"]
+    agent_state = create_agent_state()
+
+    excel_file = Path(runtime_cfg["excel_file_path"])
+    wb = openpyxl.Workbook()
+    sheet = wb.active
+    sheet.cell(row=2, column=1, value=100.0)
+    sheet.cell(row=2, column=2, value=100.0)
+    sheet.cell(row=2, column=15, value="3401112233")
+    sheet.cell(row=2, column=17, value="999111")
+    wb.save(str(excel_file))
+    wb.close()
+
+    # Build a mock win32com.client module simulating Edit Mode COMError on 1st attempt
+    com_cells_written = {}
+    com_attempts = {"count": 0}
+    save_calls = {"count": 0}
+
+    class FakeCell:
+        def __init__(self, r, c):
+            self.r = r
+            self.c = c
+
+        @property
+        def Value(self):
+            return com_cells_written.get((self.r, self.c))
+
+        @Value.setter
+        def Value(self, val):
+            com_cells_written[(self.r, self.c)] = val
+
+    class FakeSheet:
+        def Cells(self, r, c):
+            return FakeCell(r, c)
+
+    class FakeWorkbook:
+        FullName = str(excel_file.resolve())
+        Name = excel_file.name
+        ActiveSheet = FakeSheet()
+
+        def Save(self):
+            save_calls["count"] += 1
+            # Simulate Excel Desktop saving to disk and advancing the file's mtime by +5 seconds
+            bumped_mtime = (get_file_mtime(excel_file) or time.time()) + 5.0
+            os.utime(str(excel_file), (bumped_mtime, bumped_mtime))
+
+    class FakeExcelApp:
+        Workbooks = [FakeWorkbook()]
+
+    def fake_get_active_object(prog_id):
+        assert prog_id == "Excel.Application"
+        com_attempts["count"] += 1
+        if com_attempts["count"] == 1:
+            raise RuntimeError("COMError (-2146777998): Excel is in cell Edit Mode")
+        return FakeExcelApp()
+
+    win32com_mod = types.ModuleType("win32com")
+    win32com_client_mod = types.ModuleType("win32com.client")
+    win32com_client_mod.GetActiveObject = fake_get_active_object
+    win32com_mod.client = win32com_client_mod
+    monkeypatch.setitem(sys.modules, "win32com", win32com_mod)
+    monkeypatch.setitem(sys.modules, "win32com.client", win32com_client_mod)
+
+    def push_side_effect(**kwargs):
+        out_updates = kwargs.get("out_row_updates")
+        if out_updates is not None:
+            out_updates.append({
+                "excel_row_index": 2,
+                "col_p_status": "M. Rossi (180 pt)",
+                "selling_price": 85.0,
+                "col_o_phone": "3401112233",
+                "identification_pending": False,
+            })
+        return [2]
+
+    mock_push.side_effect = push_side_effect
+
+    with patch("scripts.excel_agent.ltdb_forwarder.time.sleep"):
+        run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+
+    # 1. COM retried after Edit Mode error and succeeded on 2nd attempt
+    assert com_attempts["count"] == 2
+    assert save_calls["count"] == 1
+    assert com_cells_written[(2, 2)] == 85.0
+    assert com_cells_written[(2, 15)] == "3401112233"
+    assert com_cells_written[(2, 16)] == "M. Rossi (180 pt)"
+
+    # 2. last_seen_mtime was updated to the post-Save mtime (+5s)
+    assert agent_state["last_seen_mtime"] == get_file_mtime(excel_file)
+
+    # 3. Next 0.5s tick MUST NOT re-read or re-push (infinite loop prevented!)
+    spy_read.reset_mock()
+    mock_push.reset_mock()
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert spy_read.call_count == 0
+    assert mock_push.call_count == 0
+
+
+@patch("scripts.excel_agent.ltdb_forwarder.push_batch_to_ltdb")
+def test_control_polling_runs_even_when_excel_path_is_none(mock_push, agent_dir, tmp_path):
+    """
+    Macro-Area 4 (4.1.2):
+    Verifies that Timer 2 (Control & Status Polling) runs even when the configured Excel file
+    and fallback paths do not exist (`excel_path is None`), sending diagnostic `agent_status`
+    (`file_readable=False`, `monitored_file=None`) and executing remote commands returned by LTDB.
+    """
+    logger = setup_logging(agent_dir)
+    local_cfg = load_local_config(agent_dir)
+    local_cfg["control_polling_interval_seconds"] = 5
+    runtime_cfg = {
+        "excel_file_path": str(tmp_path / "missing_file.xlsx"),
+        "start_row": 2,
+        "excel_code_column": "N",
+        "control_polling_interval_seconds": 5,
+    }
+    # Initialize agent_state with last_control_poll_time > 5s ago so Timer 2 triggers immediately
+    agent_state = create_agent_state(initial_time=time.time() - 10.0)
+
+    valid_new_path = str(tmp_path / "Stat € B.xlsx")
+
+    def poll_side_effect(**kwargs):
+        out_cmds = kwargs.get("out_agent_commands")
+        if out_cmds is not None:
+            out_cmds.append({
+                "command": "update_excel_path",
+                "new_excel_path": valid_new_path,
+            })
+        return []
+
+    mock_push.side_effect = poll_side_effect
+
+    with patch("scripts.excel_agent.ltdb_forwarder.FALLBACK_EXCEL_PATHS", []):
+        run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+
+    assert mock_push.call_count == 1
+    call_kwargs = mock_push.call_args[1]
+    assert call_kwargs["rows"] == []
+    assert call_kwargs["agent_status"]["file_readable"] is False
+    assert call_kwargs["agent_status"]["monitored_file"] is None
+    # Command received during missing-file control poll was executed in RAM and persisted to disk
+    assert runtime_cfg["excel_file_path"] == valid_new_path
+    persisted_cfg = load_local_config(agent_dir)
+    assert persisted_cfg["fallback_config"]["excel_file_path"] == valid_new_path
+
+
+@patch("scripts.excel_agent.ltdb_forwarder.push_batch_to_ltdb")
+def test_remote_command_update_excel_path_switches_monitored_file_immediately(
+    mock_push, agent_dir, tmp_path
+):
+    """
+    Macro-Area 4 (4.2 - `update_excel_path`):
+    Verifies that receiving `update_excel_path` updates `runtime_config["excel_file_path"]` in RAM,
+    persists once to `config.json`, resets `last_seen_mtime`, and hooks onto the new file on the
+    very next 0.5s tick.
+    """
+    logger = setup_logging(agent_dir)
+    local_cfg = load_local_config(agent_dir)
+    runtime_cfg = local_cfg["fallback_config"]
+
+    file_a = tmp_path / "Stat € A.xlsx"
+    file_b = tmp_path / "Stat € B.xlsx"
+
+    wb_a = openpyxl.Workbook()
+    wb_a.active.cell(row=2, column=1, value=100.0)
+    wb_a.active.cell(row=2, column=2, value=100.0)
+    wb_a.save(str(file_a))
+    wb_a.close()
+
+    wb_b = openpyxl.Workbook()
+    wb_b.active.cell(row=2, column=1, value=250.0)
+    wb_b.active.cell(row=2, column=2, value=200.0)
+    wb_b.save(str(file_b))
+    wb_b.close()
+
+    runtime_cfg["excel_file_path"] = str(file_a)
+    agent_state = create_agent_state()
+
+    # Tick 1: Syncs file_a
+    mock_push.return_value = [2]
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert mock_push.call_count == 1
+    assert mock_push.call_args[1]["rows"][0]["starting_price"] == 100.0
+    assert agent_state["active_excel_path"] == str(file_a)
+
+    # Simulate Timer 2 Control Poll returning `update_excel_path` -> file_b
+    agent_state["last_control_poll_time"] = time.time() - 10.0
+    local_cfg["control_polling_interval_seconds"] = 5
+
+    def control_poll_side_effect(**kwargs):
+        out_cmds = kwargs.get("out_agent_commands")
+        if out_cmds is not None:
+            out_cmds.append({
+                "command": "update_excel_path",
+                "new_excel_path": str(file_b),
+            })
+        return []
+
+    mock_push.reset_mock()
+    mock_push.side_effect = control_poll_side_effect
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert mock_push.call_count == 1
+    assert runtime_cfg["excel_file_path"] == str(file_b)
+    assert agent_state["last_seen_mtime"] is None
+
+    # Next 0.5s Tick: immediately reads and pushes file_b without waiting for Ctrl+S!
+    mock_push.reset_mock()
+    mock_push.side_effect = None
+    mock_push.return_value = [2]
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert mock_push.call_count == 1
+    assert mock_push.call_args[1]["rows"][0]["starting_price"] == 250.0
+    assert agent_state["active_excel_path"] == str(file_b)
+
+
+@patch("scripts.excel_agent.ltdb_forwarder.push_batch_to_ltdb")
+def test_remote_command_force_sync_clears_hashes_and_resends_all_rows(mock_push, agent_dir):
+    """
+    Macro-Area 4 (4.2 - `force_sync`):
+    Verifies that `force_sync` clears `state/hashes_YYYY-MM-DD.json` and forces a full scan
+    and push of all rows on the next 0.5s tick even if the Excel file's `mtime` has not changed.
+    """
+    logger = setup_logging(agent_dir)
+    local_cfg = load_local_config(agent_dir)
+    local_cfg["control_polling_interval_seconds"] = 5
+    runtime_cfg = local_cfg["fallback_config"]
+    agent_state = create_agent_state()
+
+    excel_file = Path(runtime_cfg["excel_file_path"])
+    wb = openpyxl.Workbook()
+    sheet = wb.active
+    sheet.cell(row=2, column=1, value=100.0)
+    sheet.cell(row=2, column=2, value=90.0)
+    sheet.cell(row=3, column=1, value=80.0)
+    sheet.cell(row=3, column=2, value=75.0)
+    wb.save(str(excel_file))
+    wb.close()
+
+    # Tick 1: Initial push of rows 2 and 3
+    mock_push.return_value = [2, 3]
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert mock_push.call_count == 1
+    assert len(load_daily_state(agent_dir / "state", date.today())) == 2
+
+    # Tick 2: Timer 2 Control Poll returns `force_sync`
+    agent_state["last_control_poll_time"] = time.time() - 10.0
+
+    def poll_force_sync(**kwargs):
+        out_cmds = kwargs.get("out_agent_commands")
+        if out_cmds is not None:
+            out_cmds.append({"command": "force_sync"})
+        return []
+
+    mock_push.reset_mock()
+    mock_push.side_effect = poll_force_sync
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert mock_push.call_count == 1
+    assert load_daily_state(agent_dir / "state", date.today()) == {}
+    assert agent_state["force_sync_requested"] is True
+
+    # Tick 3 (0.5s later, mtime unchanged): full scan and push of all 2 rows is executed!
+    mock_push.reset_mock()
+    mock_push.side_effect = None
+    mock_push.return_value = [2, 3]
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert mock_push.call_count == 1
+    assert len(mock_push.call_args[1]["rows"]) == 2
+    assert agent_state["force_sync_requested"] is False
+
+
+def test_remote_command_update_config_updates_ram_and_persists_once(agent_dir):
+    """
+    Macro-Area 4 (4.2 - `update_config`):
+    Verifies that `update_config` dynamically updates operational parameters in `runtime_config`
+    in RAM, persists them to `config.json` on disk, and resets `last_seen_mtime` when
+    structural reading parameters (`excel_code_column`, `start_row`, `excel_file_path`) change.
+    """
+    logger = setup_logging(agent_dir)
+    local_cfg = load_local_config(agent_dir)
+    runtime_cfg = dict(local_cfg["fallback_config"])
+    agent_state = create_agent_state()
+    agent_state["last_seen_mtime"] = 123456.0
+
+    execute_agent_commands(
+        commands=[
+            {
+                "command": "update_config",
+                "data": {
+                    "excel_code_column": "M",
+                    "start_row": 5,
+                    "control_polling_interval_seconds": 8,
+                    "retention_days": 45,
+                },
+            }
+        ],
+        base_dir=agent_dir,
+        runtime_config=runtime_cfg,
+        local_config=local_cfg,
+        agent_state=agent_state,
+        target_date=date.today(),
+        logger=logger,
+    )
+
+    assert runtime_cfg["excel_code_column"] == "M"
+    assert runtime_cfg["start_row"] == 5
+    assert runtime_cfg["control_polling_interval_seconds"] == 8
+    assert runtime_cfg["retention_days"] == 45
+    assert agent_state["last_seen_mtime"] is None
+
+    reloaded = load_local_config(agent_dir)
+    assert reloaded["fallback_config"]["excel_code_column"] == "M"
+    assert reloaded["fallback_config"]["start_row"] == 5
+    assert reloaded["control_polling_interval_seconds"] == 8
+
+
+@patch("scripts.excel_agent.ltdb_forwarder.read_excel_rows", wraps=read_excel_rows)
+@patch("scripts.excel_agent.ltdb_forwarder.push_batch_to_ltdb")
+def test_control_poll_applies_async_row_updates_and_syncs_mtime(mock_push, spy_read, agent_dir):
+    """
+    Macro-Area 4 + Macro-Area 3 Integration:
+    Verifies that when Timer 2 (Control & Status Polling) receives `async_row_updates`
+    (e.g. Col P transitioning from "Richiesta inviata" to "Registrazione completata" after
+    WhatsApp onboarding webhook), it writes the update to Excel and refreshes `last_seen_mtime`
+    so Timer 1 does not mistake the async write for a new cashier Ctrl+S.
+    """
+    logger = setup_logging(agent_dir)
+    local_cfg = load_local_config(agent_dir)
+    local_cfg["target_os"] = "mac"
+    local_cfg["control_polling_interval_seconds"] = 5
+    runtime_cfg = local_cfg["fallback_config"]
+    agent_state = create_agent_state()
+
+    excel_file = Path(runtime_cfg["excel_file_path"])
+    wb = openpyxl.Workbook()
+    sheet = wb.active
+    sheet.cell(row=2, column=1, value=100.0)
+    sheet.cell(row=2, column=2, value=100.0)
+    sheet.cell(row=2, column=15, value="3407778899")
+    wb.save(str(excel_file))
+    wb.close()
+
+    # Tick 1 (Timer 1): Initial sale for new customer -> Col P = "Richiesta inviata"
+    def initial_push(**kwargs):
+        out_updates = kwargs.get("out_row_updates")
+        if out_updates is not None:
+            out_updates.append({
+                "excel_row_index": 2,
+                "col_p_status": "Richiesta inviata",
+                "identification_pending": False,
+            })
+        return [2]
+
+    mock_push.side_effect = initial_push
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert mock_push.call_count == 1
+
+    # Tick 2 (Timer 2 Control Poll 6s later): returns async_row_updates with "Registrazione completata"
+    agent_state["last_control_poll_time"] = time.time() - 6.0
+
+    def control_poll_with_async_update(**kwargs):
+        out_updates = kwargs.get("out_row_updates")
+        if out_updates is not None:
+            out_updates.append({
+                "excel_row_index": 2,
+                "col_p_status": "Registrazione completata",
+                "identification_pending": False,
+            })
+        return []
+
+    spy_read.reset_mock()
+    mock_push.reset_mock()
+    mock_push.side_effect = control_poll_with_async_update
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert mock_push.call_count == 1
+    assert mock_push.call_args[1]["rows"] == []
+
+    # Verify Col P on disk was updated to "Registrazione completata"
+    wb_after = openpyxl.load_workbook(str(excel_file))
+    assert wb_after.active.cell(row=2, column=16).value == "Registrazione completata"
+    wb_after.close()
+
+    # Tick 3 (0.5s later): Timer 1 MUST NOT be self-triggered by the async write!
+    spy_read.reset_mock()
+    mock_push.reset_mock()
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert spy_read.call_count == 0
+    assert mock_push.call_count == 0
+
 
 
 

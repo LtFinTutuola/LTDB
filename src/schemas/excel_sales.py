@@ -1,5 +1,5 @@
 from datetime import date, datetime, date as dt_date
-from typing import Optional
+from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict
 from enum import Enum
 
@@ -133,9 +133,17 @@ class ExcelRowUpdateItem(BaseModel):
     identification_pending: bool = False
 
 
+class ExcelAgentStatusPayload(BaseModel):
+    configured_file: Optional[str] = None
+    monitored_file: Optional[str] = None
+    file_readable: bool = False
+    last_sync_at: Optional[str] = None
+
+
 class ExcelPushBatchRequest(BaseModel):
     date: Optional[dt_date] = None
     rows: list[ExcelRowPushItem] = []
+    agent_status: Optional[ExcelAgentStatusPayload] = None
 
 
 class ExcelPushBatchResponse(BaseModel):
@@ -145,3 +153,4 @@ class ExcelPushBatchResponse(BaseModel):
     inserted_ids: list[str] = []
     row_updates: list[ExcelRowUpdateItem] = []
     async_row_updates: list[ExcelRowUpdateItem] = []
+    agent_commands: list[dict[str, Any]] = []

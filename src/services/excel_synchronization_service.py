@@ -89,6 +89,79 @@ def clear_async_row_updates() -> None:
         _async_row_updates_queue.clear()
 
 
+# ---------------------------------------------------------------------------
+# Phase 4 Macro-Area 4: Remote Agent Commands Queue & Diagnostic Status
+# ---------------------------------------------------------------------------
+
+_agent_commands_lock = threading.Lock()
+_agent_commands_queue: List[Dict[str, Any]] = []
+
+_agent_status_lock = threading.Lock()
+_latest_agent_status: Dict[str, Any] = {
+    "configured_file": None,
+    "monitored_file": None,
+    "file_readable": False,
+    "last_sync_at": None,
+    "reported_at": None,
+}
+
+
+def enqueue_agent_command(command: Dict[str, Any]) -> None:
+    """Queues a remote command (`update_excel_path`, `force_sync`, `update_config`) for the Edge Agent."""
+    if not command or not isinstance(command, dict):
+        return
+    with _agent_commands_lock:
+        _agent_commands_queue.append(dict(command))
+
+
+def drain_agent_commands() -> List[Dict[str, Any]]:
+    """Atomically drains and returns all queued remote commands for the Edge Agent."""
+    with _agent_commands_lock:
+        items = list(_agent_commands_queue)
+        _agent_commands_queue.clear()
+        return items
+
+
+def clear_agent_commands() -> None:
+    """Clears the pending Edge Agent commands queue (useful for test cleanup)."""
+    with _agent_commands_lock:
+        _agent_commands_queue.clear()
+
+
+def get_pending_agent_commands_count() -> int:
+    """Returns the number of pending commands currently waiting for the Edge Agent."""
+    with _agent_commands_lock:
+        return len(_agent_commands_queue)
+
+
+def record_agent_status(agent_status: Optional[Dict[str, Any]]) -> None:
+    """Records the latest diagnostic status reported by the standalone Edge Agent."""
+    if not agent_status or not isinstance(agent_status, dict):
+        return
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _agent_status_lock:
+        _latest_agent_status.update({
+            "configured_file": agent_status.get("configured_file"),
+            "monitored_file": agent_status.get("monitored_file"),
+            "file_readable": bool(agent_status.get("file_readable", False)),
+            "last_sync_at": agent_status.get("last_sync_at"),
+            "reported_at": now_iso,
+        })
+
+
+def reset_agent_status() -> None:
+    """Resets the cached Edge Agent diagnostic status (useful for test cleanup)."""
+    with _agent_status_lock:
+        _latest_agent_status.update({
+            "configured_file": None,
+            "monitored_file": None,
+            "file_readable": False,
+            "last_sync_at": None,
+            "reported_at": None,
+        })
+
+
 def _format_customer_short_name(customer: Any) -> str:
     """Formats customer display name for Excel Col P as '<Initial>. <LastName>' (e.g. 'M. Rossi')."""
     first = (getattr(customer, "first_name", None) or "").strip()
@@ -713,26 +786,37 @@ def _process_crm_for_pushed_rows(
     return ordered_updates, confirmed_tx_ids_to_notify
 
 
-def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: date) -> Dict[str, Any]:
+def ingest_pushed_sales(
+    db: Session,
+    rows: List[ExcelRowPushItem],
+    target_date: date,
+    agent_status: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Ingests a batch of sales pushed by the standalone edge agent.
-    - Handles heartbeats (empty rows) and drains async_row_updates
+    - Records latest diagnostic `agent_status` when provided
+    - Handles heartbeats / control polls (empty rows) and drains `async_row_updates` + `agent_commands`
     - Validates against historical file patterns (Level 3 protection)
     - Auto-detects returns (is_exchange = True) when starting_price < 0 or selling_price < 0
     - Performs idempotent upsert (updates ORPHAN / UNPROCESSABLE, inserts new)
     - Processes CRM identification (Flusso A / Flusso B), OTP redemption, and 60s debounce notification
-    - Returns confirmed row indexes, created/updated record IDs, row_updates, and async_row_updates
+    - Returns confirmed row indexes, created/updated record IDs, row_updates, async_row_updates, and agent_commands
     """
-    # 1. Heartbeat check
+    if agent_status is not None:
+        record_agent_status(agent_status)
+
+    # 1. Heartbeat / Control & Status Poll check
     if not rows:
         _record_sync(True, 0)
         async_updates = drain_async_row_updates()
+        agent_commands = drain_agent_commands()
         logger.log_execution("excel_synchronization_service", "heartbeat_received", "ok", target_date=str(target_date))
         return {
             "confirmed_row_indexes": [],
             "inserted_ids": [],
             "row_updates": [],
             "async_row_updates": async_updates,
+            "agent_commands": agent_commands,
         }
 
     # 2. Level 3 Safety: Historical pattern detection (>= 10 matches on a single historical date)
@@ -873,6 +957,7 @@ def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: 
         schedule_post_purchase_notification(tx_id)
 
     async_updates = drain_async_row_updates()
+    agent_commands = drain_agent_commands()
     inserted_or_updated_ids = [str(r.id) for r in created_records] + [str(r.id) for r in sales_to_update]
 
     _record_sync(True, len(inserted_or_updated_ids))
@@ -892,6 +977,7 @@ def ingest_pushed_sales(db: Session, rows: List[ExcelRowPushItem], target_date: 
         "inserted_ids": inserted_or_updated_ids,
         "row_updates": row_updates,
         "async_row_updates": async_updates,
+        "agent_commands": agent_commands,
     }
 
 # ---------------------------------------------------------------------------
@@ -1397,10 +1483,15 @@ def _record_sync(success: bool, inserted_count: int = 0, error: str = None):
 
 def get_sync_status() -> dict:
     with _sync_lock:
-        return {
-            **_sync_state,
-            "polling_interval_seconds": settings.EXCEL_POLLING_INTERVAL
-        }
+        sync_snapshot = dict(_sync_state)
+    with _agent_status_lock:
+        agent_snapshot = dict(_latest_agent_status)
+    agent_snapshot["pending_commands_count"] = get_pending_agent_commands_count()
+    return {
+        **sync_snapshot,
+        "polling_interval_seconds": settings.EXCEL_POLLING_INTERVAL,
+        "edge_agent": agent_snapshot,
+    }
 
 def reset_sync_status():
     with _sync_lock:

@@ -32,6 +32,38 @@ FALLBACK_EXCEL_PATHS = [
     "K:\\Stat € B.xlsx",
 ]
 
+DEFAULT_FAST_WATCHER_INTERVAL = 0.5
+DEFAULT_CONTROL_POLL_INTERVAL = 5.0
+
+
+def get_file_mtime(file_path: Optional[Path]) -> Optional[float]:
+    """Safely returns the filesystem mtime of file_path, or None if inaccessible."""
+    if file_path is None:
+        return None
+    try:
+        if not file_path.exists():
+            return None
+        return float(os.path.getmtime(file_path))
+    except Exception:
+        return None
+
+
+def create_agent_state(initial_time: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Creates the single-thread runtime state dictionary used across 0.5s ticks
+    to track file mtime (Macro-Area 3) and Dual-Timer / remote command state (Macro-Area 4).
+    """
+    now = float(initial_time) if initial_time is not None else time.time()
+    return {
+        "last_seen_mtime": None,
+        "active_excel_path": None,
+        "last_control_poll_time": now,
+        "last_push_time": now,
+        "last_sync_iso": None,
+        "force_sync_requested": False,
+        "cached_rows_by_idx": {},
+    }
+
 
 def setup_logging(base_dir: Path) -> logging.Logger:
     """Configures rotating daily file and console logging."""
@@ -293,6 +325,14 @@ def save_daily_state(
     tmp_file.replace(state_file)
 
 
+def clear_daily_state(state_dir: Path, target_date: date) -> None:
+    """Clears the daily hash cache file for target_date (used by remote command `force_sync`)."""
+    state_file = state_dir / f"hashes_{target_date.isoformat()}.json"
+    tmp_file = state_dir / f"hashes_{target_date.isoformat()}.json.tmp"
+    state_file.unlink(missing_ok=True)
+    tmp_file.unlink(missing_ok=True)
+
+
 def read_excel_rows(
     file_path: Path,
     start_row: int = 2,
@@ -409,18 +449,23 @@ def push_batch_to_ltdb(
     timeout: int,
     logger: logging.Logger,
     out_row_updates: Optional[List[Dict[str, Any]]] = None,
+    agent_status: Optional[Dict[str, Any]] = None,
+    out_agent_commands: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[List[int]]:
     """
-    Sends rows (or heartbeat if empty) to LTDB cloud API.
+    Sends rows (or control/status poll if empty) to LTDB cloud API.
     Returns confirmed_row_indexes if 200 OK.
     If `out_row_updates` is provided, populates it with `row_updates` and `async_row_updates`.
+    If `out_agent_commands` is provided, populates it with `agent_commands`.
     Returns None if error occurred.
     """
     url = f"{base_url.rstrip('/')}{push_endpoint}"
-    payload = {
+    payload: Dict[str, Any] = {
         "date": target_date.isoformat(),
-        "rows": rows
+        "rows": rows,
     }
+    if agent_status is not None:
+        payload["agent_status"] = agent_status
     payload_bytes = json.dumps(payload).encode("utf-8")
 
     req = urllib.request.Request(
@@ -441,6 +486,8 @@ def push_batch_to_ltdb(
                 if out_row_updates is not None:
                     out_row_updates.extend(resp_data.get("row_updates", []) or [])
                     out_row_updates.extend(resp_data.get("async_row_updates", []) or [])
+                if out_agent_commands is not None:
+                    out_agent_commands.extend(resp_data.get("agent_commands", []) or [])
                 logger.info(
                     f"Successfully pushed batch to LTDB ({len(rows)} sent, {len(confirmed)} confirmed by cloud)"
                 )
@@ -668,14 +715,233 @@ def apply_row_updates_to_excel(
     )
 
 
+def execute_agent_commands(
+    commands: List[Dict[str, Any]],
+    base_dir: Path,
+    runtime_config: Dict[str, Any],
+    local_config: Dict[str, Any],
+    agent_state: Optional[Dict[str, Any]],
+    target_date: date,
+    logger: logging.Logger,
+) -> None:
+    """
+    Sequentially executes remote management commands received from LTDB in the single thread:
+    - `update_excel_path`: updates runtime_config["excel_file_path"] in RAM, persists once to config.json,
+      and resets last_seen_mtime to hook onto the new file immediately.
+    - `force_sync`: clears the daily hash cache and forces a full scan & push on the next tick.
+    - `update_config`: updates operational parameters in RAM and persists once to config.json.
+    """
+    if not commands:
+        return
+
+    state_dir = base_dir / "state"
+    fallback_cfg = local_config.setdefault("fallback_config", {})
+
+    for cmd in commands:
+        if not isinstance(cmd, dict):
+            continue
+        cmd_name = str(cmd.get("command") or "").strip().lower()
+        if not cmd_name:
+            continue
+
+        if cmd_name == "update_excel_path":
+            new_path = str(cmd.get("new_excel_path") or cmd.get("excel_file_path") or "").strip()
+            if new_path:
+                logger.info(f"Executing remote command 'update_excel_path' -> {new_path}")
+                runtime_config["excel_file_path"] = new_path
+                fallback_cfg["excel_file_path"] = new_path
+                save_local_config(base_dir, local_config)
+                if agent_state is not None:
+                    agent_state["last_seen_mtime"] = None
+                    agent_state["active_excel_path"] = None
+                    agent_state["cached_rows_by_idx"] = {}
+
+        elif cmd_name == "force_sync":
+            logger.info("Executing remote command 'force_sync': clearing daily hash state and scheduling full scan.")
+            clear_daily_state(state_dir, target_date)
+            if agent_state is not None:
+                agent_state["force_sync_requested"] = True
+                agent_state["last_seen_mtime"] = None
+                agent_state["cached_rows_by_idx"] = {}
+
+        elif cmd_name == "update_config":
+            raw_data = cmd.get("data")
+            update_data = (
+                raw_data
+                if isinstance(raw_data, dict)
+                else {k: v for k, v in cmd.items() if k != "command"}
+            )
+            if update_data:
+                logger.info(f"Executing remote command 'update_config' -> {update_data}")
+                reset_mtime = False
+                runtime_keys = {
+                    "excel_file_path",
+                    "excel_code_column",
+                    "start_row",
+                    "excel_polling_interval",
+                    "retention_days",
+                    "control_polling_interval_seconds",
+                    "fast_watcher_interval_seconds",
+                }
+                local_top_keys = {
+                    "control_polling_interval_seconds",
+                    "fast_watcher_interval_seconds",
+                    "heartbeat_interval_seconds",
+                    "http_timeout_seconds",
+                    "target_os",
+                }
+                for key, val in update_data.items():
+                    if val is None:
+                        continue
+                    if key in ("excel_file_path", "excel_code_column", "start_row"):
+                        if runtime_config.get(key) != val:
+                            reset_mtime = True
+                    if key in runtime_keys:
+                        runtime_config[key] = val
+                        fallback_cfg[key] = val
+                    if key in local_top_keys:
+                        local_config[key] = val
+
+                save_local_config(base_dir, local_config)
+                if reset_mtime and agent_state is not None:
+                    agent_state["last_seen_mtime"] = None
+                    agent_state["active_excel_path"] = None
+                    agent_state["cached_rows_by_idx"] = {}
+        else:
+            logger.warning(f"Unknown remote command ignored: {cmd_name}")
+
+
+def _apply_updates_and_sync_state(
+    excel_path: Path,
+    row_updates: List[Dict[str, Any]],
+    current_rows_by_idx: Dict[int, Dict[str, Any]],
+    saved_hashes: Dict[str, str],
+    pending_rows: set[int],
+    state_dir: Path,
+    target_date: date,
+    target_os: str,
+    start_row: int,
+    code_col: str,
+    logger: logging.Logger,
+    agent_state: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Applies LTDB synchronous (`row_updates`) or asynchronous (`async_row_updates`) updates
+    to the Excel file via COM/openpyxl, recalculates SHA-256 hashes for updated rows, updates
+    `pending_rows`, persists daily state, and immediately refreshes `last_seen_mtime` to prevent
+    self-triggering loops on the next 0.5s Fast Data Watcher tick.
+    """
+    if row_updates:
+        # Ensure current_rows_by_idx is available if an async update modifies price or phone
+        needs_row_context = any(
+            u.get("selling_price") is not None or u.get("col_o_phone") is not None
+            for u in row_updates
+        )
+        if not current_rows_by_idx and needs_row_context:
+            if agent_state is not None and agent_state.get("cached_rows_by_idx"):
+                current_rows_by_idx = {
+                    k: dict(v) for k, v in agent_state["cached_rows_by_idx"].items()
+                }
+            else:
+                try:
+                    loaded_rows = read_excel_rows(
+                        excel_path, start_row=start_row, code_column=code_col, logger=logger
+                    )
+                    current_rows_by_idx = {
+                        int(r["excel_row_index"]): dict(r) for r in loaded_rows
+                    }
+                except Exception:
+                    current_rows_by_idx = {}
+
+        apply_row_updates_to_excel(
+            excel_path=excel_path,
+            row_updates=row_updates,
+            current_rows_by_idx=current_rows_by_idx,
+            target_os=target_os,
+            logger=logger,
+        )
+        recalculate_hashes_for_updated_rows(
+            saved_hashes=saved_hashes,
+            current_rows_by_idx=current_rows_by_idx,
+            row_updates=row_updates,
+        )
+
+        for upd in row_updates:
+            upd_idx = upd.get("excel_row_index")
+            if upd_idx is None:
+                continue
+            upd_idx_int = int(upd_idx)
+            col_p = str(upd.get("col_p_status") or "")
+            is_pending = bool(upd.get("identification_pending")) or (
+                "Salva il file per confermare" in col_p
+            )
+            if is_pending:
+                pending_rows.add(upd_idx_int)
+            else:
+                pending_rows.discard(upd_idx_int)
+
+    save_daily_state(state_dir, target_date, saved_hashes, pending_rows=pending_rows)
+
+    if agent_state is not None:
+        if current_rows_by_idx:
+            agent_state["cached_rows_by_idx"] = {
+                k: dict(v) for k, v in current_rows_by_idx.items()
+            }
+        post_save_mtime = get_file_mtime(excel_path)
+        if post_save_mtime is not None:
+            agent_state["last_seen_mtime"] = post_save_mtime
+        agent_state["active_excel_path"] = str(excel_path)
+
+
+def _get_control_poll_interval(config: Dict[str, Any], local_config: Dict[str, Any]) -> float:
+    """
+    Determines the Timer 2 (Control & Status Polling) interval in seconds.
+    Prefers explicit `control_polling_interval_seconds`, falling back to `heartbeat_interval_seconds`
+    or `excel_polling_interval`.
+    """
+    if "control_polling_interval_seconds" in config:
+        return float(config["control_polling_interval_seconds"])
+    if "control_polling_interval_seconds" in local_config:
+        return float(local_config["control_polling_interval_seconds"])
+    if "heartbeat_interval_seconds" in local_config:
+        return float(local_config["heartbeat_interval_seconds"])
+    if "excel_polling_interval" in config:
+        return float(config["excel_polling_interval"])
+    return DEFAULT_CONTROL_POLL_INTERVAL
+
+
+def _build_agent_status(
+    configured_str: str,
+    excel_path: Optional[Path],
+    file_readable: bool,
+    agent_state: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Builds the diagnostic status payload sent to LTDB during pushes and control polls."""
+    return {
+        "configured_file": configured_str or None,
+        "monitored_file": str(excel_path) if excel_path is not None else None,
+        "file_readable": bool(file_readable and excel_path is not None),
+        "last_sync_at": agent_state.get("last_sync_iso") if agent_state is not None else None,
+    }
+
+
 def run_cycle(
     base_dir: Path,
     config: Dict[str, Any],
     local_config: Dict[str, Any],
     logger: logging.Logger,
-    last_push_time: float
+    last_push_time: float = 0.0,
+    agent_state: Optional[Dict[str, Any]] = None,
 ) -> float:
-    """Executes a single polling iteration. Returns updated last_push_time."""
+    """
+    Executes a single iteration of the Single-Thread Dual-Timer loop:
+    - Timer 1 (Fast Data Watcher, every 0.5s): checks if the active Excel file mtime changed
+      (or force_sync was requested). Reads rows, pushes delta + pending rows, applies live
+      COM/openpyxl updates, recalculates hashes, and aligns `last_seen_mtime`.
+    - Timer 2 (Control & Status Polling, every 5-10s): runs ALWAYS (even when `excel_path is None`),
+      sends diagnostic status to LTDB, executes remote `agent_commands`, and applies `async_row_updates`.
+    Returns updated last_push_time.
+    """
     today = date.today()
     candidates = get_candidate_excel_paths(config)
     configured_str = (config.get("excel_file_path") or "").strip()
@@ -685,139 +951,244 @@ def run_cycle(
     base_url = local_config.get("ltdb_base_url", "http://127.0.0.1:8000")
     push_endpoint = local_config.get("push_endpoint", "/api/v1/excel-synchronization/push-batch")
     timeout = local_config.get("http_timeout_seconds", 10)
-    heartbeat_interval = local_config.get("heartbeat_interval_seconds", 180)
+    control_interval = _get_control_poll_interval(config, local_config)
     target_os = str(
         local_config.get("target_os")
         or ("windows" if sys.platform == "win32" else "mac")
     ).strip().lower()
     state_dir = base_dir / "state"
+    now = time.time()
 
-    excel_path = None
-    current_rows = None
-
+    # 1. Resolve candidate Excel file eligible for today (via cheap filesystem mtime check)
+    excel_path: Optional[Path] = None
     for candidate in candidates:
-        if not is_file_eligible_for_today(candidate, logger):
-            continue
-        try:
-            current_rows = read_excel_rows(candidate, start_row=start_row, code_column=code_col, logger=logger)
+        if is_file_eligible_for_today(candidate, logger):
             excel_path = candidate
             if configured_str and candidate != Path(configured_str):
                 logger.info(
                     f"Configured Excel file not active today; fallback reading from: {candidate}"
                 )
             break
-        except Exception as exc:
-            logger.error(f"Failed to read Excel file at {candidate}: {exc}")
-            continue
 
-    if excel_path is None or current_rows is None:
-        return last_push_time
+    current_mtime = get_file_mtime(excel_path) if excel_path is not None else None
+    file_readable = excel_path is not None and current_mtime is not None
 
-    saved_hashes = load_daily_state(state_dir, today)
-    pending_rows = load_pending_rows(state_dir, today)
+    # Determine whether Timer 1 (Fast Data Watcher) should read the Excel file on this tick
+    force_sync = bool(agent_state.get("force_sync_requested")) if agent_state is not None else False
+    mtime_changed = True
+    if agent_state is not None and not force_sync:
+        last_mtime = agent_state.get("last_seen_mtime")
+        last_path = agent_state.get("active_excel_path")
+        if (
+            excel_path is not None
+            and last_mtime is not None
+            and last_path == str(excel_path)
+            and current_mtime == last_mtime
+        ):
+            mtime_changed = False
 
-    delta_rows = []
-    computed_hashes_by_row = {}
+    pushed_in_timer1 = False
     current_rows_by_idx: Dict[int, Dict[str, Any]] = {}
 
-    for row in current_rows:
-        row_idx_int = int(row["excel_row_index"])
-        row_idx_str = str(row_idx_int)
-        current_rows_by_idx[row_idx_int] = dict(row)
-        h = compute_row_hash(row)
-        computed_hashes_by_row[row_idx_str] = h
+    # -----------------------------------------------------------------------
+    # TIMER 1: Fast Data Watcher (triggers only when file exists & mtime changed or force_sync)
+    # -----------------------------------------------------------------------
+    if excel_path is not None and mtime_changed:
+        current_rows = None
+        try:
+            current_rows = read_excel_rows(
+                excel_path, start_row=start_row, code_column=code_col, logger=logger
+            )
+        except Exception as exc:
+            logger.error(f"Failed to read Excel file at {excel_path}: {exc}")
+            file_readable = False
+            # Try next eligible fallback candidate if primary failed to parse
+            for candidate in candidates:
+                if candidate == excel_path or not is_file_eligible_for_today(candidate, logger):
+                    continue
+                try:
+                    current_rows = read_excel_rows(
+                        candidate, start_row=start_row, code_column=code_col, logger=logger
+                    )
+                    excel_path = candidate
+                    current_mtime = get_file_mtime(excel_path)
+                    file_readable = True
+                    break
+                except Exception as fallback_exc:
+                    logger.error(f"Failed to read fallback Excel file at {candidate}: {fallback_exc}")
 
-        # Re-send rows whose hash changed OR that are awaiting 2nd-save confirmation (IDENTIFICATION_PENDING)
-        if (
-            row_idx_str not in saved_hashes
-            or saved_hashes[row_idx_str] != h
-            or row_idx_int in pending_rows
-        ):
-            delta_rows.append(row)
+        if current_rows is not None and excel_path is not None:
+            if agent_state is not None and force_sync:
+                agent_state["force_sync_requested"] = False
 
-    now = time.time()
+            saved_hashes = load_daily_state(state_dir, today)
+            pending_rows = load_pending_rows(state_dir, today)
 
-    if delta_rows:
-        logger.info(f"Detected {len(delta_rows)} modified/new/pending row(s). Pushing delta to LTDB...")
-        received_row_updates: List[Dict[str, Any]] = []
-        confirmed_indexes = push_batch_to_ltdb(
+            delta_rows = []
+            computed_hashes_by_row: Dict[str, str] = {}
+
+            for row in current_rows:
+                row_idx_int = int(row["excel_row_index"])
+                row_idx_str = str(row_idx_int)
+                current_rows_by_idx[row_idx_int] = dict(row)
+                h = compute_row_hash(row)
+                computed_hashes_by_row[row_idx_str] = h
+
+                # Re-send rows whose hash changed OR that are awaiting 2nd-save confirmation (IDENTIFICATION_PENDING)
+                if (
+                    row_idx_str not in saved_hashes
+                    or saved_hashes[row_idx_str] != h
+                    or row_idx_int in pending_rows
+                ):
+                    delta_rows.append(row)
+
+            if agent_state is not None:
+                agent_state["cached_rows_by_idx"] = {
+                    k: dict(v) for k, v in current_rows_by_idx.items()
+                }
+
+            if delta_rows:
+                logger.info(
+                    f"Detected {len(delta_rows)} modified/new/pending row(s). Pushing delta to LTDB..."
+                )
+                received_row_updates: List[Dict[str, Any]] = []
+                received_commands: List[Dict[str, Any]] = []
+                agent_status = _build_agent_status(
+                    configured_str, excel_path, file_readable, agent_state
+                )
+                confirmed_indexes = push_batch_to_ltdb(
+                    base_url=base_url,
+                    push_endpoint=push_endpoint,
+                    target_date=today,
+                    rows=delta_rows,
+                    timeout=timeout,
+                    logger=logger,
+                    out_row_updates=received_row_updates,
+                    agent_status=agent_status,
+                    out_agent_commands=received_commands,
+                )
+
+                if confirmed_indexes is not None:
+                    pushed_in_timer1 = True
+                    now = time.time()
+                    last_push_time = now
+                    if agent_state is not None:
+                        agent_state["last_push_time"] = now
+                        agent_state["last_control_poll_time"] = now
+                        agent_state["last_sync_iso"] = datetime.now().isoformat()
+
+                    # 1. Update baseline state for confirmed rows
+                    for idx in confirmed_indexes:
+                        idx_str = str(idx)
+                        if idx_str in computed_hashes_by_row:
+                            saved_hashes[idx_str] = computed_hashes_by_row[idx_str]
+
+                    # 2. Apply LTDB row_updates to Excel, recalculate hashes, save state, and sync last_seen_mtime
+                    _apply_updates_and_sync_state(
+                        excel_path=excel_path,
+                        row_updates=received_row_updates,
+                        current_rows_by_idx=current_rows_by_idx,
+                        saved_hashes=saved_hashes,
+                        pending_rows=pending_rows,
+                        state_dir=state_dir,
+                        target_date=today,
+                        target_os=target_os,
+                        start_row=start_row,
+                        code_col=code_col,
+                        logger=logger,
+                        agent_state=agent_state,
+                    )
+
+                    # 3. Execute any piggybacked remote commands sequentially
+                    if received_commands:
+                        execute_agent_commands(
+                            commands=received_commands,
+                            base_dir=base_dir,
+                            runtime_config=config,
+                            local_config=local_config,
+                            agent_state=agent_state,
+                            target_date=today,
+                            logger=logger,
+                        )
+                    return last_push_time
+            else:
+                # File was saved/inspected with 0 delta rows -> align last_seen_mtime so we don't re-read next tick
+                if agent_state is not None and current_mtime is not None:
+                    agent_state["last_seen_mtime"] = current_mtime
+                    agent_state["active_excel_path"] = str(excel_path)
+
+    # -----------------------------------------------------------------------
+    # TIMER 2: Control & Status Polling (runs every 5-10s even if excel_path is None!)
+    # -----------------------------------------------------------------------
+    last_control_time = (
+        float(agent_state["last_control_poll_time"])
+        if agent_state is not None and "last_control_poll_time" in agent_state
+        else last_push_time
+    )
+
+    if not pushed_in_timer1 and (now - last_control_time) >= control_interval:
+        # Backward compatibility when called in legacy unit tests without agent_state and excel_path is None
+        if agent_state is None and excel_path is None:
+            return last_push_time
+
+        logger.debug("Control & Status Polling threshold reached. Polling LTDB...")
+        hb_updates: List[Dict[str, Any]] = []
+        hb_commands: List[Dict[str, Any]] = []
+        agent_status = _build_agent_status(
+            configured_str, excel_path, file_readable, agent_state
+        )
+        poll_ack = push_batch_to_ltdb(
             base_url=base_url,
             push_endpoint=push_endpoint,
             target_date=today,
-            rows=delta_rows,
+            rows=[],
             timeout=timeout,
             logger=logger,
-            out_row_updates=received_row_updates,
+            out_row_updates=hb_updates,
+            agent_status=agent_status,
+            out_agent_commands=hb_commands,
         )
 
-        if confirmed_indexes is not None:
-            # 1. Update baseline state for confirmed rows
-            for idx in confirmed_indexes:
-                idx_str = str(idx)
-                if idx_str in computed_hashes_by_row:
-                    saved_hashes[idx_str] = computed_hashes_by_row[idx_str]
+        now = time.time()
+        last_push_time = now
+        if agent_state is not None:
+            agent_state["last_control_poll_time"] = now
+            agent_state["last_push_time"] = now
+            if poll_ack is not None:
+                agent_state["last_sync_iso"] = datetime.now().isoformat()
 
-            # 2. Apply LTDB row_updates to Excel and recalculate hashes for updated rows
-            if received_row_updates:
-                apply_row_updates_to_excel(
-                    excel_path=excel_path,
-                    row_updates=received_row_updates,
-                    current_rows_by_idx=current_rows_by_idx,
-                    target_os=target_os,
-                    logger=logger,
-                )
-                recalculate_hashes_for_updated_rows(
-                    saved_hashes=saved_hashes,
-                    current_rows_by_idx=current_rows_by_idx,
-                    row_updates=received_row_updates,
-                )
-
-            # 3. Update IDENTIFICATION_PENDING tracking from LTDB row_updates
-            for upd in received_row_updates:
-                upd_idx = upd.get("excel_row_index")
-                if upd_idx is None:
-                    continue
-                upd_idx_int = int(upd_idx)
-                col_p = str(upd.get("col_p_status") or "")
-                is_pending = bool(upd.get("identification_pending")) or (
-                    "Salva il file per confermare" in col_p
-                )
-                if is_pending:
-                    pending_rows.add(upd_idx_int)
-                else:
-                    pending_rows.discard(upd_idx_int)
-
-            save_daily_state(state_dir, today, saved_hashes, pending_rows=pending_rows)
-            return now
-    else:
-        # Check heartbeat if idle for > heartbeat_interval
-        if (now - last_push_time) >= heartbeat_interval:
-            logger.debug("Idle threshold reached. Sending heartbeat to LTDB...")
-            hb_updates: List[Dict[str, Any]] = []
-            push_batch_to_ltdb(
-                base_url=base_url,
-                push_endpoint=push_endpoint,
+        # 1. Execute remote commands sequentially (e.g. update_excel_path, force_sync, update_config)
+        if hb_commands:
+            execute_agent_commands(
+                commands=hb_commands,
+                base_dir=base_dir,
+                runtime_config=config,
+                local_config=local_config,
+                agent_state=agent_state,
                 target_date=today,
-                rows=[],
-                timeout=timeout,
                 logger=logger,
-                out_row_updates=hb_updates,
             )
-            if hb_updates:
-                apply_row_updates_to_excel(
-                    excel_path=excel_path,
-                    row_updates=hb_updates,
-                    current_rows_by_idx=current_rows_by_idx,
-                    target_os=target_os,
-                    logger=logger,
-                )
-                recalculate_hashes_for_updated_rows(
-                    saved_hashes=saved_hashes,
-                    current_rows_by_idx=current_rows_by_idx,
-                    row_updates=hb_updates,
-                )
-                save_daily_state(state_dir, today, saved_hashes, pending_rows=pending_rows)
-            return now
+
+        # 2. Apply any async_row_updates (e.g. WhatsApp registration completion) live to Excel
+        if hb_updates and excel_path is not None:
+            saved_hashes = load_daily_state(state_dir, today)
+            pending_rows = load_pending_rows(state_dir, today)
+            _apply_updates_and_sync_state(
+                excel_path=excel_path,
+                row_updates=hb_updates,
+                current_rows_by_idx=current_rows_by_idx,
+                saved_hashes=saved_hashes,
+                pending_rows=pending_rows,
+                state_dir=state_dir,
+                target_date=today,
+                target_os=target_os,
+                start_row=start_row,
+                code_col=code_col,
+                logger=logger,
+                agent_state=agent_state,
+            )
+
+        return last_push_time
 
     return last_push_time
 
@@ -833,24 +1204,49 @@ def main():
     retention_days = int(runtime_config.get("retention_days", 30))
     cleanup_old_files(base_dir, retention_days, logger)
 
-    polling_interval = int(runtime_config.get("excel_polling_interval", 30))
-    last_push_time = time.time()
+    fast_tick_interval = float(
+        runtime_config.get(
+            "fast_watcher_interval_seconds",
+            local_config.get("fast_watcher_interval_seconds", DEFAULT_FAST_WATCHER_INTERVAL),
+        )
+    )
+    control_interval = _get_control_poll_interval(runtime_config, local_config)
+    agent_state = create_agent_state()
+    last_push_time = agent_state["last_push_time"]
     last_cleaned_date = date.today()
 
-    logger.info(f"Entering polling loop. Polling interval: {polling_interval}s, Retention: {retention_days} days.")
+    logger.info(
+        f"Entering Single-Thread Dual-Timer loop. "
+        f"Fast Watcher: {fast_tick_interval}s, Control Polling: {control_interval}s, "
+        f"Retention: {retention_days} days."
+    )
 
     while True:
         try:
             today = date.today()
+            retention_days = int(runtime_config.get("retention_days", 30))
             if today != last_cleaned_date:
                 cleanup_old_files(base_dir, retention_days, logger)
                 last_cleaned_date = today
 
-            last_push_time = run_cycle(base_dir, runtime_config, local_config, logger, last_push_time)
+            last_push_time = run_cycle(
+                base_dir=base_dir,
+                config=runtime_config,
+                local_config=local_config,
+                logger=logger,
+                last_push_time=last_push_time,
+                agent_state=agent_state,
+            )
+            fast_tick_interval = float(
+                runtime_config.get(
+                    "fast_watcher_interval_seconds",
+                    local_config.get("fast_watcher_interval_seconds", DEFAULT_FAST_WATCHER_INTERVAL),
+                )
+            )
         except Exception as exc:
             logger.error(f"Unexpected error in polling loop: {exc}")
 
-        time.sleep(polling_interval)
+        time.sleep(fast_tick_interval)
 
 
 if __name__ == "__main__":
