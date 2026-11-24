@@ -7,6 +7,12 @@
 const API_BASE = '/api/v1';
 
 function _sanitizeDetail(detail) {
+    if (detail && typeof detail === 'object') {
+        if (typeof detail.message === 'string' && detail.message.trim()) {
+            return _sanitizeDetail(detail.message);
+        }
+        return "Si è verificato un errore imprevisto durante l'elaborazione.";
+    }
     if (!detail || typeof detail !== 'string') {
         return "Si è verificato un errore imprevisto durante l'elaborazione.";
     }
@@ -37,11 +43,22 @@ async function _handleResponse(res) {
     }
     if (!res.ok) {
         let detail = `HTTP ${res.status}`;
+        let detailObj = null;
         try {
             const body = await res.json();
-            detail = body.detail || detail;
+            if (body && body.detail !== undefined) {
+                detail = body.detail;
+                if (body.detail && typeof body.detail === 'object') {
+                    detailObj = body.detail;
+                }
+            }
         } catch { /* ignore parse error, use default */ }
-        throw new Error(_sanitizeDetail(detail));
+        const err = new Error(_sanitizeDetail(detail));
+        err.status = res.status;
+        if (detailObj) {
+            err.detailData = detailObj;
+        }
+        throw err;
     }
     const ct = res.headers.get('Content-Type') || '';
     if (ct.includes('application/json')) return res.json();
@@ -418,6 +435,97 @@ export async function closeWarehouseAnomaly(blueprintId) {
     });
     return _handleResponse(res);
 }
+
+// --- CRM Customers & Loyalty ---
+
+export async function getCustomers({ q = '', status = '', birthdayThisWeek = false, signal } = {}) {
+    const params = new URLSearchParams();
+    if (q && q.trim()) params.set('q', q.trim());
+    if (status) params.set('status', status);
+    if (birthdayThisWeek) params.set('birthday_this_week', 'true');
+
+    const qs = params.toString();
+    const url = `${API_BASE}/customers${qs ? `?${qs}` : ''}`;
+    const res = await fetch(url, { signal });
+    return _handleResponse(res);
+}
+
+export async function getCustomerDetail(customerId) {
+    const res = await fetch(`${API_BASE}/customers/${encodeURIComponent(customerId)}`);
+    return _handleResponse(res);
+}
+
+export async function startCustomerOnboarding(phoneNumber) {
+    const res = await fetch(`${API_BASE}/customers/onboarding`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_number: phoneNumber }),
+    });
+    return _handleResponse(res);
+}
+
+export async function resendCustomerWhatsapp(customerId) {
+    const res = await fetch(`${API_BASE}/customers/${encodeURIComponent(customerId)}/resend-whatsapp`, {
+        method: 'POST',
+    });
+    return _handleResponse(res);
+}
+
+export async function mockCompleteCustomerOnboarding(customerId, payload) {
+    const res = await fetch(`${API_BASE}/customers/${encodeURIComponent(customerId)}/mock-complete-onboarding`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    return _handleResponse(res);
+}
+
+export async function mockQuickReplyOtp(customerId, discountRuleCode) {
+    const res = await fetch(`${API_BASE}/customers/${encodeURIComponent(customerId)}/mock-quick-reply-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ discount_rule_code: discountRuleCode }),
+    });
+    return _handleResponse(res);
+}
+
+export async function updateCustomer(customerId, payload) {
+    const res = await fetch(`${API_BASE}/customers/${encodeURIComponent(customerId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    return _handleResponse(res);
+}
+
+export async function adjustCustomerPoints(customerId, pointsDelta) {
+    const res = await fetch(`${API_BASE}/customers/${encodeURIComponent(customerId)}/points-adjustment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ points_delta: pointsDelta }),
+    });
+    return _handleResponse(res);
+}
+
+export async function anonymizeCustomer(customerId) {
+    const res = await fetch(`${API_BASE}/customers/${encodeURIComponent(customerId)}/anonymize`, {
+        method: 'POST',
+    });
+    return _handleResponse(res);
+}
+
+export async function mergeCustomers(sourceCustomerId, targetCustomerId) {
+    const res = await fetch(`${API_BASE}/customers/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            source_customer_id: sourceCustomerId,
+            target_customer_id: targetCustomerId,
+        }),
+    });
+    return _handleResponse(res);
+}
+
 
 
 

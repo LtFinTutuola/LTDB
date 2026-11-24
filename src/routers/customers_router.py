@@ -90,7 +90,7 @@ def start_customer_onboarding(
     payload: CustomerOnboardingRequest,
     response: Response,
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(get_current_user),
+    current_user: AuthUser = Depends(require_cassa_or_admin),
 ):
     """
     Initiates customer onboarding via WhatsApp Flow from the cash register:
@@ -309,7 +309,7 @@ def anonymize_customer_profile(
 def resend_customer_onboarding_whatsapp(
     customer_id: str,
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(get_current_user),
+    current_user: AuthUser = Depends(require_cassa_or_admin),
 ):
     """
     Re-sends the WhatsApp Flow to a PENDING_ONBOARDING customer and resets their 72h TTL.
@@ -348,7 +348,7 @@ def mock_complete_customer_onboarding(
     customer_id: str,
     payload: WhatsAppFlowCompletionPayload,
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(get_current_user),
+    current_user: AuthUser = Depends(require_cassa_or_admin),
 ):
     """
     Development/Test helper with Mock WABA: simulates the customer submitting the WhatsApp Flow
@@ -386,7 +386,7 @@ def mock_quick_reply_redemption_otp(
     customer_id: str,
     payload: WhatsAppQuickReplyPayload,
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(get_current_user),
+    current_user: AuthUser = Depends(require_cassa_or_admin),
 ):
     """
     Development/Test helper with Mock WABA: simulates the customer tapping a discount Quick Reply

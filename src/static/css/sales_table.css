@@ -225,6 +225,113 @@
     white-space: nowrap;
 }
 
+.col-customer {
+    width: 175px;
+    min-width: 155px;
+    max-width: 220px;
+    vertical-align: middle !important;
+    padding: 4px 8px !important;
+}
+
+/* Transaction Partition & Rowspan Customer Card */
+.sales-table tbody tr.tx-group-single,
+.sales-table tbody tr.tx-group-start,
+.sales-table tbody tr.tx-group-mid,
+.sales-table tbody tr.tx-group-end {
+    background: rgba(168, 199, 250, 0.03);
+}
+
+.sales-table tbody tr.tx-group-start td {
+    border-top: 2px solid rgba(168, 199, 250, 0.32);
+}
+
+.sales-table tbody tr.tx-group-end td {
+    border-bottom: 2px solid rgba(168, 199, 250, 0.32);
+}
+
+.sales-table tbody td.col-customer--spanned {
+    background: rgba(168, 199, 250, 0.06);
+    border-left: 2px solid rgba(168, 199, 250, 0.35);
+    height: auto !important;
+}
+
+.tx-customer-card {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.tx-customer-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 12px;
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.tx-customer-link:hover {
+    text-decoration: underline;
+    color: var(--accent-hover);
+}
+
+.tx-customer-link--pending {
+    color: #e3b341;
+}
+
+.tx-customer-badges {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.tx-mini-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 999px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.tx-mini-badge--pending {
+    background: rgba(210, 153, 34, 0.16);
+    color: #fcd34d;
+    border: 1px solid rgba(210, 153, 34, 0.38);
+}
+
+.tx-mini-badge--pts-pos {
+    background: rgba(63, 185, 80, 0.15);
+    color: #3fb950;
+}
+
+.tx-mini-badge--pts-neg {
+    background: rgba(248, 81, 73, 0.15);
+    color: #f85149;
+}
+
+.tx-mini-badge--discount {
+    background: rgba(168, 199, 250, 0.14);
+    color: var(--accent);
+    border: 1px solid rgba(168, 199, 250, 0.3);
+}
+
+.tx-group-caption {
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
 .col-price-list {
     width: 130px;
     text-align: right;
@@ -1602,6 +1709,13 @@
     }
 
     .sales-table--mobile td.col-article {
+        overflow: hidden;
+    }
+
+    .sales-table--mobile .col-customer {
+        width: 150px;
+        min-width: 150px;
+        max-width: 150px;
         overflow: hidden;
     }
 

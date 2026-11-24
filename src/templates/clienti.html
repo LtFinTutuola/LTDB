@@ -1,0 +1,390 @@
+{% extends "base.html" %}
+
+{% block title %}Clienti - La Triestina{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/tabs.css">
+<link rel="stylesheet" href="/static/css/customers.css">
+<script>
+  window.__LTDB_CRM_CONFIG__ = {{ crm_config_json | safe }};
+  window.__LTDB_USER__ = {{ user_json | safe }};
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="customers-page customers-page--no-selection" id="customers-page">
+  <!-- LEFT MASTER: Customer List & Search -->
+  <section class="customers-master">
+    <header class="customers-header">
+      <div class="customers-header__title-group">
+        <h1 class="customers-header__title">
+          <span class="material-symbols-rounded" style="color: var(--accent);">group</span>
+          Clienti &amp; Fedeltà
+        </h1>
+        <p class="customers-header__subtitle">Anagrafica clienti, saldo punti, storico acquisti e consensi GDPR</p>
+      </div>
+      <div class="customers-header__actions">
+        <span id="customers-count-badge" style="font-size: 12px; color: var(--text-muted);">Caricamento...</span>
+        <button type="button" id="btn-new-customer-whatsapp" class="btn-crm-primary" style="display: none;">
+          <span class="material-symbols-rounded" style="font-size: 18px;">person_add</span>
+          <span>Nuovo Cliente (WhatsApp)</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="customers-toolbar">
+      <div class="customers-search">
+        <span class="material-symbols-rounded search-icon">search</span>
+        <input type="text" id="customers-search-input" placeholder="Cerca nome, cognome o cellulare..."
+          autocomplete="off">
+        <button type="button" id="btn-clear-customer-search" class="customers-search__clear" title="Pulisci ricerca"
+          aria-label="Pulisci ricerca">✕</button>
+      </div>
+
+      <div class="customers-filters" id="customers-filter-pills">
+        <button type="button" class="filter-pill active" data-filter="ALL">Tutti</button>
+        <button type="button" class="filter-pill" data-filter="ACTIVE">Attivi</button>
+        <button type="button" class="filter-pill" data-filter="PENDING_ONBOARDING">In attesa WhatsApp</button>
+        <button type="button" class="filter-pill" data-filter="BIRTHDAY">🎂 Compleanno</button>
+        <button type="button" class="filter-pill" data-filter="INACTIVE">Inattivi</button>
+      </div>
+    </div>
+
+    <div class="customers-table-container">
+      <table class="customers-table" id="customers-table">
+        <thead>
+          <tr>
+            <th>Cliente</th>
+            <th>Cellulare</th>
+            <th>Stato</th>
+            <th>Saldo Punti</th>
+            <th class="col-hide-mobile">Ultimo Acquisto</th>
+            <th class="col-hide-mobile">Consensi</th>
+          </tr>
+        </thead>
+        <tbody id="customers-tbody">
+          <!-- Populated dynamically by customers_page.js -->
+        </tbody>
+      </table>
+
+      <div id="customers-loading" style="padding: 36px; text-align: center; color: var(--text-muted); font-size: 13px;">
+        Caricamento anagrafica clienti...
+      </div>
+
+      <div id="customers-empty"
+        style="display: none; padding: 42px 20px; text-align: center; color: var(--text-muted);">
+        <span class="material-symbols-rounded"
+          style="font-size: 38px; color: var(--border-color); display: block; margin-bottom: 8px;">group_off</span>
+        <p style="margin: 0; font-size: 13.5px;">Nessun cliente corrisponde ai criteri selezionati.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT DETAIL: Customer Profile Workspace -->
+  <aside class="customers-detail" id="customers-detail-panel">
+    <div class="customers-detail__resizer" id="customers-detail-resizer" title="Trascina per ridimensionare la scheda">
+    </div>
+
+    <div class="customers-mobile-topbar">
+      <button type="button" id="btn-mobile-back-customers"
+        style="display: inline-flex; align-items: center; gap: 6px; background: transparent; border: none; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer;">
+        <span class="material-symbols-rounded" style="font-size: 18px;">arrow_back</span>
+        <span>Torna alla lista clienti</span>
+      </button>
+    </div>
+
+    <!-- Empty Placeholder -->
+    <div class="customers-detail__empty" id="customer-detail-empty">
+      <span class="material-symbols-rounded">badge</span>
+      <div style="font-size: 14px; font-weight: 600; color: var(--text-secondary);">Nessun cliente selezionato</div>
+      <div style="font-size: 12.5px; max-width: 260px;">Seleziona una riga dalla tabella per consultare saldo punti,
+        transazioni, libro mastro e consensi.</div>
+    </div>
+
+    <!-- Loaded Profile Content -->
+    <div class="customers-detail__content" id="customer-detail-content" style="display: none;">
+      <div class="detail-profile-header">
+        <div class="detail-profile-top">
+          <div>
+            <h2 class="detail-profile-name" id="detail-cust-name">-</h2>
+            <div class="detail-profile-meta" id="detail-cust-meta" style="margin-top: 6px;"></div>
+          </div>
+          <button type="button" id="btn-close-customer-detail" class="detail-close-btn detail-close-btn--desktop"
+            title="Chiudi scheda">
+            <span class="material-symbols-rounded" style="font-size: 20px;">close</span>
+          </button>
+        </div>
+
+        <div id="detail-bday-banner" class="bday-promo-banner" style="display: none;">
+          <span>🎂</span>
+          <span>Finestra Compleanno Attiva — Punti Doppi (x2) sugli acquisti!</span>
+        </div>
+
+        <div class="detail-kpi-grid">
+          <div class="kpi-card">
+            <span class="kpi-card__label">Saldo Punti</span>
+            <span class="kpi-card__value kpi-card__value--accent" id="kpi-points">0 pt</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-card__label">Totale Speso</span>
+            <span class="kpi-card__value" id="kpi-total-spent">€ 0,00</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-card__label">Transazioni</span>
+            <span class="kpi-card__value" id="kpi-tx-count">0</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-card__label">Scontrino Medio</span>
+            <span class="kpi-card__value" id="kpi-avg-ticket">€ 0,00</span>
+          </div>
+        </div>
+
+        <!-- Contextual Onboarding / Mock Simulator Box (cassa & admin only) -->
+        <div id="detail-contextual-actions" style="display: none;"></div>
+      </div>
+
+      <!-- Detail Internal Tabs -->
+      <div class="detail-tabs-bar">
+        <div class="tabs" id="detail-tabs">
+          <button type="button" class="tab active" data-detail-tab="transactions">Transazioni</button>
+          <button type="button" class="tab" data-detail-tab="ledger">Storico Punti</button>
+          <button type="button" class="tab" data-detail-tab="manage">Anagrafica &amp; Gestione</button>
+        </div>
+      </div>
+
+      <div class="detail-tab-body">
+        <!-- TAB 1: Transactions History -->
+        <div class="detail-tab-pane active" id="pane-transactions"></div>
+
+        <!-- TAB 2: Immutable Loyalty Point Ledger -->
+        <div class="detail-tab-pane" id="pane-ledger"></div>
+
+        <!-- TAB 3: Profile Edit, Consents & Cassa/Admin Actions -->
+        <div class="detail-tab-pane" id="pane-manage">
+          <div id="manage-readonly-notice" class="crm-alert crm-alert--warning" style="display: none;"></div>
+
+          <form id="form-customer-profile" class="manage-card">
+            <h3 class="manage-card__title">
+              <span class="material-symbols-rounded" style="font-size: 18px; color: var(--accent);">edit_note</span>
+              Dati Anagrafici &amp; Consensi GDPR
+            </h3>
+
+            <div class="crm-form-grid">
+              <div class="crm-form-group">
+                <label for="edit-first-name">Nome</label>
+                <input type="text" id="edit-first-name" class="crm-input" placeholder="Es. Mario" maxlength="100">
+              </div>
+              <div class="crm-form-group">
+                <label for="edit-last-name">Cognome</label>
+                <input type="text" id="edit-last-name" class="crm-input" placeholder="Es. Rossi" maxlength="100">
+              </div>
+              <div class="crm-form-group">
+                <label for="edit-phone">Cellulare</label>
+                <input type="text" id="edit-phone" class="crm-input" placeholder="Es. 3401234567">
+              </div>
+              <div class="crm-form-group">
+                <label for="edit-birth-date">Data di Nascita (18+)</label>
+                <input type="date" id="edit-birth-date" class="crm-input">
+              </div>
+              <div class="crm-form-group crm-form-group--full">
+                <label for="edit-address">Indirizzo Completo</label>
+                <input type="text" id="edit-address" class="crm-input" placeholder="Via Roma 10, Trieste"
+                  maxlength="255">
+              </div>
+            </div>
+
+            <div
+              style="display: flex; flex-direction: column; gap: 8px; padding-top: 4px; border-top: 1px solid var(--border-color);">
+              <label class="crm-checkbox-row">
+                <input type="checkbox" id="edit-consent-marketing">
+                <span>Consenso comunicazioni promozionali e marketing (WhatsApp/SMS)</span>
+              </label>
+              <label class="crm-checkbox-row">
+                <input type="checkbox" id="edit-consent-profiling">
+                <span>Consenso analisi preferenze d'acquisto e profilazione offerte</span>
+              </label>
+              <div id="edit-consent-timestamp" style="font-size: 11px; color: var(--text-muted);"></div>
+            </div>
+
+            <div id="edit-profile-actions" style="display: flex; justify-content: flex-end;">
+              <button type="submit" id="btn-save-customer-profile" class="btn-crm-primary">
+                <span class="material-symbols-rounded" style="font-size: 17px;">save</span>
+                <span>Salva Anagrafica</span>
+              </button>
+            </div>
+          </form>
+
+          <!-- Advanced Customer Operations (cassa & admin only) -->
+          <div id="advanced-customer-ops" style="display: none; flex-direction: column; gap: 12px;">
+            <!-- Points Adjustment -->
+            <div class="manage-card">
+              <h3 class="manage-card__title">
+                <span class="material-symbols-rounded" style="font-size: 18px; color: var(--accent);">exposure</span>
+                Rettifica Saldo Punti
+              </h3>
+              <p style="margin: 0; font-size: 12px; color: var(--text-muted);">
+                Inserisce un movimento immutabile di rettifica manuale nel libro mastro (usa valori positivi per
+                accreditare o negativi per addebitare).
+              </p>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="number" id="input-points-delta" class="crm-input" placeholder="Es. +100 oppure -50"
+                  step="1" style="max-width: 190px;">
+                <button type="button" id="btn-apply-points-adj" class="btn-crm-secondary">Applica Rettifica</button>
+              </div>
+            </div>
+
+            <!-- Duplicate Profile Merge -->
+            <div class="manage-card">
+              <h3 class="manage-card__title">
+                <span class="material-symbols-rounded" style="font-size: 18px; color: var(--accent);">merge</span>
+                Unisci con altro profilo (Merge)
+              </h3>
+              <p style="margin: 0; font-size: 12px; color: var(--text-muted);">
+                Cerca un profilo duplicato da assorbire in questa scheda: tutte le transazioni e i punti verranno
+                trasferiti su questo cliente e il profilo duplicato verrà rimosso.
+              </p>
+              <input type="text" id="input-merge-search" class="crm-input"
+                placeholder="Cerca profilo duplicato per nome o telefono..." autocomplete="off">
+              <div id="merge-candidates-container" class="merge-results-list"></div>
+            </div>
+
+            <!-- GDPR Right to be Forgotten -->
+            <div class="manage-card manage-card--danger">
+              <h3 class="manage-card__title" style="color: var(--error);">
+                <span class="material-symbols-rounded" style="font-size: 18px;">person_remove</span>
+                Anonimizza Cliente (Diritto all'Oblio GDPR)
+              </h3>
+              <p style="margin: 0; font-size: 12px; color: var(--text-secondary);">
+                Rimuove irreversibilmente tutti i dati personali, revoca i consensi e azzera l'eventuale saldo punti
+                positivo, preservando le transazioni storiche in forma anonima.
+              </p>
+              <div style="display: flex; justify-content: flex-end;">
+                <button type="button" id="btn-open-anonymize-modal" class="btn-crm-danger">
+                  <span class="material-symbols-rounded" style="font-size: 17px;">gpp_maybe</span>
+                  <span>Anonimizza Profilo</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- MODAL 1: New Customer WhatsApp Onboarding -->
+<div class="crm-modal-backdrop" id="modal-new-onboarding">
+  <div class="crm-modal-card">
+    <div class="crm-modal-header">
+      <h3>
+        <span class="material-symbols-rounded" style="color: var(--accent);">send_to_mobile</span>
+        Nuovo Cliente (Onboarding WhatsApp)
+      </h3>
+      <button type="button" class="detail-close-btn" data-close-modal="modal-new-onboarding">✕</button>
+    </div>
+    <form id="form-new-onboarding" style="display: flex; flex-direction: column; gap: 12px;">
+      <p style="margin: 0; font-size: 12.5px; color: var(--text-secondary);">
+        Inserisci il numero di cellulare del cliente per creare il profilo provvisorio (valido 72h) e inviare il modulo
+        di registrazione WhatsApp Flow.
+      </p>
+      <div class="crm-form-group">
+        <label for="onboarding-phone-input">Numero di Cellulare *</label>
+        <input type="tel" id="onboarding-phone-input" class="crm-input" placeholder="Es. +39 340 1234567" required>
+      </div>
+      <div id="onboarding-modal-error" class="crm-alert crm-alert--error" style="display: none;"></div>
+      <div id="onboarding-conflict-box" class="crm-alert crm-alert--warning"
+        style="display: none; flex-direction: column; gap: 8px;">
+        <span id="onboarding-conflict-msg"></span>
+        <button type="button" id="btn-open-conflict-customer" class="btn-crm-secondary" style="align-self: flex-start;">
+          Apri scheda cliente esistente
+        </button>
+      </div>
+      <div class="crm-modal-footer">
+        <button type="button" class="btn-crm-secondary" data-close-modal="modal-new-onboarding">Annulla</button>
+        <button type="submit" id="btn-submit-onboarding" class="btn-crm-primary">Invia Modulo WhatsApp</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- MODAL 2: Dev Simulator — Complete WhatsApp Flow -->
+<div class="crm-modal-backdrop" id="modal-mock-flow">
+  <div class="crm-modal-card">
+    <div class="crm-modal-header">
+      <h3>
+        <span class="material-symbols-rounded" style="color: var(--accent);">bolt</span>
+        Simula Compilazione WhatsApp Flow
+      </h3>
+      <button type="button" class="detail-close-btn" data-close-modal="modal-mock-flow">✕</button>
+    </div>
+    <form id="form-mock-flow" style="display: flex; flex-direction: column; gap: 12px;">
+      <p style="margin: 0; font-size: 12px; color: var(--text-muted);">
+        Simula l'invio firmato (HMAC-SHA256) del modulo WhatsApp da parte del cliente per testare l'attivazione
+        end-to-end del profilo.
+      </p>
+      <div class="crm-form-grid">
+        <div class="crm-form-group">
+          <label for="mock-first-name">Nome *</label>
+          <input type="text" id="mock-first-name" class="crm-input" placeholder="Mario" required>
+        </div>
+        <div class="crm-form-group">
+          <label for="mock-last-name">Cognome *</label>
+          <input type="text" id="mock-last-name" class="crm-input" placeholder="Rossi" required>
+        </div>
+        <div class="crm-form-group crm-form-group--full">
+          <label for="mock-birth-date">Data di Nascita (Età &ge; 18 anni) *</label>
+          <input type="date" id="mock-birth-date" class="crm-input" required>
+        </div>
+        <div class="crm-form-group crm-form-group--full">
+          <label for="mock-address">Indirizzo di Residenza *</label>
+          <input type="text" id="mock-address" class="crm-input" placeholder="Via Carducci 12, Trieste" required>
+        </div>
+      </div>
+
+      <div
+        style="display: flex; flex-direction: column; gap: 8px; padding-top: 6px; border-top: 1px solid var(--border-color);">
+        <label class="crm-checkbox-row">
+          <input type="checkbox" id="mock-terms-accepted" required>
+          <span><strong>Obbligatorio:</strong> Accetto il regolamento del programma fedeltà e dichiaro di aver letto
+            l'informativa privacy *</span>
+        </label>
+        <label class="crm-checkbox-row">
+          <input type="checkbox" id="mock-consent-marketing">
+          <span>Acconsento a ricevere comunicazioni promozionali su WhatsApp</span>
+        </label>
+        <label class="crm-checkbox-row">
+          <input type="checkbox" id="mock-consent-profiling">
+          <span>Acconsento all'analisi delle abitudini di acquisto per offerte dedicate</span>
+        </label>
+      </div>
+
+      <div id="mock-flow-error" class="crm-alert crm-alert--error" style="display: none;"></div>
+
+      <div class="crm-modal-footer">
+        <button type="button" class="btn-crm-secondary" data-close-modal="modal-mock-flow">Annulla</button>
+        <button type="submit" id="btn-submit-mock-flow" class="btn-crm-primary">Invia Webhook Simulato</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- MODAL 3: Irreversible Action Confirmation (Merge / Anonymize) -->
+<div class="crm-modal-backdrop" id="modal-confirm-irreversible">
+  <div class="crm-modal-card" style="max-width: 420px;">
+    <div class="crm-modal-header">
+      <h3 id="confirm-modal-title">Conferma Operazione</h3>
+      <button type="button" class="detail-close-btn" data-close-modal="modal-confirm-irreversible">✕</button>
+    </div>
+    <p id="confirm-modal-body" style="margin: 0; font-size: 13px; color: var(--text-primary); line-height: 1.5;"></p>
+    <div id="confirm-modal-error" class="crm-alert crm-alert--error" style="display: none;"></div>
+    <div class="crm-modal-footer">
+      <button type="button" class="btn-crm-secondary" data-close-modal="modal-confirm-irreversible">Annulla</button>
+      <button type="button" id="btn-confirm-irreversible" class="btn-crm-danger">Conferma</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script type="module" src="/static/js/customers_page.js"></script>
+{% endblock %}

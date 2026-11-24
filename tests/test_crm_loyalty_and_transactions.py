@@ -989,10 +989,10 @@ class TestCustomerCrmEndpointsAdminActionsAndRbac:
     def test_crm_three_tier_rbac_base_vs_cassa_vs_admin(self, db_session: Session):
         """
         Verifies the 3-tier RBAC matrix across Customer CRM & System endpoints:
-        - 'base': can read customers, initiate onboarding, and record transactions;
-          FORBIDDEN (403) from PATCH, points-adjustment, merge, anonymize, users, settings.
+        - 'base': read-only consultation on customers; FORBIDDEN (403) from onboarding,
+          PATCH, points-adjustment, merge, anonymize, users, settings.
         - 'cassa': can perform ALL customer operations (read, onboarding, PATCH, points-adjustment,
-          merge, anonymize -> 200 OK); FORBIDDEN (403) from /api/v1/users and /api/v1/settings.
+          merge, anonymize -> 200/201); FORBIDDEN (403) from /api/v1/users and /api/v1/settings.
         - 'admin': full access to customer operations, users IAM, and system settings.
         """
         client = TestClient(app)
@@ -1035,7 +1035,7 @@ class TestCustomerCrmEndpointsAdminActionsAndRbac:
             client.post(
                 "/api/v1/customers/onboarding", json={"phone_number": "3406000099"}
             ).status_code
-            == 201
+            == 403
         )
         assert (
             client.patch(
@@ -1066,6 +1066,12 @@ class TestCustomerCrmEndpointsAdminActionsAndRbac:
         # --- 2. Role 'cassa' ---
         set_role_user(fake_cassa_user)
         assert client.get("/api/v1/customers").status_code == 200
+        assert (
+            client.post(
+                "/api/v1/customers/onboarding", json={"phone_number": "3406000099"}
+            ).status_code
+            == 201
+        )
         patch_res = client.patch(
             f"/api/v1/customers/{c1.id}", json={"first_name": "Luigi"}
         )

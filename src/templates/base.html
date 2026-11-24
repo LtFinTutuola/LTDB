@@ -13,7 +13,7 @@
     <header class="mobile-topbar" id="mobile-topbar">
       <div class="mobile-topbar__brand">
         <img src="/static/assets/logo.png" alt="Logo" class="mobile-topbar__logo">
-        <h1 class="mobile-topbar__page-title">{% if active_page == 'vendite' %}Vendite{% elif active_page == 'magazzino' or active_page == 'dashboard' %}Magazzino{% elif active_page == 'brands' %}Gestione Brand{% elif active_page == 'categories' %}Gestione Categorie{% elif active_page == 'settings' %}Impostazioni{% else %}LTDB{% endif %}</h1>
+        <h1 class="mobile-topbar__page-title">{% if active_page == 'vendite' %}Vendite{% elif active_page == 'clienti' %}Clienti{% elif active_page == 'magazzino' or active_page == 'dashboard' %}Magazzino{% elif active_page == 'brands' %}Gestione Brand{% elif active_page == 'categories' %}Gestione Categorie{% elif active_page == 'settings' %}Impostazioni{% else %}LTDB{% endif %}</h1>
       </div>
     </header>
     {% include 'partials/sidebar.html' %}
@@ -25,6 +25,10 @@
       <a href="/vendite" class="mobile-nav-item {% if active_page == 'vendite' %}mobile-nav-item--active{% endif %}">
         <span class="material-symbols-rounded">point_of_sale</span>
         <span class="mobile-nav-label">Vendite</span>
+      </a>
+      <a href="/clienti" class="mobile-nav-item {% if active_page == 'clienti' %}mobile-nav-item--active{% endif %}">
+        <span class="material-symbols-rounded">group</span>
+        <span class="mobile-nav-label">Clienti</span>
       </a>
       <a href="/magazzino" class="mobile-nav-item {% if active_page == 'magazzino' or active_page == 'dashboard' %}mobile-nav-item--active{% endif %}">
         <span class="material-symbols-rounded">inventory_2</span>

@@ -94,6 +94,51 @@ def vendite_page(
     )
 
 
+@router.get("/clienti", include_in_schema=False)
+def clienti_page(
+    request: Request,
+    user=Depends(get_current_user),
+):
+    """
+    Serve the CRM Customers management & loyalty page.
+    Injects window.__LTDB_CRM_CONFIG__ and window.__LTDB_USER__ for role-aware UI.
+    """
+    crm_config_json = json.dumps(
+        {
+            "whatsapp_provider": settings.WHATSAPP_PROVIDER,
+            "onboarding_ttl_hours": settings.WHATSAPP_ONBOARDING_TTL_HOURS,
+            "earning_euro_per_point": settings.LOYALTY_EARNING_EURO_PER_POINT,
+            "birthday_multiplier": settings.LOYALTY_BIRTHDAY_MULTIPLIER,
+            "birthday_window_days": settings.LOYALTY_BIRTHDAY_WINDOW_DAYS,
+            "redemption_tiers": settings.LOYALTY_REDEMPTION_TIERS,
+        }
+    )
+    user_json = json.dumps(
+        {
+            "id": user.id,
+            "username": user.username,
+            "role": user.role,
+        }
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name="clienti.html",
+        context={
+            "active_page": "clienti",
+            "crm_config_json": crm_config_json,
+            "user_json": user_json,
+        },
+    )
+
+
+@router.get("/customers", include_in_schema=False)
+def customers_redirect():
+    """
+    Redirect /customers to /clienti.
+    """
+    return RedirectResponse(url="/clienti", status_code=307)
+
+
 @router.get("/brands", include_in_schema=False)
 def brands_page(
     request: Request,

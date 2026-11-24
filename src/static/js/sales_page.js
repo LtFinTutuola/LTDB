@@ -32,7 +32,102 @@ const state = {
     sales: [],
     activeCell: null, // { row: ..., col: ... }
     activeSaleId: null,
+    desktopCellMatrix: [],
+    mobileCellMatrix: [],
 };
+
+export function computeTransactionSpans(sales) {
+    const n = Array.isArray(sales) ? sales.length : 0;
+    const spans = new Array(n);
+    let i = 0;
+    while (i < n) {
+        const txId = sales[i] && sales[i].transaction_id ? String(sales[i].transaction_id) : null;
+        if (!txId) {
+            spans[i] = {
+                spanCount: 1,
+                groupRole: null,
+                groupStartRow: i,
+                groupEndRow: i,
+            };
+            i++;
+            continue;
+        }
+        let j = i + 1;
+        while (
+            j < n &&
+            sales[j] &&
+            sales[j].transaction_id &&
+            String(sales[j].transaction_id) === txId
+        ) {
+            j++;
+        }
+        const count = j - i;
+        const endRow = j - 1;
+        spans[i] = {
+            spanCount: count,
+            groupRole: count > 1 ? 'start' : 'single',
+            groupStartRow: i,
+            groupEndRow: endRow,
+        };
+        for (let k = i + 1; k < j; k++) {
+            spans[k] = {
+                spanCount: 0,
+                groupRole: k === endRow ? 'end' : 'mid',
+                groupStartRow: i,
+                groupEndRow: endRow,
+            };
+        }
+        i = j;
+    }
+    return spans;
+}
+
+function getLogicalColCount(tableEl) {
+    if (tableEl && tableEl.tHead && tableEl.tHead.rows.length > 0) {
+        return tableEl.tHead.rows[0].cells.length;
+    }
+    return 0;
+}
+
+function getLogicalColIndexByKey(tableEl, colKey) {
+    if (!tableEl) return 0;
+    // 1. Check rendered tbody cells carrying data-col-key / data-logical-col
+    const firstTd = tableEl.querySelector(`tbody td[data-col-key="${colKey}"]`);
+    if (firstTd && firstTd.dataset.logicalCol !== undefined) {
+        const parsed = parseInt(firstTd.dataset.logicalCol, 10);
+        if (!isNaN(parsed)) return parsed;
+    }
+    // 2. Fallback to thead header semantic classes
+    if (tableEl.tHead && tableEl.tHead.rows.length > 0) {
+        const ths = Array.from(tableEl.tHead.rows[0].cells);
+        const found = ths.findIndex((th) => {
+            if (th.dataset.colKey === colKey) return true;
+            if (colKey === 'article') {
+                return th.classList.contains('col-recon') || th.classList.contains('col-article');
+            }
+            if (colKey === 'customer') return th.classList.contains('col-customer');
+            if (colKey === 'status') return th.classList.contains('col-status');
+            return false;
+        });
+        if (found !== -1) return found;
+    }
+    return 0;
+}
+
+function registerLogicalCell(matrix, td, colKey, logicalCol, rowIdx, spanCount = 1) {
+    td.dataset.colKey = colKey;
+    td.dataset.logicalCol = String(logicalCol);
+    td.dataset.spanStartRow = String(rowIdx);
+    td.dataset.spanEndRow = String(rowIdx + spanCount - 1);
+    if (spanCount > 1) {
+        td.rowSpan = spanCount;
+        td.classList.add('col-customer--spanned');
+    }
+    for (let r = rowIdx; r < rowIdx + spanCount; r++) {
+        if (!matrix[r]) matrix[r] = [];
+        matrix[r][logicalCol] = td;
+    }
+}
 
 const dom = {
     table: document.getElementById('sales-table'),
@@ -275,6 +370,103 @@ async function fetchDailySales(dateStr, silent = false) {
     }
 }
 
+function renderCustomerPartitionCell(td, sale, spanInfo) {
+    td.innerHTML = '';
+    const tx = sale ? sale.transaction : null;
+    if (!tx) {
+        if (sale && sale.customer_phone) {
+            td.innerHTML = `<span style="font-size: 11px; color: var(--text-muted);">${_esc(sale.customer_phone)}</span>`;
+        } else {
+            td.innerHTML = `<span style="color: var(--text-muted); font-size: 12px;">-</span>`;
+        }
+        return;
+    }
+
+    const cust = tx.customer;
+    const isPendingId = tx.identification_status === 'IDENTIFICATION_PENDING';
+    const isPendingOnb = cust && cust.status === 'PENDING_ONBOARDING';
+
+    let customerHeaderHtml = '';
+    if (cust && cust.id) {
+        let label = cust.display_name || cust.short_name || cust.phone_number || 'Cliente';
+        if (isPendingOnb && !cust.first_name && !cust.last_name) {
+            label = `${cust.phone_number || ''} · Onboarding`.trim();
+        }
+        const bdayHtml = cust.is_birthday_window_active
+            ? '<span title="Finestra compleanno attiva (Punti x2)">🎂</span>'
+            : '';
+        customerHeaderHtml = `
+            <a href="/clienti?id=${encodeURIComponent(cust.id)}"
+               class="tx-customer-link ${isPendingOnb ? 'tx-customer-link--pending' : ''}"
+               title="Apri scheda cliente">
+                <span style="overflow: hidden; text-overflow: ellipsis;">${_esc(label)}</span>
+                ${bdayHtml}
+            </a>
+        `;
+    } else if (sale && sale.customer_phone) {
+        customerHeaderHtml = `<span style="font-size: 12px; font-weight: 600;">${_esc(sale.customer_phone)}</span>`;
+    }
+
+    const badges = [];
+    if (isPendingId) {
+        badges.push(
+            `<span class="tx-mini-badge tx-mini-badge--pending" title="Salva una seconda volta in Excel per confermare la transazione">⏳ Conferma Excel</span>`
+        );
+    } else {
+        const netPts = Number(tx.points_net_delta) || 0;
+        if (netPts !== 0) {
+            const sign = netPts > 0 ? '+' : '';
+            const cls = netPts > 0 ? 'tx-mini-badge--pts-pos' : 'tx-mini-badge--pts-neg';
+            badges.push(`<span class="tx-mini-badge ${cls}">${sign}${netPts} pt</span>`);
+        } else if (cust) {
+            badges.push(
+                `<span class="tx-mini-badge" style="color: var(--text-muted); border: 1px solid var(--border-color);">0 pt</span>`
+            );
+        }
+
+        const discAmt = Number(tx.loyalty_discount_amount) || 0;
+        if (discAmt > 0) {
+            badges.push(
+                `<span class="tx-mini-badge tx-mini-badge--discount" title="Sconto punti spalmato">-€ ${discAmt.toFixed(2)}</span>`
+            );
+        }
+    }
+
+    const spanCount = spanInfo ? spanInfo.spanCount : 1;
+    const captionHtml =
+        spanCount > 1
+            ? `<div class="tx-group-caption">${spanCount} righe · € ${Number(tx.net_payable || 0).toFixed(2)}</div>`
+            : '';
+
+    td.innerHTML = `
+        <div class="tx-customer-card">
+            ${customerHeaderHtml}
+            ${badges.length ? `<div class="tx-customer-badges">${badges.join('')}</div>` : ''}
+            ${captionHtml}
+        </div>
+    `;
+}
+
+function attachCellClickListener(td, tr) {
+    td.addEventListener('click', (e) => {
+        if (
+            e.target.closest('a') ||
+            e.target.closest('button') ||
+            e.target.closest('input')
+        ) {
+            return;
+        }
+        const targetRow = parseInt(td.dataset.spanStartRow ?? tr.dataset.rowIndex, 10);
+        const targetCol = parseInt(td.dataset.logicalCol, 10);
+        const targetSale = state.sales[targetRow];
+        if (!isNaN(targetRow) && !isNaN(targetCol) && targetSale) {
+            const shouldTriggerContext =
+                targetSale.status === 'RECONCILED' && td.dataset.colKey !== 'customer';
+            setActiveCell(targetRow, targetCol, shouldTriggerContext, true);
+        }
+    });
+}
+
 function renderTable() {
     const activeEl = document.activeElement;
     const isExternalInputFocused = activeEl && (
@@ -300,6 +492,8 @@ function renderTable() {
 
     if (dom.tbody) dom.tbody.innerHTML = '';
     if (dom.tbodyMobile) dom.tbodyMobile.innerHTML = '';
+    state.desktopCellMatrix = [];
+    state.mobileCellMatrix = [];
 
     if (state.sales.length === 0) {
         if (dom.table) dom.table.style.display = 'none';
@@ -312,30 +506,51 @@ function renderTable() {
     if (dom.table) dom.table.style.display = '';
     if (dom.tableMobile) dom.tableMobile.style.display = '';
 
+    const txSpans = computeTransactionSpans(state.sales);
+
     state.sales.forEach((sale, idx) => {
-        // --- 1. Desktop Row (11 columns) ---
+        const spanInfo = txSpans[idx] || {
+            spanCount: 1,
+            groupRole: null,
+            groupStartRow: idx,
+            groupEndRow: idx,
+        };
+
+        // --- 1. Desktop Row (Semantic columns + Transaction rowspan partition) ---
         if (dom.tbody) {
             const tr = document.createElement('tr');
             tr.dataset.saleId = sale.id;
-            tr.dataset.rowIndex = idx; // DOM row index
+            tr.dataset.rowIndex = idx;
+            if (sale.transaction_id) {
+                tr.dataset.transactionId = sale.transaction_id;
+            }
+            if (spanInfo.groupRole) {
+                tr.classList.add(`tx-group-${spanInfo.groupRole}`);
+            }
 
-            // Col 0: Status indicator
+            let logicalCol = 0;
+
+            // Col: Status indicator
             const tdStatus = document.createElement('td');
             tdStatus.className = 'col-status';
             if (sale.status === 'ORPHAN') tdStatus.classList.add('status-cell--orphan');
             else if (sale.status === 'UNPROCESSABLE') tdStatus.classList.add('status-cell--unprocessable');
             else if (sale.status === 'RECONCILED') tdStatus.classList.add('status-cell--reconciled');
             tdStatus.textContent = sale.excel_row_index !== null && sale.excel_row_index !== undefined ? sale.excel_row_index : (idx + 1);
+            registerLogicalCell(state.desktopCellMatrix, tdStatus, 'status', logicalCol++, idx, 1);
+            attachCellClickListener(tdStatus, tr);
             tr.appendChild(tdStatus);
 
-            // Col 1: PL (starting price)
+            // Col: PL (starting price)
             const tdPL = document.createElement('td');
             tdPL.className = 'col-price';
             tdPL.textContent = sale.starting_price !== null && sale.starting_price !== undefined ? sale.starting_price : '';
+            registerLogicalCell(state.desktopCellMatrix, tdPL, 'pl', logicalCol++, idx, 1);
+            attachCellClickListener(tdPL, tr);
             tr.appendChild(tdPL);
 
-            // Col 2-9: Categories
-            CATEGORY_COLUMNS.forEach(cat => {
+            // Cols: Categories (B..O+A)
+            CATEGORY_COLUMNS.forEach((cat) => {
                 const tdCat = document.createElement('td');
                 tdCat.className = 'col-cat';
                 if (sale.excel_file_column === cat.index && sale.selling_price !== null && sale.selling_price !== undefined) {
@@ -344,46 +559,60 @@ function renderTable() {
                 } else {
                     tdCat.textContent = '';
                 }
+                registerLogicalCell(state.desktopCellMatrix, tdCat, `cat_${cat.index}`, logicalCol++, idx, 1);
+                attachCellClickListener(tdCat, tr);
                 tr.appendChild(tdCat);
             });
 
-            // Col 10: Reconciliation
+            // Col: Articolo (Reconciliation)
             const tdRecon = document.createElement('td');
             tdRecon.className = 'col-recon';
             renderDesktopReconCell(tdRecon, sale);
+            registerLogicalCell(state.desktopCellMatrix, tdRecon, 'article', logicalCol++, idx, 1);
+            attachCellClickListener(tdRecon, tr);
             tr.appendChild(tdRecon);
 
-            // Cell click handling for active state
-            Array.from(tr.children).forEach((td, colIdx) => {
-                td.addEventListener('click', (e) => {
-                    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
-                        const shouldTriggerContext = sale.status === 'RECONCILED';
-                        setActiveCell(idx, colIdx, shouldTriggerContext, true);
-                    }
-                });
-            });
+            // Col: Cliente (Spanned across contiguous Transaction rows via rowspan)
+            if (spanInfo.spanCount >= 1) {
+                const tdCust = document.createElement('td');
+                tdCust.className = 'col-customer';
+                renderCustomerPartitionCell(tdCust, sale, spanInfo);
+                registerLogicalCell(state.desktopCellMatrix, tdCust, 'customer', logicalCol, idx, spanInfo.spanCount);
+                attachCellClickListener(tdCust, tr);
+                tr.appendChild(tdCust);
+            }
 
             dom.tbody.appendChild(tr);
         }
 
-        // --- 2. Mobile Row (4 columns) ---
+        // --- 2. Mobile Row (Semantic columns + Transaction rowspan partition) ---
         if (dom.tbodyMobile) {
             const trMobile = document.createElement('tr');
             trMobile.dataset.saleId = sale.id;
-            trMobile.dataset.rowIndex = idx; // DOM row index
+            trMobile.dataset.rowIndex = idx;
+            if (sale.transaction_id) {
+                trMobile.dataset.transactionId = sale.transaction_id;
+            }
+            if (spanInfo.groupRole) {
+                trMobile.classList.add(`tx-group-${spanInfo.groupRole}`);
+            }
             if (sale.status === 'ORPHAN') trMobile.classList.add('status-row--orphan');
             else if (sale.status === 'UNPROCESSABLE') trMobile.classList.add('status-row--unprocessable');
             else if (sale.status === 'RECONCILED') trMobile.classList.add('status-row--reconciled');
 
-            // Col 0: Prezzo di listino
+            let mobCol = 0;
+
+            // Col: Prezzo di listino
             const tdPriceList = document.createElement('td');
             tdPriceList.className = 'col-price-list';
             tdPriceList.textContent = sale.starting_price !== null && sale.starting_price !== undefined
                 ? `€ ${Number(sale.starting_price).toFixed(2).replace(/\.00$/, '')}`
                 : '-';
+            registerLogicalCell(state.mobileCellMatrix, tdPriceList, 'price_list', mobCol++, idx, 1);
+            attachCellClickListener(tdPriceList, trMobile);
             trMobile.appendChild(tdPriceList);
 
-            // Col 1: Prezzo finale
+            // Col: Prezzo finale
             const tdPriceFinal = document.createElement('td');
             tdPriceFinal.className = 'col-price-final';
             if (sale.selling_price !== null && sale.selling_price !== undefined) {
@@ -396,31 +625,37 @@ function renderTable() {
             } else {
                 tdPriceFinal.textContent = '-';
             }
+            registerLogicalCell(state.mobileCellMatrix, tdPriceFinal, 'price_final', mobCol++, idx, 1);
+            attachCellClickListener(tdPriceFinal, trMobile);
             trMobile.appendChild(tdPriceFinal);
 
-            // Col 2: Colonna excel
+            // Col: Colonna excel
             const tdExcelCol = document.createElement('td');
             tdExcelCol.className = 'col-excel-col';
             const colDef = CATEGORY_COLUMNS.find(c => c.index === sale.excel_file_column);
             const colLabel = colDef ? colDef.header : (sale.excel_file_column !== null && sale.excel_file_column !== undefined ? `Col ${sale.excel_file_column}` : '-');
             tdExcelCol.innerHTML = `<span class="chip chip--small" style="font-weight: 600;">${_esc(colLabel)}</span>`;
+            registerLogicalCell(state.mobileCellMatrix, tdExcelCol, 'excel_col', mobCol++, idx, 1);
+            attachCellClickListener(tdExcelCol, trMobile);
             trMobile.appendChild(tdExcelCol);
 
-            // Col 3: Articolo
+            // Col: Articolo
             const tdArticle = document.createElement('td');
             tdArticle.className = 'col-article';
             renderMobileReconCard(tdArticle, sale);
+            registerLogicalCell(state.mobileCellMatrix, tdArticle, 'article', mobCol++, idx, 1);
+            attachCellClickListener(tdArticle, trMobile);
             trMobile.appendChild(tdArticle);
 
-            // Cell click handling for active state
-            Array.from(trMobile.children).forEach((td, colIdx) => {
-                td.addEventListener('click', (e) => {
-                    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
-                        const shouldTriggerContext = sale.status === 'RECONCILED';
-                        setActiveCell(idx, colIdx, shouldTriggerContext, true);
-                    }
-                });
-            });
+            // Col: Cliente (Spanned across contiguous Transaction rows via rowspan)
+            if (spanInfo.spanCount >= 1) {
+                const tdCustMob = document.createElement('td');
+                tdCustMob.className = 'col-customer';
+                renderCustomerPartitionCell(tdCustMob, sale, spanInfo);
+                registerLogicalCell(state.mobileCellMatrix, tdCustMob, 'customer', mobCol, idx, spanInfo.spanCount);
+                attachCellClickListener(tdCustMob, trMobile);
+                trMobile.appendChild(tdCustMob);
+            }
 
             dom.tbodyMobile.appendChild(trMobile);
         }
@@ -492,7 +727,8 @@ function renderDesktopReconCell(td, sale) {
             const tr = dom.tbody ? dom.tbody.querySelector(`tr[data-sale-id="${sale.id}"]`) : null;
             if (tr) {
                 const idx = parseInt(tr.dataset.rowIndex, 10);
-                if (!isNaN(idx)) setActiveCell(idx, 10, true, true);
+                const articleCol = getLogicalColIndexByKey(dom.table, 'article');
+                if (!isNaN(idx)) setActiveCell(idx, articleCol, true, true);
             }
         };
         
@@ -572,7 +808,8 @@ function renderMobileReconCard(td, sale) {
             const trMobile = dom.tbodyMobile ? dom.tbodyMobile.querySelector(`tr[data-sale-id="${sale.id}"]`) : null;
             if (trMobile) {
                 const idx = parseInt(trMobile.dataset.rowIndex, 10);
-                if (!isNaN(idx)) setActiveCell(idx, 3, true, true);
+                const articleCol = getLogicalColIndexByKey(dom.tableMobile, 'article');
+                if (!isNaN(idx)) setActiveCell(idx, articleCol, true, true);
             }
         };
 
@@ -669,37 +906,39 @@ function handleCandidateConfirm(sale, cand) {
     sale.category_name = cand.category_name || sale.category_name;
     sale.photo_url = cand.photo_serving_endpoint_url;
 
-    // 2. Update Desktop DOM row in place
+    // 2. Update Desktop DOM row in place via semantic data-col-key
     if (dom.tbody) {
         const tr = dom.tbody.querySelector(`tr[data-sale-id="${sale.id}"]`);
         if (tr) {
-            const tdStatus = tr.querySelector('.col-status');
+            const tdStatus = tr.querySelector('[data-col-key="status"]') || tr.querySelector('.col-status');
             if (tdStatus) {
                 tdStatus.className = 'col-status status-cell--reconciled';
             }
-            const tdRecon = tr.querySelector('.col-recon') || tr.querySelector('td:last-child');
+            const tdRecon = tr.querySelector('[data-col-key="article"]') || tr.querySelector('.col-recon');
             if (tdRecon) renderDesktopReconCell(tdRecon, sale);
         }
     }
 
-    // 3. Update Mobile DOM row in place
+    // 3. Update Mobile DOM row in place via semantic data-col-key
     if (dom.tbodyMobile) {
         const trMobile = dom.tbodyMobile.querySelector(`tr[data-sale-id="${sale.id}"]`);
         if (trMobile) {
-            trMobile.className = 'status-row--reconciled';
-            const tdArticle = trMobile.querySelector('.col-article') || trMobile.querySelector('td:last-child');
+            trMobile.classList.remove('status-row--orphan', 'status-row--unprocessable');
+            trMobile.classList.add('status-row--reconciled');
+            const tdArticle = trMobile.querySelector('[data-col-key="article"]') || trMobile.querySelector('.col-article');
             if (tdArticle) renderMobileReconCard(tdArticle, sale);
         }
     }
 
     closeContextTab();
 
-    // 4. Auto-scroll to next orphan
+    // 4. Auto-scroll to next orphan dynamically resolving the article column
     const nextOrphanIdx = state.sales.findIndex(s => s.status === 'ORPHAN');
     if (nextOrphanIdx !== -1) {
         const isMobile = isMobileLayout();
+        const targetTable = isMobile ? dom.tableMobile : dom.table;
         const targetTbody = isMobile ? dom.tbodyMobile : dom.tbody;
-        const targetCol = isMobile ? 3 : 10;
+        const targetCol = getLogicalColIndexByKey(targetTable, 'article');
         if (targetTbody && targetTbody.children[nextOrphanIdx]) {
             targetTbody.children[nextOrphanIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
             setActiveCell(nextOrphanIdx, targetCol, true, true);
@@ -838,48 +1077,61 @@ async function fetchSubstitutes(blueprintId) {
 }
 
 function setActiveCell(rowIndex, colIndex, triggerContext = false, shouldFocus = false) {
-    // Clear old active on desktop and mobile
+    // Clear old active on desktop and mobile via logical cell matrices
     if (state.activeCell) {
-        if (dom.tbody && dom.tbody.children[state.activeCell.row]) {
-            const oldTd = dom.tbody.children[state.activeCell.row].children[state.activeCell.col];
-            if (oldTd) oldTd.classList.remove('cell--active');
-        }
-        if (dom.tbodyMobile && dom.tbodyMobile.children[state.activeCell.row]) {
-            const oldTdMobile = dom.tbodyMobile.children[state.activeCell.row].children[state.activeCell.col];
-            if (oldTdMobile) oldTdMobile.classList.remove('cell--active');
-        }
+        const oldRow = state.activeCell.row;
+        const oldCol = state.activeCell.col;
+        const oldDesktopTd = state.desktopCellMatrix[oldRow]
+            ? state.desktopCellMatrix[oldRow][oldCol]
+            : null;
+        if (oldDesktopTd) oldDesktopTd.classList.remove('cell--active');
+
+        const oldMobMaxCol = Math.max(0, getLogicalColCount(dom.tableMobile) - 1);
+        const oldMobCol = Math.min(oldCol, oldMobMaxCol);
+        const oldMobileTd = state.mobileCellMatrix[oldRow]
+            ? state.mobileCellMatrix[oldRow][oldMobCol]
+            : null;
+        if (oldMobileTd) oldMobileTd.classList.remove('cell--active');
     }
 
-    state.activeCell = { row: rowIndex, col: colIndex };
+    const desktopMaxCol = Math.max(0, getLogicalColCount(dom.table) - 1);
+    const mobileMaxCol = Math.max(0, getLogicalColCount(dom.tableMobile) - 1);
+    const activeMaxCol = isMobileLayout() ? mobileMaxCol : desktopMaxCol;
+    const clampedCol = Math.max(0, Math.min(colIndex, activeMaxCol));
 
-    // Set new active on desktop
+    state.activeCell = { row: rowIndex, col: clampedCol };
+
+    const desktopCol = Math.min(clampedCol, desktopMaxCol);
+    const mobileCol = Math.min(clampedCol, mobileMaxCol);
+
+    // Set new active on desktop via logical matrix (handles rowspan seamlessly)
     const newTr = dom.tbody ? dom.tbody.children[rowIndex] : null;
-    if (newTr) {
-        const newTd = newTr.children[colIndex];
-        if (newTd) {
-            newTd.classList.add('cell--active');
-            if (triggerContext) {
-                const saleId = newTr.dataset.saleId;
-                const sale = state.sales.find(s => s.id === saleId);
-                if (sale) {
-                    openContextTab(sale);
-                }
+    const newTd = state.desktopCellMatrix[rowIndex]
+        ? state.desktopCellMatrix[rowIndex][desktopCol]
+        : null;
+    if (newTd) {
+        newTd.classList.add('cell--active');
+        if (triggerContext && newTr) {
+            const saleId = newTr.dataset.saleId;
+            const sale = state.sales.find(s => s.id === saleId);
+            if (sale) {
+                openContextTab(sale);
             }
         }
     }
 
-    // Set new active on mobile
+    // Set new active on mobile via logical matrix
     const newTrMobile = dom.tbodyMobile ? dom.tbodyMobile.children[rowIndex] : null;
-    if (newTrMobile) {
-        const newTdMobile = newTrMobile.children[colIndex];
-        if (newTdMobile) {
-            newTdMobile.classList.add('cell--active');
-            if (triggerContext && !newTr) {
-                const saleId = newTrMobile.dataset.saleId;
-                const sale = state.sales.find(s => s.id === saleId);
-                if (sale) {
-                    openContextTab(sale);
-                }
+    const newTdMobile = state.mobileCellMatrix[rowIndex]
+        ? state.mobileCellMatrix[rowIndex][mobileCol]
+        : null;
+    if (newTdMobile) {
+        newTdMobile.classList.add('cell--active');
+        if (triggerContext && !newTr && newTrMobile) {
+            const saleId = newTrMobile.dataset.saleId;
+            const sale = state.sales.find(s => s.id === saleId);
+            if (sale) {
+                openContextTab(sale);
             }
         }
     }
@@ -887,11 +1139,9 @@ function setActiveCell(rowIndex, colIndex, triggerContext = false, shouldFocus =
     // Only manage focus if explicitly requested (e.g. user clicked on cell or explicit navigation)
     if (shouldFocus) {
         const isMobile = isMobileLayout();
-        const targetCol = isMobile ? 3 : 10;
-        const targetTr = isMobile ? newTrMobile : newTr;
-        if (colIndex === targetCol && targetTr) {
-            const targetTd = targetTr.children[colIndex];
-            const input = targetTd ? targetTd.querySelector('input') : null;
+        const activeTd = isMobile ? newTdMobile : newTd;
+        if (activeTd && activeTd.dataset.colKey === 'article') {
+            const input = activeTd.querySelector('input');
             if (input) input.focus();
         } else {
             // Only blur if activeElement is an input inside the table body itself; never blur external textboxes (e.g. chat-input)
@@ -918,16 +1168,32 @@ function handleKeyNav(e) {
     let { row, col } = state.activeCell;
     const maxRow = state.sales.length - 1;
     const isMobile = isMobileLayout();
-    const maxCol = isMobile ? 3 : 10;
+    const activeTable = isMobile ? dom.tableMobile : dom.table;
+    const activeMatrix = isMobile ? state.mobileCellMatrix : state.desktopCellMatrix;
+    const maxCol = Math.max(0, getLogicalColCount(activeTable) - 1);
+
+    const currentTd = activeMatrix[row] ? activeMatrix[row][col] : null;
+    const spanStart = currentTd && currentTd.dataset.spanStartRow !== undefined
+        ? parseInt(currentTd.dataset.spanStartRow, 10)
+        : row;
+    const spanEnd = currentTd && currentTd.dataset.spanEndRow !== undefined
+        ? parseInt(currentTd.dataset.spanEndRow, 10)
+        : row;
 
     let changed = false;
 
     switch (e.key) {
         case 'ArrowUp':
-            if (row > 0) { row--; changed = true; }
+            if (spanStart > 0) {
+                row = spanStart - 1;
+                changed = true;
+            }
             break;
         case 'ArrowDown':
-            if (row < maxRow) { row++; changed = true; }
+            if (spanEnd < maxRow) {
+                row = spanEnd + 1;
+                changed = true;
+            }
             break;
         case 'ArrowLeft':
             if (col > 0) { col--; changed = true; }

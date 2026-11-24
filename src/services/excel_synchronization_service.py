@@ -1298,10 +1298,99 @@ def get_pending_sales(db: Session, target_date: Optional[date] = None) -> List[D
 
 def get_daily_sales(db: Session, target_date: date) -> List[Dict[str, Any]]:
     """
-    Returns all sales records for the specified date, including photo URL, article name, brand and category for reconciled items.
+    Returns all sales records for the specified date, including photo URL, article name,
+    brand and category for reconciled items, plus enriched CRM Transaction and Customer
+    metadata (batch-loaded without N+1 queries) for transaction partitioning in the UI.
     """
+    from decimal import Decimal
+    from sqlalchemy.orm import joinedload
+    from src.models.crm import CustomerStatus, LoyaltyLedgerReason, Transaction
+    from src.repositories.crm_repo import crm_customer_repo
+    from src.services.loyalty_service import _to_cents, is_date_in_birthday_window
+
     records = excel_synchronization_repo.get_all_by_date(db, target_date)
-    
+
+    # Batch-load linked Transactions, Customers, Ledger entries, and Customer points balances
+    tx_ids = list({str(r.transaction_id) for r in records if r.transaction_id})
+    tx_summary_by_id: Dict[str, Dict[str, Any]] = {}
+    if tx_ids:
+        tx_objs = (
+            db.query(Transaction)
+            .options(
+                joinedload(Transaction.customer),
+                joinedload(Transaction.excel_sales),
+                joinedload(Transaction.loyalty_ledger_entries),
+            )
+            .filter(Transaction.id.in_(tx_ids))
+            .all()
+        )
+        cust_ids = list({str(tx.customer_id) for tx in tx_objs if tx.customer_id})
+        balances_map = crm_customer_repo.get_points_balances_map(db, cust_ids)
+
+        for tx in tx_objs:
+            acq_selling = sum(
+                (_to_cents(line.selling_price) for line in tx.excel_sales if not line.is_exchange),
+                Decimal("0.00"),
+            )
+            resi_selling = sum(
+                (abs(_to_cents(line.selling_price)) for line in tx.excel_sales if line.is_exchange),
+                Decimal("0.00"),
+            )
+            net_payable = float(_to_cents(acq_selling - resi_selling))
+
+            active_entries = [
+                e
+                for e in tx.loyalty_ledger_entries
+                if tx.customer_id is None or e.customer_id == tx.customer_id
+            ]
+            points_redeemed_total = sum(
+                abs(int(e.points_delta))
+                for e in active_entries
+                if e.reason == LoyaltyLedgerReason.DISCOUNT_REDEMPTION
+            )
+            points_net_delta = sum(int(e.points_delta) for e in active_entries)
+            points_earned_total = points_net_delta + points_redeemed_total
+
+            cust = tx.customer
+            cust_summary: Optional[Dict[str, Any]] = None
+            if cust is not None:
+                full_name = f"{cust.first_name or ''} {cust.last_name or ''}".strip()
+                if cust.status == CustomerStatus.ANONYMIZED:
+                    display_name = "ANONIMO"
+                elif full_name:
+                    display_name = full_name
+                else:
+                    display_name = "In attesa di compilazione..."
+
+                bday_active = (
+                    cust.status == CustomerStatus.ACTIVE
+                    and is_date_in_birthday_window(cust.birth_date, target_date)
+                )
+                cust_summary = {
+                    "id": str(cust.id),
+                    "first_name": cust.first_name,
+                    "last_name": cust.last_name,
+                    "display_name": display_name,
+                    "short_name": _format_customer_short_name(cust),
+                    "phone_number": cust.phone_number,
+                    "status": cust.status.value,
+                    "points_balance": balances_map.get(str(cust.id), 0),
+                    "is_birthday_window_active": bday_active,
+                }
+
+            tx_summary_by_id[str(tx.id)] = {
+                "id": str(tx.id),
+                "identification_status": tx.identification_status.value,
+                "loyalty_discount_amount": float(_to_cents(tx.loyalty_discount_amount)),
+                "discount_rule_code": tx.discount_rule_code,
+                "net_payable": net_payable,
+                "items_count": len(tx.excel_sales),
+                "points_earned_total": points_earned_total,
+                "points_redeemed_total": points_redeemed_total,
+                "points_net_delta": points_net_delta,
+                "customer": cust_summary,
+            }
+
     results = []
     for r in records:
         photo_url = None
@@ -1328,7 +1417,8 @@ def get_daily_sales(db: Session, target_date: date) -> List[Dict[str, Any]]:
                 ).first()
                 
             photo_url = f"/api/v1/ingestion/photos/{photo.id}" if photo else None
-            
+
+        tx_id_str = str(r.transaction_id) if r.transaction_id else None
         results.append({
             "id": str(r.id),
             "date": str(r.date),
@@ -1339,6 +1429,10 @@ def get_daily_sales(db: Session, target_date: date) -> List[Dict[str, Any]]:
             "selling_price": float(r.selling_price) if r.selling_price is not None else None,
             "is_exchange": r.is_exchange,
             "raw_article_code": r.raw_article_code,
+            "customer_phone": r.customer_phone,
+            "transaction_id": tx_id_str,
+            "manual_review": bool(r.manual_review),
+            "transaction": tx_summary_by_id.get(tx_id_str) if tx_id_str else None,
             "article_name": article_name,
             "brand_name": brand_name,
             "category_name": category_name,
