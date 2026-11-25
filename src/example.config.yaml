@@ -5,6 +5,9 @@ api_port: 8000
 excel_file_path: /Users/lucasarti/LTDB/_working_files/Stat € B.xlsx
 excel_polling_interval: 20
 excel_code_column: N
+excel_phone_column: O
+excel_status_column: P
+excel_otp_column: Q
 excel_start_row: 2
 excel_retention_days: 30
 logging:

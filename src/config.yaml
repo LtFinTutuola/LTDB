@@ -3,9 +3,12 @@ project_name: LTDB
 api_host: 0.0.0.0
 api_port: 8000
 excel_file_path: /Users/lucasarti/LTDB/_working_files/Stat € B.xlsx
-excel_polling_interval: 20
+excel_polling_interval: 5
 excel_code_column: N
-excel_start_row: 2
+excel_phone_column: O
+excel_status_column: P
+excel_otp_column: Q
+excel_start_row: 10
 excel_retention_days: 30
 logging:
   logs_dir: data/logs
@@ -19,24 +22,24 @@ auth:
   cookie_secure: false
   min_password_length: 4
 whatsapp:
-  provider: "mock" # "mock" | "meta_cloud"
-  webhook_secret: "ltdb_mock_webhook_secret_key_2026"
-  verify_token: "ltdb_mock_verify_token_2026"
+  provider: mock
+  webhook_secret: ltdb_mock_webhook_secret_key_2026
+  verify_token: 6kXPVsS9ShbbHN-5L7xN0yqxdKb2C4njHYiXdm3nSp8
   onboarding_ttl_hours: 72
   retention_months: 60
 loyalty:
-  earning_euro_per_point: 1.0       # 1 € netto speso = 1 punto (arrotondato per difetto)
-  birthday_multiplier: 2            # Punti doppi (1x base + 1x bonus)
-  birthday_window_days: 3           # Da -3 giorni a +3 giorni rispetto al compleanno
+  earning_euro_per_point: 1.0
+  birthday_multiplier: 2
+  birthday_window_days: 3
+  post_purchase_debounce_seconds: 5
   redemption_tiers:
-    - code: "TIER_500_5EUR"
-      points_required: 500
-      discount_type: "FIXED"        # "FIXED" (€) | "PERCENTAGE" (%)
-      discount_value: 5.00
-      label: "500 Punti → 5,00 € di sconto"
-    - code: "TIER_1000_10PCT"
-      points_required: 1000
-      discount_type: "PERCENTAGE"
-      discount_value: 10.0
-      label: "1.000 Punti → 10% di sconto"
-
+  - code: TIER_500_5EUR
+    points_required: 500
+    discount_type: FIXED
+    discount_value: 5.0
+    label: 500 Punti → 5,00 € di sconto
+  - code: TIER_1000_10PCT
+    points_required: 1000
+    discount_type: PERCENTAGE
+    discount_value: 10.0
+    label: 1.000 Punti → 10% di sconto

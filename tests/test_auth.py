@@ -186,9 +186,11 @@ def test_rbac_restrictions_base_vs_admin(db_session: Session):
     assert base_client.get("/brands").status_code == 200
     assert base_client.get("/categories").status_code == 200
 
-    # 2. Base user CANNOT access Settings API or HTML page
+    # 2. Base user CANNOT access Settings API (admin or excel), Force Sync, or HTML page
     res_settings_api = base_client.get("/api/v1/settings")
     assert res_settings_api.status_code == 403
+    assert base_client.get("/api/v1/settings/excel").status_code == 403
+    assert base_client.post("/api/v1/excel-synchronization/force-sync").status_code == 403
 
     res_settings_html = base_client.get("/settings")
     assert res_settings_html.status_code == 403
@@ -206,8 +208,10 @@ def test_rbac_restrictions_base_vs_admin(db_session: Session):
 def test_rbac_cassa_role_access_and_admin_restrictions(db_session: Session):
     """
     Verifies the intermediate 'cassa' role:
-    - Can access operational endpoints and HTML pages (brands, categories, sidebar shows '(cassa)' without '/settings').
-    - Is strictly forbidden (403) from /api/v1/settings, /settings, and all /api/v1/users IAM endpoints.
+    - Can access operational endpoints and HTML pages (brands, categories, sidebar shows '(cassa)' AND '/settings').
+    - Can access '/settings' HTML (seeing ONLY the 'File Excel' tab, without System/Gemini or Users tabs),
+      '/api/v1/settings/excel', and '/api/v1/excel-synchronization/force-sync'.
+    - Is strictly forbidden (403) from admin-only '/api/v1/settings' and all '/api/v1/users' IAM endpoints.
     """
     app.dependency_overrides.pop(get_current_user, None)
     cassa_user = User(
@@ -231,17 +235,40 @@ def test_rbac_cassa_role_access_and_admin_restrictions(db_session: Session):
     cassa_client = TestClient(app)
     cassa_client.cookies.set(settings.AUTH_COOKIE_NAME, cassa_token)
 
-    # 1. Cassa user can access operational APIs and HTML pages
+    # 1. Cassa user can access operational APIs and HTML pages, and sees Settings link in sidebar
     assert cassa_client.get("/api/v1/catalog/brands").status_code == 200
     assert cassa_client.get("/api/v1/catalog/categories").status_code == 200
     brands_html = cassa_client.get("/brands")
     assert brands_html.status_code == 200
     assert "cassa_operatore (cassa)" in brands_html.text
-    assert 'href="/settings"' not in brands_html.text
+    assert 'href="/settings"' in brands_html.text
 
-    # 2. Cassa user CANNOT access Settings API or HTML page -> 403 Forbidden
+    # 2. Cassa user CAN access /settings HTML (seeing ONLY the File Excel tab) and Excel Settings / Force Sync APIs
+    cassa_settings_html = cassa_client.get("/settings")
+    assert cassa_settings_html.status_code == 200
+    assert 'id="tab-btn-excel"' in cassa_settings_html.text
+    assert 'id="excel-settings-section"' in cassa_settings_html.text
+    assert 'id="tab-btn-config"' not in cassa_settings_html.text
+    assert 'id="tab-btn-users"' not in cassa_settings_html.text
+    assert "Password Gemini" not in cassa_settings_html.text
+    assert "Crea Nuovo Utente" not in cassa_settings_html.text
+
+    assert cassa_client.get("/api/v1/settings/excel").status_code == 200
+    assert cassa_client.post("/api/v1/excel-synchronization/force-sync").status_code == 200
+
+    # 3. Cassa user CANNOT access Admin System/Gemini Settings API -> 403 Forbidden
     assert cassa_client.get("/api/v1/settings").status_code == 403
-    assert cassa_client.get("/settings").status_code == 403
+    assert (
+        cassa_client.put(
+            "/api/v1/settings",
+            json={
+                "db_connection_string": "sqlite:///hack.db",
+                "api_key": "k",
+                "codes_deduction_agent_model": "m",
+            },
+        ).status_code
+        == 403
+    )
 
     # 3. Cassa user CANNOT access any Users IAM endpoint -> 403 Forbidden
     assert cassa_client.get("/api/v1/users").status_code == 403

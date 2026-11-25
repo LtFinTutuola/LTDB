@@ -20,7 +20,6 @@
     display: none;
   }
 
-
   .settings-card {
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
@@ -94,10 +93,52 @@
     gap: 12px;
     margin-top: 10px;
   }
+
+  .excel-columns-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 16px;
+  }
+
+  .excel-col-input {
+    max-width: 110px;
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+
+  .agent-status-box {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+    padding: 14px;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-color);
+    font-size: 12px;
+  }
+
+  .agent-status-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .agent-status-label {
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+
+  .agent-status-value {
+    color: var(--text-primary);
+    font-weight: 500;
+    word-break: break-all;
+  }
 </style>
 {% endblock %}
 
 {% block content %}
+{% set is_admin = (not current_user) or (current_user.role == 'admin') %}
 <div class="pim-page">
   <div class="settings-container">
     <!-- Header -->
@@ -107,7 +148,13 @@
           <span class="material-symbols-rounded" style="color: var(--accent);">settings</span>
           Impostazioni
         </h1>
-        <p class="pim-header__subtitle">Configurazione dei parametri di sistema e integrazioni esterne</p>
+        <p class="pim-header__subtitle">
+          {% if is_admin %}
+          Configurazione dei parametri di sistema, file Excel di cassa e integrazioni esterne
+          {% else %}
+          Configurazione del file Excel di cassa e controllo sincronizzazione
+          {% endif %}
+        </p>
       </div>
       <div id="loading-state" class="pim-stats" style="display: none; align-items: center; gap: 8px;">
         <div class="pim-loading-spinner" style="width: 16px; height: 16px;"></div>
@@ -116,53 +163,39 @@
     </header>
 
     <!-- Settings Tabs -->
-    <div class="settings-tabs" style="display: flex; gap: 16px; margin-bottom: 24px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">
-      <button type="button" id="tab-btn-config" class="btn-tab-active" style="background: none; border: none; border-bottom: 2px solid var(--accent); color: var(--accent); font-weight: 600; font-size: 14px; padding: 8px 12px; cursor: pointer;">
+    <div class="settings-tabs" style="display: flex; gap: 16px; margin-bottom: 24px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; overflow-x: auto;">
+      {% if is_admin %}
+      <button type="button" id="tab-btn-config" class="btn-tab-active" style="background: none; border: none; border-bottom: 2px solid var(--accent); color: var(--accent); font-weight: 600; font-size: 14px; padding: 8px 12px; cursor: pointer; white-space: nowrap;">
         <span class="material-symbols-rounded" style="font-size: 18px; vertical-align: middle; margin-right: 4px;">tune</span>
         Configurazioni
       </button>
-      <button type="button" id="tab-btn-users" style="background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-muted); font-weight: 500; font-size: 14px; padding: 8px 12px; cursor: pointer;">
+      {% endif %}
+      <button type="button" id="tab-btn-excel" {% if not is_admin %}class="btn-tab-active"{% endif %} style="background: none; border: none; border-bottom: 2px solid {% if is_admin %}transparent{% else %}var(--accent){% endif %}; color: {% if is_admin %}var(--text-muted){% else %}var(--accent){% endif %}; font-weight: {% if is_admin %}500{% else %}600{% endif %}; font-size: 14px; padding: 8px 12px; cursor: pointer; white-space: nowrap;">
+        <span class="material-symbols-rounded" style="font-size: 18px; vertical-align: middle; margin-right: 4px;">table_view</span>
+        File Excel
+      </button>
+      {% if is_admin %}
+      <button type="button" id="tab-btn-users" style="background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-muted); font-weight: 500; font-size: 14px; padding: 8px 12px; cursor: pointer; white-space: nowrap;">
         <span class="material-symbols-rounded" style="font-size: 18px; vertical-align: middle; margin-right: 4px;">group</span>
         Gestione Utenze
       </button>
+      {% endif %}
     </div>
 
-    <!-- Settings Form (Tab 1) -->
+    {% if is_admin %}
+    <!-- Settings Form (Tab 1: Admin System & Gemini AI) -->
     <form id="settings-form">
-      <!-- Card 1: Configurazione Sistema & Magazzino -->
+      <!-- Card 1: Configurazione Sistema & Database -->
       <div class="settings-card">
         <div class="settings-card__header">
           <span class="material-symbols-rounded settings-card__icon">database</span>
-          <h2 class="settings-card__title">Configurazione Sistema &amp; Magazzino</h2>
+          <h2 class="settings-card__title">Configurazione Sistema &amp; Database</h2>
         </div>
 
         <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
-          <label for="setting-db" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Database
-            *</label>
-          <input type="text" id="setting-db" class="form-control" placeholder="sqlite:///{BASE_DIR}/data/ltdb_data.db"
-            required>
-          <span class="settings-hint">Stringa di connessione SQLAlchemy al database SQLite (es.
-            sqlite:///{BASE_DIR}/data/ltdb_data.db)</span>
-        </div>
-
-        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
-          <label for="setting-excel-path"
-            style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Percorso file excel vendite
-            *</label>
-          <input type="text" id="setting-excel-path" class="form-control" placeholder="/percorso/assoluto/file.xlsx"
-            required>
-          <span class="settings-hint">Percorso assoluto del foglio Excel delle vendite monitorato dal servizio di
-            sincronizzazione</span>
-        </div>
-
-        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
-          <label for="setting-excel-col"
-            style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Colonna inserimento barcode
-            *</label>
-          <input type="text" id="setting-excel-col" class="form-control" placeholder="N" style="max-width: 120px;"
-            required>
-          <span class="settings-hint">Lettera identificativa della colonna Excel in cui inserire i barcode (es.
-            N)</span>
+          <label for="setting-db" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Database *</label>
+          <input type="text" id="setting-db" class="form-control" placeholder="sqlite:///{BASE_DIR}/data/ltdb_data.db" required>
+          <span class="settings-hint">Stringa di connessione SQLAlchemy al database SQLite (es. sqlite:///{BASE_DIR}/data/ltdb_data.db)</span>
         </div>
       </div>
 
@@ -174,27 +207,20 @@
         </div>
 
         <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
-          <label for="setting-gemini-token"
-            style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Password Gemini *</label>
+          <label for="setting-gemini-token" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Password Gemini *</label>
           <div class="input-password-wrapper">
-            <input type="password" id="setting-gemini-token" class="form-control"
-              placeholder="Inserisci la tua API Key di Google Gemini..." required>
-            <button type="button" id="btn-toggle-token" class="btn-toggle-visibility"
-              title="Mostra / Nascondi Password">
+            <input type="password" id="setting-gemini-token" class="form-control" placeholder="Inserisci la tua API Key di Google Gemini..." required>
+            <button type="button" id="btn-toggle-token" class="btn-toggle-visibility" title="Mostra / Nascondi Password">
               <span id="icon-toggle-token" class="material-symbols-rounded" style="font-size: 18px;">visibility</span>
             </button>
           </div>
-          <span class="settings-hint">Chiave API per l'autenticazione con i servizi Gemini (memorizzata in
-            src/agents/gemini.yaml)</span>
+          <span class="settings-hint">Chiave API per l'autenticazione con i servizi Gemini (memorizzata in src/agents/gemini.yaml)</span>
         </div>
 
         <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
-          <label for="setting-gemini-model"
-            style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Versione di gemini *</label>
-          <input type="text" id="setting-gemini-model" class="form-control"
-            placeholder="es. gemini-3.1-flash-lite, gemini-2.5-flash..." required>
-          <span class="settings-hint">Modello utilizzato dagli agenti per deduzione euristiche e arricchimento
-            articoli</span>
+          <label for="setting-gemini-model" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Versione di gemini *</label>
+          <input type="text" id="setting-gemini-model" class="form-control" placeholder="es. gemini-3.1-flash-lite, gemini-2.5-flash..." required>
+          <span class="settings-hint">Modello utilizzato dagli agenti per deduzione euristiche e arricchimento articoli</span>
         </div>
       </div>
 
@@ -210,8 +236,108 @@
         </button>
       </div>
     </form>
+    {% endif %}
 
-    <!-- Users Management Section (Tab 2) -->
+    <!-- Excel Settings Section (Tab 2: Accessible to both Admin and Cassa) -->
+    <div id="excel-settings-section" style="display: {% if is_admin %}none{% else %}block{% endif %};">
+      <form id="excel-settings-form">
+        <!-- Card 1: Percorso & Tracciato Colonne File Excel -->
+        <div class="settings-card">
+          <div class="settings-card__header">
+            <span class="material-symbols-rounded settings-card__icon">table_view</span>
+            <h2 class="settings-card__title">Percorso &amp; Colonne File Excel di Cassa</h2>
+          </div>
+
+          <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+            <label for="setting-excel-path" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Percorso file Excel vendite *</label>
+            <input type="text" id="setting-excel-path" class="form-control" placeholder="es. K:\Stat € B.xlsx oppure /percorso/assoluto/file.xlsx" required>
+            <span class="settings-hint">Percorso assoluto del foglio Excel attivo monitorato dal forwarder di cassa (aggiornato in tempo reale senza riavvio)</span>
+          </div>
+
+          <div class="excel-columns-grid">
+            <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+              <label for="setting-excel-col" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Colonna codice articolo *</label>
+              <input type="text" id="setting-excel-col" class="form-control excel-col-input" placeholder="N" maxlength="2" required>
+              <span class="settings-hint">Codice articolo / barcode (es. N)</span>
+            </div>
+
+            <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+              <label for="setting-excel-phone-col" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Colonna numero di telefono *</label>
+              <input type="text" id="setting-excel-phone-col" class="form-control excel-col-input" placeholder="O" maxlength="2" required>
+              <span class="settings-hint">Cellulare cliente (es. O)</span>
+            </div>
+
+            <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+              <label for="setting-excel-status-col" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Colonna info cliente *</label>
+              <input type="text" id="setting-excel-status-col" class="form-control excel-col-input" placeholder="P" maxlength="2" required>
+              <span class="settings-hint">Esito / saldo punti LTDB (es. P)</span>
+            </div>
+
+            <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+              <label for="setting-excel-otp-col" style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Colonna codici sconto *</label>
+              <input type="text" id="setting-excel-otp-col" class="form-control excel-col-input" placeholder="Q" maxlength="2" required>
+              <span class="settings-hint">Codice OTP sconto (es. Q)</span>
+            </div>
+          </div>
+
+          <div class="settings-actions">
+            <button type="button" id="btn-reset-excel-settings" class="btn-secondary">
+              <span class="material-symbols-rounded">restart_alt</span>
+              Ripristina
+            </button>
+            <button type="submit" id="btn-save-excel-settings" class="btn-primary">
+              <span class="material-symbols-rounded">save</span>
+              Salva Impostazioni Excel
+            </button>
+          </div>
+        </div>
+      </form>
+
+      <!-- Card 2: Stato Forwarder & Sincronizzazione Forzata -->
+      <div class="settings-card">
+        <div class="settings-card__header">
+          <span class="material-symbols-rounded settings-card__icon">sync</span>
+          <h2 class="settings-card__title">Controllo Sincronizzazione &amp; Stato Forwarder</h2>
+        </div>
+
+        <div class="agent-status-box" id="edge-agent-status-box">
+          <div class="agent-status-item">
+            <span class="agent-status-label">Stato File Excel</span>
+            <span class="agent-status-value" id="agent-status-readable">In attesa dati...</span>
+          </div>
+          <div class="agent-status-item">
+            <span class="agent-status-label">File Monitorato</span>
+            <span class="agent-status-value" id="agent-status-monitored">—</span>
+          </div>
+          <div class="agent-status-item">
+            <span class="agent-status-label">Ultimo Heartbeat Forwarder</span>
+            <span class="agent-status-value" id="agent-status-reported">—</span>
+          </div>
+          <div class="agent-status-item">
+            <span class="agent-status-label">Comandi in Coda</span>
+            <span class="agent-status-value" id="agent-status-pending">0</span>
+          </div>
+        </div>
+
+        <p style="font-size: 13px; color: var(--text-secondary); margin: 0;">
+          Usa <strong>Forza Sincronizzazione</strong> per azzerare la cache locale degli hash sul PC di cassa e ordinare al forwarder una scansione completa di tutte le righe del foglio Excel odierno al ciclo successivo (entro pochi secondi).
+        </p>
+
+        <div style="display: flex; justify-content: flex-end; gap: 12px;">
+          <button type="button" id="btn-refresh-agent-status" class="btn-secondary">
+            <span class="material-symbols-rounded">refresh</span>
+            Aggiorna Stato
+          </button>
+          <button type="button" id="btn-force-sync" class="btn-primary">
+            <span class="material-symbols-rounded">bolt</span>
+            Forza Sincronizzazione
+          </button>
+        </div>
+      </div>
+    </div>
+
+    {% if is_admin %}
+    <!-- Users Management Section (Tab 3: Admin only) -->
     <div id="users-section" style="display: none;">
       <!-- Card: Create User -->
       <div class="settings-card">
@@ -287,10 +413,14 @@
         </div>
       </div>
     </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
+<script>
+  window.__LTDB_USER__ = {{ user_json|default('{"role":"admin"}')|safe }};
+</script>
 <script type="module" src="/static/js/settings_page.js"></script>
 {% endblock %}

@@ -1054,5 +1054,88 @@ def test_control_poll_applies_async_row_updates_and_syncs_mtime(mock_push, spy_r
     assert mock_push.call_count == 0
 
 
+@patch("scripts.excel_agent.ltdb_forwarder.push_batch_to_ltdb")
+def test_custom_crm_columns_read_write_and_remote_update_config(mock_push, agent_dir):
+    """
+    Verifies that configurable Excel columns (`excel_code_column`, `excel_phone_column`,
+    `excel_status_column`, `excel_otp_column`) updated via `update_config` are persisted
+    and used both when reading rows (`read_excel_rows`) and when writing `row_updates` back
+    to the Excel sheet.
+    """
+    logger = setup_logging(agent_dir)
+    local_cfg = load_local_config(agent_dir)
+    local_cfg["target_os"] = "mac"
+    runtime_cfg = dict(local_cfg["fallback_config"])
+    agent_state = create_agent_state()
+
+    # Apply remote `update_config` setting custom columns: M (13), R (18), S (19), T (20)
+    execute_agent_commands(
+        commands=[
+            {
+                "command": "update_config",
+                "data": {
+                    "excel_code_column": "M",
+                    "excel_phone_column": "R",
+                    "excel_status_column": "S",
+                    "excel_otp_column": "T",
+                },
+            }
+        ],
+        base_dir=agent_dir,
+        runtime_config=runtime_cfg,
+        local_config=local_cfg,
+        agent_state=agent_state,
+        target_date=date.today(),
+        logger=logger,
+    )
+
+    reloaded_cfg = load_local_config(agent_dir)["fallback_config"]
+    assert reloaded_cfg["excel_phone_column"] == "R"
+    assert reloaded_cfg["excel_status_column"] == "S"
+    assert reloaded_cfg["excel_otp_column"] == "T"
+
+    # Build Excel file with data in custom columns: Col M (13), Col R (18), Col T (20)
+    excel_file = Path(runtime_cfg["excel_file_path"])
+    wb = openpyxl.Workbook()
+    sh = wb.active
+    sh.cell(row=2, column=1, value=100.0)
+    sh.cell(row=2, column=2, value=100.0)
+    sh.cell(row=2, column=13, value="CUSTOM-CODE-99")  # Col M
+    sh.cell(row=2, column=18, value="3405556677")      # Col R (phone)
+    sh.cell(row=2, column=20, value="654321")          # Col T (OTP)
+    wb.save(str(excel_file))
+    wb.close()
+
+    def push_side_effect(**kwargs):
+        sent = kwargs["rows"]
+        assert len(sent) == 1
+        assert sent[0]["raw_article_code"] == "CUSTOM-CODE-99"
+        assert sent[0]["phone_number"] == "3405556677"
+        assert sent[0]["redemption_otp"] == "654321"
+
+        out_updates = kwargs.get("out_row_updates")
+        if out_updates is not None:
+            out_updates.append({
+                "excel_row_index": 2,
+                "col_p_status": "G. Verdi (250 pt)",
+                "col_o_phone": "3405556677",
+                "selling_price": 90.0,
+                "identification_pending": False,
+            })
+        return [2]
+
+    mock_push.side_effect = push_side_effect
+    run_cycle(agent_dir, runtime_cfg, local_cfg, logger, agent_state=agent_state)
+    assert mock_push.call_count == 1
+
+    # Verify updates were written to Col R (18) for phone and Col S (19) for status!
+    wb_after = openpyxl.load_workbook(str(excel_file))
+    sh_after = wb_after.active
+    assert float(sh_after.cell(row=2, column=2).value) == 90.0
+    assert str(sh_after.cell(row=2, column=18).value) == "3405556677"
+    assert str(sh_after.cell(row=2, column=19).value) == "G. Verdi (250 pt)"
+    wb_after.close()
+
+
 
 

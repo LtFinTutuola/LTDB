@@ -16,7 +16,7 @@ from sqlalchemy import func
 from src.core.database import get_db
 from src.core.config import settings
 from src.core.security import decode_access_token
-from src.core.auth import get_current_user, require_admin
+from src.core.auth import get_current_user, require_admin, require_cassa_or_admin
 from src.models.pim import Brand
 from src.models.users import User
 
@@ -180,15 +180,24 @@ def categorie_redirect():
 @router.get("/settings", include_in_schema=False)
 def settings_page(
     request: Request,
-    _admin=Depends(require_admin),
+    user=Depends(require_cassa_or_admin),
 ):
     """
-    Serve the Settings & User Management configuration page (Admin only).
+    Serve the Settings configuration page:
+    - 'admin': full access (Configurazioni, File Excel, Gestione Utenze).
+    - 'cassa': restricted access to the 'File Excel' tab only.
     """
+    user_json = json.dumps(
+        {
+            "id": user.id,
+            "username": user.username,
+            "role": user.role,
+        }
+    )
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
-        context={"active_page": "settings"},
+        context={"active_page": "settings", "user_json": user_json},
     )
 
 

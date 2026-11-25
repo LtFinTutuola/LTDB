@@ -333,10 +333,28 @@ def clear_daily_state(state_dir: Path, target_date: date) -> None:
     tmp_file.unlink(missing_ok=True)
 
 
+def _col_letter_to_zero_idx(letter: Optional[str], default_letter: str) -> int:
+    """
+    Converts an Excel column letter ('A'..'Z', 'AA'..'ZZ') to a 0-based index.
+    Falls back to `default_letter` if invalid or empty.
+    """
+    for candidate in (letter, default_letter):
+        cleaned = (candidate or "").strip().upper()
+        if cleaned and cleaned.isalpha():
+            idx_1based = 0
+            for ch in cleaned:
+                idx_1based = idx_1based * 26 + (ord(ch) - ord("A") + 1)
+            return idx_1based - 1
+    return ord(default_letter.upper()) - ord("A")
+
+
 def read_excel_rows(
     file_path: Path,
     start_row: int = 2,
     code_column: str = "N",
+    phone_column: str = "O",
+    otp_column: str = "Q",
+    status_column: str = "P",
     logger: Optional[logging.Logger] = None
 ) -> List[Dict[str, Any]]:
     """
@@ -348,15 +366,18 @@ def read_excel_rows(
             logger.error("openpyxl is not installed.")
         raise ImportError("openpyxl is required to read Excel files on edge.")
 
-    code_col_idx = None
-    # Always read at least up to Column Q (1-based col 17, 0-based index 16)
-    max_col_to_read = 17
-    if code_column:
-        try:
-            code_col_idx = ord(code_column.strip().upper()) - ord('A')
-            max_col_to_read = max(17, code_col_idx + 1)
-        except Exception:
-            pass
+    code_col_idx = _col_letter_to_zero_idx(code_column, "N") if code_column else None
+    phone_col_idx = _col_letter_to_zero_idx(phone_column, "O")
+    otp_col_idx = _col_letter_to_zero_idx(otp_column, "Q")
+    status_col_idx = _col_letter_to_zero_idx(status_column, "P")
+
+    max_col_to_read = max(
+        17,
+        (code_col_idx + 1) if code_col_idx is not None else 0,
+        phone_col_idx + 1,
+        otp_col_idx + 1,
+        status_col_idx + 1,
+    )
 
     wb = openpyxl.load_workbook(str(file_path), read_only=True, data_only=True)
     sheet = wb.active
@@ -414,15 +435,15 @@ def read_excel_rows(
                 if val_code is not None:
                     raw_article_code = str(val_code).strip()
 
-            # phone_number (Column O, index 14)
+            # phone_number (configured phone_column, default Column O / index 14)
             phone_number = None
-            if len(row) > 14:
-                phone_number = _clean_excel_cell_str(row[14].value)
+            if phone_col_idx < len(row):
+                phone_number = _clean_excel_cell_str(row[phone_col_idx].value)
 
-            # redemption_otp (Column Q, index 16)
+            # redemption_otp (configured otp_column, default Column Q / index 16)
             redemption_otp = None
-            if len(row) > 16:
-                redemption_otp = _clean_excel_cell_str(row[16].value)
+            if otp_col_idx < len(row):
+                redemption_otp = _clean_excel_cell_str(row[otp_col_idx].value)
 
             extracted_rows.append({
                 "excel_row_index": row_idx,
@@ -540,15 +561,20 @@ def _apply_updates_via_openpyxl(
     excel_path: Path,
     row_updates: List[Dict[str, Any]],
     current_rows_by_idx: Dict[int, Dict[str, Any]],
+    phone_column: str = "O",
+    status_column: str = "P",
     logger: Optional[logging.Logger] = None,
 ) -> bool:
     """
-    Writes LTDB `row_updates` (`col_o_phone` -> Col O, `col_p_status` -> Col P,
+    Writes LTDB `row_updates` (`col_o_phone` -> phone_column, `col_p_status` -> status_column,
     `selling_price` -> Col B..I) directly to the `.xlsx` file on disk using openpyxl.
     Used when `target_os` is `"mac"` or as fallback when Excel Desktop COM is not active.
     """
     if not openpyxl or not row_updates:
         return False
+
+    phone_col_1b = _col_letter_to_zero_idx(phone_column, "O") + 1
+    status_col_1b = _col_letter_to_zero_idx(status_column, "P") + 1
 
     try:
         wb = openpyxl.load_workbook(str(excel_path))
@@ -562,11 +588,11 @@ def _apply_updates_via_openpyxl(
             r_idx = int(upd_idx)
 
             if upd.get("col_o_phone") is not None:
-                sheet.cell(row=r_idx, column=15, value=str(upd["col_o_phone"]))
+                sheet.cell(row=r_idx, column=phone_col_1b, value=str(upd["col_o_phone"]))
                 modified = True
 
             if upd.get("col_p_status") is not None:
-                sheet.cell(row=r_idx, column=16, value=str(upd["col_p_status"]))
+                sheet.cell(row=r_idx, column=status_col_1b, value=str(upd["col_p_status"]))
                 modified = True
 
             if upd.get("selling_price") is not None:
@@ -599,6 +625,8 @@ def _apply_updates_via_windows_com(
     excel_path: Path,
     row_updates: List[Dict[str, Any]],
     current_rows_by_idx: Dict[int, Dict[str, Any]],
+    phone_column: str = "O",
+    status_column: str = "P",
     logger: Optional[logging.Logger] = None,
     max_retries: int = 10,
 ) -> bool:
@@ -611,6 +639,9 @@ def _apply_updates_via_windows_com(
         import win32com.client  # type: ignore
     except ImportError:
         return False
+
+    phone_col_1b = _col_letter_to_zero_idx(phone_column, "O") + 1
+    status_col_1b = _col_letter_to_zero_idx(status_column, "P") + 1
 
     target_name = excel_path.name.lower()
     target_resolved = str(excel_path.resolve()).lower() if excel_path.exists() else str(excel_path).lower()
@@ -638,11 +669,11 @@ def _apply_updates_via_windows_com(
                 r_idx = int(upd_idx)
 
                 if upd.get("col_o_phone") is not None:
-                    sheet.Cells(r_idx, 15).Value = str(upd["col_o_phone"])
+                    sheet.Cells(r_idx, phone_col_1b).Value = str(upd["col_o_phone"])
                     modified = True
 
                 if upd.get("col_p_status") is not None:
-                    sheet.Cells(r_idx, 16).Value = str(upd["col_p_status"])
+                    sheet.Cells(r_idx, status_col_1b).Value = str(upd["col_p_status"])
                     modified = True
 
                 if upd.get("selling_price") is not None:
@@ -680,6 +711,8 @@ def apply_row_updates_to_excel(
     current_rows_by_idx: Dict[int, Dict[str, Any]],
     target_os: str = "mac",
     logger: Optional[logging.Logger] = None,
+    phone_column: str = "O",
+    status_column: str = "P",
 ) -> bool:
     """
     Applies LTDB `row_updates` (`col_o_phone`, `col_p_status`, `selling_price`) to the Excel file
@@ -703,6 +736,8 @@ def apply_row_updates_to_excel(
             excel_path=excel_path,
             row_updates=actionable,
             current_rows_by_idx=current_rows_by_idx,
+            phone_column=phone_column,
+            status_column=status_column,
             logger=logger,
         ):
             return True
@@ -711,6 +746,8 @@ def apply_row_updates_to_excel(
         excel_path=excel_path,
         row_updates=actionable,
         current_rows_by_idx=current_rows_by_idx,
+        phone_column=phone_column,
+        status_column=status_column,
         logger=logger,
     )
 
@@ -777,6 +814,9 @@ def execute_agent_commands(
                 runtime_keys = {
                     "excel_file_path",
                     "excel_code_column",
+                    "excel_phone_column",
+                    "excel_status_column",
+                    "excel_otp_column",
                     "start_row",
                     "excel_polling_interval",
                     "retention_days",
@@ -790,10 +830,18 @@ def execute_agent_commands(
                     "http_timeout_seconds",
                     "target_os",
                 }
+                structural_keys = {
+                    "excel_file_path",
+                    "excel_code_column",
+                    "excel_phone_column",
+                    "excel_status_column",
+                    "excel_otp_column",
+                    "start_row",
+                }
                 for key, val in update_data.items():
                     if val is None:
                         continue
-                    if key in ("excel_file_path", "excel_code_column", "start_row"):
+                    if key in structural_keys:
                         if runtime_config.get(key) != val:
                             reset_mtime = True
                     if key in runtime_keys:
@@ -824,6 +872,9 @@ def _apply_updates_and_sync_state(
     code_col: str,
     logger: logging.Logger,
     agent_state: Optional[Dict[str, Any]] = None,
+    phone_col: str = "O",
+    status_col: str = "P",
+    otp_col: str = "Q",
 ) -> None:
     """
     Applies LTDB synchronous (`row_updates`) or asynchronous (`async_row_updates`) updates
@@ -845,7 +896,13 @@ def _apply_updates_and_sync_state(
             else:
                 try:
                     loaded_rows = read_excel_rows(
-                        excel_path, start_row=start_row, code_column=code_col, logger=logger
+                        excel_path,
+                        start_row=start_row,
+                        code_column=code_col,
+                        phone_column=phone_col,
+                        otp_column=otp_col,
+                        status_column=status_col,
+                        logger=logger,
                     )
                     current_rows_by_idx = {
                         int(r["excel_row_index"]): dict(r) for r in loaded_rows
@@ -859,6 +916,8 @@ def _apply_updates_and_sync_state(
             current_rows_by_idx=current_rows_by_idx,
             target_os=target_os,
             logger=logger,
+            phone_column=phone_col,
+            status_column=status_col,
         )
         recalculate_hashes_for_updated_rows(
             saved_hashes=saved_hashes,
@@ -948,6 +1007,9 @@ def run_cycle(
 
     start_row = int(config.get("start_row", 2))
     code_col = str(config.get("excel_code_column", "N"))
+    phone_col = str(config.get("excel_phone_column", "O"))
+    status_col = str(config.get("excel_status_column", "P"))
+    otp_col = str(config.get("excel_otp_column", "Q"))
     base_url = local_config.get("ltdb_base_url", "http://127.0.0.1:8000")
     push_endpoint = local_config.get("push_endpoint", "/api/v1/excel-synchronization/push-batch")
     timeout = local_config.get("http_timeout_seconds", 10)
@@ -997,7 +1059,13 @@ def run_cycle(
         current_rows = None
         try:
             current_rows = read_excel_rows(
-                excel_path, start_row=start_row, code_column=code_col, logger=logger
+                excel_path,
+                start_row=start_row,
+                code_column=code_col,
+                phone_column=phone_col,
+                otp_column=otp_col,
+                status_column=status_col,
+                logger=logger,
             )
         except Exception as exc:
             logger.error(f"Failed to read Excel file at {excel_path}: {exc}")
@@ -1008,7 +1076,13 @@ def run_cycle(
                     continue
                 try:
                     current_rows = read_excel_rows(
-                        candidate, start_row=start_row, code_column=code_col, logger=logger
+                        candidate,
+                        start_row=start_row,
+                        code_column=code_col,
+                        phone_column=phone_col,
+                        otp_column=otp_col,
+                        status_column=status_col,
+                        logger=logger,
                     )
                     excel_path = candidate
                     current_mtime = get_file_mtime(excel_path)
@@ -1097,6 +1171,9 @@ def run_cycle(
                         code_col=code_col,
                         logger=logger,
                         agent_state=agent_state,
+                        phone_col=phone_col,
+                        status_col=status_col,
+                        otp_col=otp_col,
                     )
 
                     # 3. Execute any piggybacked remote commands sequentially
@@ -1186,6 +1263,9 @@ def run_cycle(
                 code_col=code_col,
                 logger=logger,
                 agent_state=agent_state,
+                phone_col=phone_col,
+                status_col=status_col,
+                otp_col=otp_col,
             )
 
         return last_push_time

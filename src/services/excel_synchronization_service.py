@@ -47,7 +47,10 @@ def get_agent_config() -> Dict[str, Any]:
 
     return {
         "excel_file_path": str(cfg.get("excel_file_path", settings.EXCEL_FILE_PATH)),
-        "excel_code_column": str(cfg.get("excel_code_column", settings.EXCEL_CODE_COLUMN)),
+        "excel_code_column": str(cfg.get("excel_code_column", settings.EXCEL_CODE_COLUMN or "N")),
+        "excel_phone_column": str(cfg.get("excel_phone_column", getattr(settings, "EXCEL_PHONE_COLUMN", "O") or "O")),
+        "excel_status_column": str(cfg.get("excel_status_column", getattr(settings, "EXCEL_STATUS_COLUMN", "P") or "P")),
+        "excel_otp_column": str(cfg.get("excel_otp_column", getattr(settings, "EXCEL_OTP_COLUMN", "Q") or "Q")),
         "start_row": int(cfg.get("excel_start_row", getattr(settings, "EXCEL_START_ROW", 2))),
         "excel_polling_interval": int(cfg.get("excel_polling_interval", settings.EXCEL_POLLING_INTERVAL)),
         "retention_days": int(cfg.get("excel_retention_days", getattr(settings, "EXCEL_RETENTION_DAYS", 30))),

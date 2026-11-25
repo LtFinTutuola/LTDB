@@ -169,8 +169,8 @@ app.include_router(sales_router, dependencies=auth_dependencies)
 app.include_router(customers_router, dependencies=auth_dependencies)
 app.include_router(transactions_router, dependencies=auth_dependencies)
 
-# Admin-only API routers
-app.include_router(settings_router, dependencies=[Depends(require_admin)])
+# Role-restricted API routers (per-endpoint admin / cassa guards enforced inside routers)
+app.include_router(settings_router)
 app.include_router(users_router)
 
 # Frontend SPA and HTML templates (contains per-route auth dependencies)

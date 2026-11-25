@@ -328,6 +328,18 @@ export async function pollExcelRows() {
     return _handleResponse(res);
 }
 
+export async function getExcelSyncStatus() {
+    const res = await fetch(`${API_BASE}/excel-synchronization/status`);
+    return _handleResponse(res);
+}
+
+export async function forceExcelSync() {
+    const res = await fetch(`${API_BASE}/excel-synchronization/force-sync`, {
+        method: 'POST',
+    });
+    return _handleResponse(res);
+}
+
 // --- Settings ---
 
 export async function getSettings() {
@@ -337,6 +349,20 @@ export async function getSettings() {
 
 export async function updateSettings(payload) {
     const res = await fetch(`${API_BASE}/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    return _handleResponse(res);
+}
+
+export async function getExcelSettings() {
+    const res = await fetch(`${API_BASE}/settings/excel`);
+    return _handleResponse(res);
+}
+
+export async function updateExcelSettings(payload) {
+    const res = await fetch(`${API_BASE}/settings/excel`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

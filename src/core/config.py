@@ -52,7 +52,10 @@ class Settings(BaseSettings):
     # Staging Storage
     EXCEL_FILE_PATH: str = yaml_config.get("excel_file_path", "").replace("{BASE_DIR}", str(BASE_DIR))
     EXCEL_POLLING_INTERVAL: int = int(yaml_config.get("excel_polling_interval", 60))
-    EXCEL_CODE_COLUMN: str = yaml_config.get("excel_code_column", "")
+    EXCEL_CODE_COLUMN: str = str(yaml_config.get("excel_code_column", "N"))
+    EXCEL_PHONE_COLUMN: str = str(yaml_config.get("excel_phone_column", "O"))
+    EXCEL_STATUS_COLUMN: str = str(yaml_config.get("excel_status_column", "P"))
+    EXCEL_OTP_COLUMN: str = str(yaml_config.get("excel_otp_column", "Q"))
     EXCEL_START_ROW: int = int(yaml_config.get("excel_start_row", 2))
     EXCEL_RETENTION_DAYS: int = int(yaml_config.get("excel_retention_days", 30))
     

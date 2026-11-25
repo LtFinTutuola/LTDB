@@ -7,6 +7,8 @@ import time
 
 from src.core.database import get_db
 from src.core.config import settings
+from src.core.auth import require_cassa_or_admin
+from src.core.request_context import AuthUser
 from src.services import excel_synchronization_service
 from src.core.logger import get_logger
 
@@ -122,10 +124,13 @@ def poll_rows(
 
 
 @router.post("/force-sync", status_code=status.HTTP_200_OK)
-def force_agent_sync():
+def force_agent_sync(
+    _current_user: AuthUser = Depends(require_cassa_or_admin),
+):
     """
     Queues a `force_sync` remote command for the standalone Edge Agent so that on its
     next Control Poll it clears its daily hash cache and performs a full rescan & push.
+    Accessible to 'cassa' operators and 'admin' users.
     """
     try:
         cmd = {"command": "force_sync"}

@@ -103,6 +103,9 @@ class SaleDetailResponse(BaseModel):
 class ExcelAgentConfigData(BaseModel):
     excel_file_path: str
     excel_code_column: str
+    excel_phone_column: str = "O"
+    excel_status_column: str = "P"
+    excel_otp_column: str = "Q"
     start_row: int
     excel_polling_interval: int
     retention_days: int

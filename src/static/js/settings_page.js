@@ -1,6 +1,10 @@
 /**
  * settings_page.js
- * Client-side logic for the Settings configuration and User Management (IAM) page in LTDB.
+ * Client-side logic for the Settings page in LTDB:
+ * - Tab 1 (Admin only): System (Database) & Google Gemini AI configuration.
+ * - Tab 2 (Admin & Cassa): Cash Register Excel file path, column mapping (article code,
+ *   phone number, customer info, discount OTP), live Edge Forwarder diagnostics, and Force Sync.
+ * - Tab 3 (Admin only): User Management (IAM) & session revocation.
  */
 import * as api from './api.js';
 
@@ -40,31 +44,52 @@ function showToast(message, type = 'success') {
     }, 3500);
 }
 
+const currentUser = window.__LTDB_USER__ || { role: 'admin' };
+const isAdmin = currentUser.role === 'admin';
+
 // State
-let initialSettings = null;
+let initialSystemSettings = null;
+let initialExcelSettings = null;
 let usersList = [];
+let statusPollTimer = null;
 
 // DOM references
 const dom = {
-    // Tabs
+    // Tabs & Sections
     tabBtnConfig: document.getElementById('tab-btn-config'),
+    tabBtnExcel: document.getElementById('tab-btn-excel'),
     tabBtnUsers: document.getElementById('tab-btn-users'),
     settingsForm: document.getElementById('settings-form'),
+    excelSection: document.getElementById('excel-settings-section'),
     usersSection: document.getElementById('users-section'),
+    loadingState: document.getElementById('loading-state'),
 
-    // Settings inputs
+    // System & Gemini inputs (Admin only)
     inputDb: document.getElementById('setting-db'),
-    inputExcelPath: document.getElementById('setting-excel-path'),
-    inputExcelCol: document.getElementById('setting-excel-col'),
     inputGeminiToken: document.getElementById('setting-gemini-token'),
     btnToggleToken: document.getElementById('btn-toggle-token'),
     iconToggleToken: document.getElementById('icon-toggle-token'),
     inputGeminiModel: document.getElementById('setting-gemini-model'),
     btnSave: document.getElementById('btn-save-settings'),
     btnReset: document.getElementById('btn-reset-settings'),
-    loadingState: document.getElementById('loading-state'),
 
-    // Users IAM
+    // Excel inputs (Admin & Cassa)
+    excelForm: document.getElementById('excel-settings-form'),
+    inputExcelPath: document.getElementById('setting-excel-path'),
+    inputExcelCol: document.getElementById('setting-excel-col'),
+    inputExcelPhoneCol: document.getElementById('setting-excel-phone-col'),
+    inputExcelStatusCol: document.getElementById('setting-excel-status-col'),
+    inputExcelOtpCol: document.getElementById('setting-excel-otp-col'),
+    btnSaveExcel: document.getElementById('btn-save-excel-settings'),
+    btnResetExcel: document.getElementById('btn-reset-excel-settings'),
+    btnForceSync: document.getElementById('btn-force-sync'),
+    btnRefreshAgentStatus: document.getElementById('btn-refresh-agent-status'),
+    statusReadable: document.getElementById('agent-status-readable'),
+    statusMonitored: document.getElementById('agent-status-monitored'),
+    statusReported: document.getElementById('agent-status-reported'),
+    statusPending: document.getElementById('agent-status-pending'),
+
+    // Users IAM (Admin only)
     createUserForm: document.getElementById('create-user-form'),
     newUsername: document.getElementById('new-user-username'),
     newPassword: document.getElementById('new-user-password'),
@@ -73,74 +98,91 @@ const dom = {
     btnRevokeAll: document.getElementById('btn-revoke-all'),
 };
 
+function setTabButtonStyle(btn, active) {
+    if (!btn) return;
+    btn.style.borderBottom = active ? '2px solid var(--accent)' : '2px solid transparent';
+    btn.style.color = active ? 'var(--accent)' : 'var(--text-muted)';
+    btn.style.fontWeight = active ? '600' : '500';
+}
+
+function stopStatusPolling() {
+    if (statusPollTimer) {
+        clearInterval(statusPollTimer);
+        statusPollTimer = null;
+    }
+}
+
+function startStatusPolling() {
+    stopStatusPolling();
+    loadAgentStatus();
+    statusPollTimer = setInterval(loadAgentStatus, 5000);
+}
+
 // --- Tab Navigation ---
 function switchTab(target) {
-    if (target === 'config') {
-        dom.tabBtnConfig.style.borderBottom = '2px solid var(--accent)';
-        dom.tabBtnConfig.style.color = 'var(--accent)';
-        dom.tabBtnConfig.style.fontWeight = '600';
+    if (!isAdmin && target !== 'excel') {
+        target = 'excel';
+    }
 
-        dom.tabBtnUsers.style.borderBottom = '2px solid transparent';
-        dom.tabBtnUsers.style.color = 'var(--text-muted)';
-        dom.tabBtnUsers.style.fontWeight = '500';
+    setTabButtonStyle(dom.tabBtnConfig, target === 'config');
+    setTabButtonStyle(dom.tabBtnExcel, target === 'excel');
+    setTabButtonStyle(dom.tabBtnUsers, target === 'users');
 
-        dom.settingsForm.style.display = 'block';
-        dom.usersSection.style.display = 'none';
+    if (dom.settingsForm) dom.settingsForm.style.display = target === 'config' ? 'block' : 'none';
+    if (dom.excelSection) dom.excelSection.style.display = target === 'excel' ? 'block' : 'none';
+    if (dom.usersSection) dom.usersSection.style.display = target === 'users' ? 'block' : 'none';
+
+    if (target === 'excel') {
+        startStatusPolling();
     } else {
-        dom.tabBtnUsers.style.borderBottom = '2px solid var(--accent)';
-        dom.tabBtnUsers.style.color = 'var(--accent)';
-        dom.tabBtnUsers.style.fontWeight = '600';
+        stopStatusPolling();
+    }
 
-        dom.tabBtnConfig.style.borderBottom = '2px solid transparent';
-        dom.tabBtnConfig.style.color = 'var(--text-muted)';
-        dom.tabBtnConfig.style.fontWeight = '500';
-
-        dom.settingsForm.style.display = 'none';
-        dom.usersSection.style.display = 'block';
+    if (target === 'users' && isAdmin) {
         loadUsers();
     }
 }
 
-// --- Settings Logic ---
-async function loadSettings() {
+// --- Admin System & Gemini Settings Logic ---
+async function loadSystemSettings() {
+    if (!isAdmin || !dom.settingsForm) return;
     dom.loadingState.style.display = 'flex';
     dom.settingsForm.style.opacity = '0.5';
-    dom.btnSave.disabled = true;
+    if (dom.btnSave) dom.btnSave.disabled = true;
 
     try {
         const data = await api.getSettings();
-        initialSettings = { ...data };
-        populateForm(data);
+        initialSystemSettings = { ...data };
+        populateSystemForm(data);
     } catch (err) {
         showToast(`Errore durante il caricamento delle impostazioni: ${err.message}`, 'error');
     } finally {
         dom.loadingState.style.display = 'none';
         dom.settingsForm.style.opacity = '1';
-        dom.btnSave.disabled = false;
+        if (dom.btnSave) dom.btnSave.disabled = false;
     }
 }
 
-function populateForm(data) {
+function populateSystemForm(data) {
+    if (!dom.inputDb) return;
     dom.inputDb.value = data.db_connection_string || '';
-    dom.inputExcelPath.value = data.excel_file_path || '';
-    dom.inputExcelCol.value = data.excel_code_column || '';
     dom.inputGeminiToken.value = data.api_key || '';
     dom.inputGeminiModel.value = data.codes_deduction_agent_model || '';
 }
 
 function toggleTokenVisibility() {
+    if (!dom.inputGeminiToken) return;
     const isPassword = dom.inputGeminiToken.type === 'password';
     dom.inputGeminiToken.type = isPassword ? 'text' : 'password';
     dom.iconToggleToken.textContent = isPassword ? 'visibility_off' : 'visibility';
 }
 
-async function handleSaveSettings(e) {
+async function handleSaveSystemSettings(e) {
     e.preventDefault();
+    if (!isAdmin) return;
 
     const payload = {
         db_connection_string: dom.inputDb.value.trim(),
-        excel_file_path: dom.inputExcelPath.value.trim(),
-        excel_code_column: dom.inputExcelCol.value.trim(),
         api_key: dom.inputGeminiToken.value.trim(),
         codes_deduction_agent_model: dom.inputGeminiModel.value.trim(),
     };
@@ -148,16 +190,6 @@ async function handleSaveSettings(e) {
     if (!payload.db_connection_string) {
         showToast('Il campo Database non può essere vuoto.', 'error');
         dom.inputDb.focus();
-        return;
-    }
-    if (!payload.excel_file_path) {
-        showToast('Il campo Percorso file excel vendite non può essere vuoto.', 'error');
-        dom.inputExcelPath.focus();
-        return;
-    }
-    if (!payload.excel_code_column) {
-        showToast('Il campo Colonna inserimento barcode non può essere vuoto.', 'error');
-        dom.inputExcelCol.focus();
         return;
     }
     if (!payload.api_key) {
@@ -177,9 +209,9 @@ async function handleSaveSettings(e) {
 
     try {
         const updated = await api.updateSettings(payload);
-        initialSettings = { ...updated };
-        populateForm(updated);
-        showToast('Impostazioni salvate con successo.');
+        initialSystemSettings = { ...updated };
+        populateSystemForm(updated);
+        showToast('Configurazioni di sistema salvate con successo.');
     } catch (err) {
         showToast(`Errore durante il salvataggio: ${err.message}`, 'error');
     } finally {
@@ -188,15 +220,156 @@ async function handleSaveSettings(e) {
     }
 }
 
-function handleResetSettings() {
-    if (initialSettings) {
-        populateForm(initialSettings);
-        showToast('Valori ripristinati allo stato iniziale.');
+function handleResetSystemSettings() {
+    if (initialSystemSettings) {
+        populateSystemForm(initialSystemSettings);
+        showToast('Valori di sistema ripristinati.');
     }
 }
 
-// --- Users Management (IAM) Logic ---
+// --- Excel Settings & Force Sync Logic (Admin & Cassa) ---
+async function loadExcelSettings() {
+    if (!dom.excelForm) return;
+    dom.loadingState.style.display = 'flex';
+    dom.excelForm.style.opacity = '0.5';
+    if (dom.btnSaveExcel) dom.btnSaveExcel.disabled = true;
+
+    try {
+        const data = await api.getExcelSettings();
+        initialExcelSettings = { ...data };
+        populateExcelForm(data);
+    } catch (err) {
+        showToast(`Errore caricamento impostazioni Excel: ${err.message}`, 'error');
+    } finally {
+        dom.loadingState.style.display = 'none';
+        dom.excelForm.style.opacity = '1';
+        if (dom.btnSaveExcel) dom.btnSaveExcel.disabled = false;
+    }
+}
+
+function populateExcelForm(data) {
+    if (!dom.inputExcelPath) return;
+    dom.inputExcelPath.value = data.excel_file_path || '';
+    dom.inputExcelCol.value = (data.excel_code_column || 'N').toUpperCase();
+    dom.inputExcelPhoneCol.value = (data.excel_phone_column || 'O').toUpperCase();
+    dom.inputExcelStatusCol.value = (data.excel_status_column || 'P').toUpperCase();
+    dom.inputExcelOtpCol.value = (data.excel_otp_column || 'Q').toUpperCase();
+}
+
+function isValidExcelCol(val) {
+    return /^[A-Z]{1,2}$/.test(val);
+}
+
+async function handleSaveExcelSettings(e) {
+    e.preventDefault();
+
+    const payload = {
+        excel_file_path: dom.inputExcelPath.value.trim(),
+        excel_code_column: dom.inputExcelCol.value.trim().toUpperCase(),
+        excel_phone_column: dom.inputExcelPhoneCol.value.trim().toUpperCase(),
+        excel_status_column: dom.inputExcelStatusCol.value.trim().toUpperCase(),
+        excel_otp_column: dom.inputExcelOtpCol.value.trim().toUpperCase(),
+    };
+
+    if (!payload.excel_file_path) {
+        showToast('Il campo Percorso file Excel vendite non può essere vuoto.', 'error');
+        dom.inputExcelPath.focus();
+        return;
+    }
+
+    const colChecks = [
+        [payload.excel_code_column, 'Colonna codice articolo', dom.inputExcelCol],
+        [payload.excel_phone_column, 'Colonna numero di telefono', dom.inputExcelPhoneCol],
+        [payload.excel_status_column, 'Colonna info cliente', dom.inputExcelStatusCol],
+        [payload.excel_otp_column, 'Colonna codici sconto', dom.inputExcelOtpCol],
+    ];
+    for (const [val, label, el] of colChecks) {
+        if (!isValidExcelCol(val)) {
+            showToast(`${label}: inserisci una lettera di colonna valida (es. N, O, P, Q).`, 'error');
+            el.focus();
+            return;
+        }
+    }
+
+    const uniqueCols = new Set(colChecks.map(([v]) => v));
+    if (uniqueCols.size !== colChecks.length) {
+        showToast('Le 4 colonne configurate devono essere tutte distinte tra loro.', 'error');
+        return;
+    }
+
+    dom.btnSaveExcel.disabled = true;
+    const originalText = dom.btnSaveExcel.innerHTML;
+    dom.btnSaveExcel.innerHTML = `<span class="material-symbols-rounded" style="animation: spin 0.8s linear infinite;">sync</span> Salvataggio...`;
+
+    try {
+        const updated = await api.updateExcelSettings(payload);
+        initialExcelSettings = { ...updated };
+        populateExcelForm(updated);
+        showToast('Impostazioni Excel salvate e inviate al forwarder.');
+        loadAgentStatus();
+    } catch (err) {
+        showToast(`Errore durante il salvataggio: ${err.message}`, 'error');
+    } finally {
+        dom.btnSaveExcel.disabled = false;
+        dom.btnSaveExcel.innerHTML = originalText;
+    }
+}
+
+function handleResetExcelSettings() {
+    if (initialExcelSettings) {
+        populateExcelForm(initialExcelSettings);
+        showToast('Impostazioni Excel ripristinate.');
+    }
+}
+
+async function loadAgentStatus() {
+    if (!dom.statusReadable) return;
+    try {
+        const res = await api.getExcelSyncStatus();
+        const edge = (res && res.data && res.data.edge_agent) || {};
+
+        if (!edge.reported_at) {
+            dom.statusReadable.textContent = 'Forwarder non connesso';
+            dom.statusReadable.style.color = 'var(--text-muted)';
+        } else if (edge.file_readable) {
+            dom.statusReadable.textContent = 'Attivo e leggibile';
+            dom.statusReadable.style.color = '#3fb950';
+        } else {
+            dom.statusReadable.textContent = 'File non trovato / non di oggi';
+            dom.statusReadable.style.color = '#d29922';
+        }
+
+        dom.statusMonitored.textContent = edge.monitored_file || edge.configured_file || '—';
+        dom.statusReported.textContent = edge.reported_at
+            ? new Date(edge.reported_at).toLocaleTimeString('it-IT')
+            : '—';
+        dom.statusPending.textContent = String(edge.pending_commands_count ?? 0);
+    } catch (err) {
+        // Silent background refresh failure
+    }
+}
+
+async function handleForceSync() {
+    if (!dom.btnForceSync) return;
+    dom.btnForceSync.disabled = true;
+    const originalHtml = dom.btnForceSync.innerHTML;
+    dom.btnForceSync.innerHTML = `<span class="material-symbols-rounded" style="animation: spin 0.8s linear infinite;">sync</span> Invio comando...`;
+
+    try {
+        await api.forceExcelSync();
+        showToast('Comando di sincronizzazione forzata accodato per il forwarder.');
+        await loadAgentStatus();
+    } catch (err) {
+        showToast(`Errore durante l'invio del comando: ${err.message}`, 'error');
+    } finally {
+        dom.btnForceSync.disabled = false;
+        dom.btnForceSync.innerHTML = originalHtml;
+    }
+}
+
+// --- Users Management (IAM) Logic (Admin only) ---
 async function loadUsers() {
+    if (!isAdmin || !dom.usersTbody) return;
     try {
         const res = await fetch('/api/v1/users');
         if (!res.ok) {
@@ -211,6 +384,7 @@ async function loadUsers() {
 }
 
 function renderUsersTable() {
+    if (!dom.usersTbody) return;
     dom.usersTbody.innerHTML = '';
     if (!usersList.length) {
         dom.usersTbody.innerHTML = `<tr><td colspan="4" style="padding: 16px; text-align: center; color: var(--text-muted);">Nessun utente trovato.</td></tr>`;
@@ -251,7 +425,6 @@ function renderUsersTable() {
         dom.usersTbody.appendChild(tr);
     });
 
-    // Attach event listeners for row actions
     document.querySelectorAll('.user-role-select').forEach((sel) => {
         sel.addEventListener('change', async (e) => {
             const userId = e.target.getAttribute('data-user-id');
@@ -269,7 +442,7 @@ function renderUsersTable() {
     });
 
     document.querySelectorAll('.btn-reset-user-pw').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
+        btn.addEventListener('click', () => {
             const userId = btn.getAttribute('data-user-id');
             const username = btn.getAttribute('data-username');
             promptResetPassword(userId, username);
@@ -293,7 +466,7 @@ async function updateUserField(userId, payload) {
         loadUsers();
     } catch (err) {
         showToast(err.message, 'error');
-        loadUsers(); // Revert UI
+        loadUsers();
     }
 }
 
@@ -380,18 +553,35 @@ function escapeHtml(str) {
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
-    loadSettings();
+    loadExcelSettings();
+    if (isAdmin) {
+        loadSystemSettings();
+    }
 
     // Tabs
-    dom.tabBtnConfig.addEventListener('click', () => switchTab('config'));
-    dom.tabBtnUsers.addEventListener('click', () => switchTab('users'));
+    if (dom.tabBtnConfig) dom.tabBtnConfig.addEventListener('click', () => switchTab('config'));
+    if (dom.tabBtnExcel) dom.tabBtnExcel.addEventListener('click', () => switchTab('excel'));
+    if (dom.tabBtnUsers) dom.tabBtnUsers.addEventListener('click', () => switchTab('users'));
 
-    // Config form
-    dom.btnToggleToken.addEventListener('click', toggleTokenVisibility);
-    dom.settingsForm.addEventListener('submit', handleSaveSettings);
-    dom.btnReset.addEventListener('click', handleResetSettings);
+    // Admin System & Gemini form
+    if (dom.btnToggleToken) dom.btnToggleToken.addEventListener('click', toggleTokenVisibility);
+    if (dom.settingsForm) dom.settingsForm.addEventListener('submit', handleSaveSystemSettings);
+    if (dom.btnReset) dom.btnReset.addEventListener('click', handleResetSystemSettings);
 
-    // Users form
-    dom.createUserForm.addEventListener('submit', handleCreateUser);
-    dom.btnRevokeAll.addEventListener('click', handleRevokeAll);
+    // Excel Settings & Force Sync
+    if (dom.excelForm) dom.excelForm.addEventListener('submit', handleSaveExcelSettings);
+    if (dom.btnResetExcel) dom.btnResetExcel.addEventListener('click', handleResetExcelSettings);
+    if (dom.btnForceSync) dom.btnForceSync.addEventListener('click', handleForceSync);
+    if (dom.btnRefreshAgentStatus) dom.btnRefreshAgentStatus.addEventListener('click', loadAgentStatus);
+
+    // Admin Users form
+    if (dom.createUserForm) dom.createUserForm.addEventListener('submit', handleCreateUser);
+    if (dom.btnRevokeAll) dom.btnRevokeAll.addEventListener('click', handleRevokeAll);
+
+    // Initial active tab
+    if (!isAdmin || window.location.hash === '#excel') {
+        switchTab('excel');
+    } else {
+        switchTab('config');
+    }
 });

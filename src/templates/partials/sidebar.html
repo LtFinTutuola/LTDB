@@ -41,7 +41,7 @@
   <!-- Bottom: action buttons on the left + user chip on the right -->
   <div class="sidebar__bottom">
     <div class="sidebar__bottom-left">
-      {% if not current_user or current_user.role == 'admin' %}
+      {% if not current_user or current_user.role in ['admin', 'cassa'] %}
       <a href="/settings" class="sidebar__action-btn {% if active_page == 'settings' %}sidebar__action-btn--active{% endif %}" title="Impostazioni">
         <span class="material-symbols-rounded">settings</span>
       </a>
